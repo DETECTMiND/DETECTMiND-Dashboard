@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, AlertTriangle, CheckCircle2, Clock, Smartphone, Pencil } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, CheckCircle2, Clock, Smartphone, Pencil, Database } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
 interface Participant {
@@ -18,12 +18,10 @@ interface Participant {
   device_info: Record<string, string> | null
 }
 
-const STATUS_OPTIONS = ['active', 'paused', 'withdrawn', 'completed']
+const STATUS_OPTIONS = ['active', 'withdrawn']
 const STATUS_STYLES: Record<string, string> = {
-  active: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-  paused: 'bg-amber-50 text-amber-700 border border-amber-200',
+  active:    'bg-emerald-50 text-emerald-700 border border-emerald-200',
   withdrawn: 'bg-red-50 text-red-600 border border-red-200',
-  completed: 'bg-blue-50 text-blue-700 border border-blue-200',
 }
 
 export default function ParticipantsPage() {
@@ -135,13 +133,21 @@ export default function ParticipantsPage() {
                       </div>
                     </div>
 
-                    <select
-                      value={p.status}
-                      onChange={e => updateStatus(p.id, e.target.value)}
-                      className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all shrink-0"
-                    >
-                      {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Link
+                        href={`/studies/${studyId}/data?participant=${p.id}`}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-blue-600 hover:border-blue-200 transition-all"
+                      >
+                        <Database size={12} /> View Data
+                      </Link>
+                      <select
+                        value={p.status}
+                        onChange={e => updateStatus(p.id, e.target.value)}
+                        className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
+                      >
+                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
                   </div>
 
                   {(stale || hasPermIssues) && (

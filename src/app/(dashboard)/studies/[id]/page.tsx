@@ -17,14 +17,13 @@ interface Study {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  draft: 'bg-gray-100 text-gray-600 border border-gray-200',
-  active: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-  paused: 'bg-amber-50 text-amber-700 border border-amber-200',
+  draft:     'bg-gray-100 text-gray-600 border border-gray-200',
+  active:    'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  paused:    'bg-amber-50 text-amber-700 border border-amber-200',
   completed: 'bg-blue-50 text-blue-700 border border-blue-200',
-  archived: 'bg-gray-100 text-gray-400 border border-gray-200',
 }
 
-const statusOptions = ['draft', 'active', 'paused', 'completed', 'archived']
+const statusOptions = ['draft', 'active', 'paused', 'completed']
 
 export default function StudyDetailPage() {
   const { id } = useParams()
@@ -46,14 +45,15 @@ export default function StudyDetailPage() {
   }, [id])
 
   async function handleSave() {
+    if (!study) return
     const { error } = await supabase.from('studies').update({
-      name: form.name,
-      description: form.description,
-      app_description: form.app_description,
-      status: form.status,
-      sync_interval_minutes: form.sync_interval_minutes,
+      name: form.name || study.name,
+      description: form.description ?? study.description,
+      app_description: form.app_description ?? study.app_description,
+      status: form.status || study.status,
+      sync_interval_minutes: form.sync_interval_minutes ?? study.sync_interval_minutes,
     }).eq('id', id)
-    if (!error) { setStudy({ ...study!, ...form }); setEditing(false) }
+    if (!error) { setStudy({ ...study, ...form } as Study); setEditing(false) }
   }
 
   async function handleDelete() {

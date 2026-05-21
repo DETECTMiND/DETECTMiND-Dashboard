@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, Plus, Trash2, Clock, Shuffle, Zap, AlignLeft,
+  ArrowLeft, Plus, Trash2, Clock, Shuffle, AlignLeft,
   Hash, SlidersHorizontal, List, CheckSquare, ToggleLeft,
   Calendar, Bell, ClipboardList, X, Pencil, Save,
 } from 'lucide-react'
@@ -21,7 +21,6 @@ interface Schedule {
   random_count: number | null
   random_window_start: string | null
   random_window_end: string | null
-  trigger_event: string | null
   expiry_minutes: number
   notification_title: string
   notification_body: string
@@ -47,7 +46,6 @@ type ScheduleForm = {
   random_count: number
   random_window_start: string
   random_window_end: string
-  trigger_event: string
   expiry_minutes: number
   notification_title: string
   notification_body: string
@@ -68,9 +66,8 @@ type QuestionForm = {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SCHEDULE_TYPES = [
-  { key: 'fixed',           label: 'Fixed Times',     icon: Clock,   description: 'Specific times each day' },
-  { key: 'random',          label: 'Random',          icon: Shuffle, description: 'Random within a window' },
-  { key: 'event_triggered', label: 'Event Triggered', icon: Zap,     description: 'On a device event' },
+  { key: 'fixed',  label: 'Fixed Times', icon: Clock,   description: 'Specific times each day' },
+  { key: 'random', label: 'Random',      icon: Shuffle, description: 'Random within a window' },
 ]
 
 const QUESTION_TYPES = [
@@ -86,16 +83,15 @@ const QUESTION_TYPES = [
 ]
 
 const TYPE_BADGE: Record<string, string> = {
-  fixed:           'bg-blue-50 text-blue-700 border-blue-100',
-  random:          'bg-violet-50 text-violet-700 border-violet-100',
-  event_triggered: 'bg-amber-50 text-amber-700 border-amber-100',
+  fixed:  'bg-blue-50 text-blue-700 border-blue-100',
+  random: 'bg-violet-50 text-violet-700 border-violet-100',
 }
 
 const BLANK_SCHEDULE_FORM: ScheduleForm = {
   name: '', description: '', schedule_type: 'fixed',
   times_of_day: ['09:00', '12:00', '18:00'],
   random_count: 5, random_window_start: '08:00', random_window_end: '22:00',
-  trigger_event: 'screen_unlock', expiry_minutes: 60,
+  expiry_minutes: 60,
   notification_title: 'Survey Available',
   notification_body: 'Please take a moment to complete a short survey.',
 }
@@ -115,12 +111,11 @@ function scheduleToForm(s: Schedule): ScheduleForm {
   return {
     name: s.name,
     description: s.description || '',
-    schedule_type: s.schedule_type,
+    schedule_type: s.schedule_type === 'event_triggered' ? 'fixed' : s.schedule_type,
     times_of_day: s.times_of_day?.length ? s.times_of_day : ['09:00'],
     random_count: s.random_count ?? 5,
     random_window_start: s.random_window_start ?? '08:00',
     random_window_end: s.random_window_end ?? '22:00',
-    trigger_event: s.trigger_event ?? 'screen_unlock',
     expiry_minutes: s.expiry_minutes,
     notification_title: s.notification_title,
     notification_body: s.notification_body,
@@ -148,8 +143,7 @@ function timingSummary(s: Schedule) {
   if (s.schedule_type === 'random') {
     return `${s.random_count}× between ${s.random_window_start}–${s.random_window_end}`
   }
-  if (s.schedule_type === 'event_triggered') return `On: ${s.trigger_event}`
-  return ''
+  return '—'
 }
 
 function buildSchedulePayload(f: ScheduleForm) {
@@ -161,7 +155,6 @@ function buildSchedulePayload(f: ScheduleForm) {
     random_count: f.schedule_type === 'random' ? f.random_count : null,
     random_window_start: f.schedule_type === 'random' ? f.random_window_start : null,
     random_window_end: f.schedule_type === 'random' ? f.random_window_end : null,
-    trigger_event: f.schedule_type === 'event_triggered' ? f.trigger_event : null,
     expiry_minutes: f.expiry_minutes,
     notification_title: f.notification_title,
     notification_body: f.notification_body,
@@ -208,7 +201,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 // Segmented control for schedule type
 function ScheduleTypeSelector({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
-    <div className="grid grid-cols-3 gap-1 p-1 bg-gray-100 rounded-xl">
+    <div className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl">
       {SCHEDULE_TYPES.map(t => {
         const active = value === t.key
         return (
@@ -435,25 +428,6 @@ function ScheduleFormBody({ form, setForm }: { form: ScheduleForm; setForm: (f: 
               className={inputCls}
             />
           </div>
-        </div>
-      )}
-
-      {form.schedule_type === 'event_triggered' && (
-        <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-            Trigger Event
-          </label>
-          <input
-            value={form.trigger_event}
-            onChange={e => set({ trigger_event: e.target.value })}
-            placeholder="e.g. screen_unlock"
-            className={inputCls}
-          />
-          <p className="text-xs text-gray-400 mt-1.5">
-            Common events: <code className="font-mono bg-gray-100 px-1 rounded">screen_unlock</code>{' '}
-            <code className="font-mono bg-gray-100 px-1 rounded">screen_on</code>{' '}
-            <code className="font-mono bg-gray-100 px-1 rounded">app_open</code>
-          </p>
         </div>
       )}
 
@@ -776,19 +750,23 @@ export default function ESMPage() {
 
   async function saveQuestionEdit(e: React.FormEvent, q: Question) {
     e.preventDefault()
+    const scheduleId = selectedSchedule?.id
+    if (!scheduleId) return
     await supabase.from('esm_questions')
       .update(buildQuestionPayload(editQuestionForm, q.question_order))
       .eq('id', q.id)
     setEditingQuestionId(null)
-    loadQuestions(selectedSchedule!.id)
+    loadQuestions(scheduleId)
   }
 
   async function deleteQuestion(qId: string) {
+    const scheduleId = selectedSchedule?.id
+    if (!scheduleId) return
     await supabase.from('esm_questions').delete().eq('id', qId)
-    loadQuestions(selectedSchedule!.id)
+    loadQuestions(scheduleId)
     setQuestionCounts(c => ({
       ...c,
-      [selectedSchedule!.id]: Math.max(0, (c[selectedSchedule!.id] || 1) - 1),
+      [scheduleId]: Math.max(0, (c[scheduleId] || 1) - 1),
     }))
   }
 

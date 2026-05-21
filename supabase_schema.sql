@@ -15,7 +15,7 @@ CREATE TABLE studies (
     name TEXT NOT NULL,
     description TEXT,
     app_description TEXT, -- shown in the mobile app
-    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'paused', 'completed', 'archived')),
+    status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'paused', 'completed')),
     created_by UUID REFERENCES auth.users(id),
     config JSONB DEFAULT '{}', -- general study config
     sync_interval_minutes INT NOT NULL DEFAULT 30,
@@ -31,7 +31,7 @@ CREATE TABLE participants (
     label TEXT, -- researcher-assigned label
     enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_sync_at TIMESTAMPTZ,
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'withdrawn', 'completed')),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'withdrawn')),
     device_info JSONB DEFAULT '{}', -- OS version, model, app version
     permissions JSONB DEFAULT '{}', -- current permission states reported by app
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -48,7 +48,7 @@ CREATE TABLE sensor_configs (
     study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
     sensor_type TEXT NOT NULL CHECK (sensor_type IN (
         'app_usage', 'notifications', 'battery', 'calls', 'sms',
-        'esm_ema', 'location', 'light', 'screen_state', 'screen_interaction'
+        'location', 'light', 'screen_state', 'screen_interaction'
     )),
     enabled BOOLEAN NOT NULL DEFAULT true,
     interval_seconds INT, -- sampling interval (for location, light, battery)
@@ -67,12 +67,11 @@ CREATE TABLE esm_schedules (
     study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
-    schedule_type TEXT NOT NULL CHECK (schedule_type IN ('fixed', 'random', 'event_triggered')),
+    schedule_type TEXT NOT NULL CHECK (schedule_type IN ('fixed', 'random')),
     times_of_day TEXT[], -- for fixed: ['09:00','12:00','18:00']
     random_count INT, -- for random: how many per day
     random_window_start TEXT, -- e.g. '08:00'
     random_window_end TEXT, -- e.g. '22:00'
-    trigger_event TEXT, -- for event_triggered: e.g. 'screen_unlock'
     expiry_minutes INT DEFAULT 60, -- how long the notification stays
     notification_title TEXT DEFAULT 'Survey Available',
     notification_body TEXT DEFAULT 'Please complete the survey.',

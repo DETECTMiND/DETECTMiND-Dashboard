@@ -4,19 +4,18 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Save } from 'lucide-react'
+import { ArrowLeft, Save, ClipboardList, CheckCircle, AlertCircle } from 'lucide-react'
 
 const SENSOR_TYPES = [
   { key: 'app_usage', label: 'App Usage', hasInterval: false, description: 'Tracks foreground app usage with start/end times' },
-  { key: 'notifications', label: 'Notifications', hasInterval: false, description: 'Captures notification events per app' },
-  { key: 'battery', label: 'Battery', hasInterval: true, description: 'Records battery level at intervals' },
+  { key: 'notifications', label: 'App Notifications', hasInterval: false, description: 'Captures notification events per app' },
   { key: 'calls', label: 'Phone Calls', hasInterval: false, description: 'Logs incoming and outgoing call events' },
-  { key: 'sms', label: 'SMS', hasInterval: false, description: 'Logs sent and received SMS messages' },
-  { key: 'esm_ema', label: 'ESM/EMA', hasInterval: false, description: 'Configured via ESM/EMA page' },
-  { key: 'location', label: 'Location', hasInterval: true, description: 'GPS/network location at intervals or movement threshold' },
-  { key: 'light', label: 'Light Sensor', hasInterval: true, description: 'Ambient light readings at intervals' },
+  { key: 'sms', label: 'SMS Messages', hasInterval: false, description: 'Logs sent and received SMS messages' },
   { key: 'screen_state', label: 'Screen State', hasInterval: false, description: 'Screen on/off/lock/unlock events' },
   { key: 'screen_interaction', label: 'Screen Interaction', hasInterval: false, description: 'Touch and swipe events' },
+  { key: 'location', label: 'Location', hasInterval: true, description: 'GPS/network location at intervals or movement threshold' },
+  { key: 'battery', label: 'Battery', hasInterval: true, description: 'Records battery level at intervals' },
+  { key: 'light', label: 'Ambient Light', hasInterval: true, description: 'Ambient light readings at intervals' },
 ]
 
 interface SensorConfig {
@@ -33,6 +32,7 @@ export default function SensorConfigPage() {
   const [configs, setConfigs] = useState<Record<string, SensorConfig>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -40,7 +40,16 @@ export default function SensorConfigPage() {
       const map: Record<string, SensorConfig> = {}
       SENSOR_TYPES.forEach(t => {
         const existing = (data || []).find(d => d.sensor_type === t.key)
-        map[t.key] = existing || { sensor_type: t.key, enabled: true, interval_seconds: t.hasInterval ? 300 : null, config: {} }
+        if (existing) {
+          // Ensure location always has a movement_threshold in config
+          if (t.key === 'location' && existing.config && (existing.config as any).movement_threshold === undefined) {
+            existing.config = { ...existing.config, movement_threshold: 50 }
+          }
+          map[t.key] = existing
+        } else {
+          const defaultConfig = t.key === 'location' ? { movement_threshold: 50 } : {}
+          map[t.key] = { sensor_type: t.key, enabled: true, interval_seconds: t.hasInterval ? 300 : null, config: defaultConfig }
+        }
       })
       setConfigs(map)
     }
@@ -57,25 +66,43 @@ export default function SensorConfigPage() {
 
   async function saveAll() {
     setSaving(true)
-    for (const [key, cfg] of Object.entries(configs)) {
-      if (cfg.id) {
-        await supabase.from('sensor_configs').update({
-          enabled: cfg.enabled,
-          interval_seconds: cfg.interval_seconds,
-          config: cfg.config,
-        }).eq('id', cfg.id)
-      } else {
-        await supabase.from('sensor_configs').upsert({
-          study_id: studyId,
-          sensor_type: key,
-          enabled: cfg.enabled,
-          interval_seconds: cfg.interval_seconds,
-          config: cfg.config,
-        }, { onConflict: 'study_id,sensor_type' })
-      }
-    }
+    setSaved(false)
+    setSaveError(null)
+
+    const rows = Object.entries(configs).map(([key, cfg]) => ({
+      study_id: studyId as string,
+      sensor_type: key,
+      enabled: cfg.enabled,
+      interval_seconds: cfg.interval_seconds,
+      config: cfg.config,
+    }))
+
+    const { data, error } = await supabase
+      .from('sensor_configs')
+      .upsert(rows, { onConflict: 'study_id,sensor_type' })
+      .select()
+
     setSaving(false)
+
+    if (error) {
+      setSaveError(error.message)
+      return
+    }
+
+    if (data) {
+      const idMap: Record<string, string> = {}
+      data.forEach((r: any) => { idMap[r.sensor_type] = r.id })
+      setConfigs(prev => {
+        const next = { ...prev }
+        Object.keys(next).forEach(k => {
+          if (idMap[k]) next[k] = { ...next[k], id: idMap[k] }
+        })
+        return next
+      })
+    }
+
     setSaved(true)
+    setTimeout(() => setSaved(false), 3000)
   }
 
   return (
@@ -92,11 +119,36 @@ export default function SensorConfigPage() {
           <button
             onClick={saveAll}
             disabled={saving}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
+            className={`flex items-center gap-2 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm ${
+              saveError ? 'bg-red-500 hover:bg-red-400' : 'bg-blue-600 hover:bg-blue-500'
+            }`}
           >
-            <Save size={15} />
-            {saving ? 'Saving…' : saved ? 'Saved!' : 'Save All'}
+            {saveError ? <AlertCircle size={15} /> : saved ? <CheckCircle size={15} /> : <Save size={15} />}
+            {saving ? 'Saving…' : saveError ? 'Error' : saved ? 'Saved!' : 'Save Changes'}
           </button>
+        </div>
+      </div>
+
+      {/* Error banner */}
+      {saveError && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+          <AlertCircle size={16} className="text-red-500 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-red-800">Failed to save — {saveError}</p>
+          </div>
+        </div>
+      )}
+
+      {/* ESM/EMA note */}
+      <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+        <ClipboardList size={16} className="text-blue-500 mt-0.5 shrink-0" />
+        <div>
+          <p className="text-sm font-medium text-blue-800">ESM / EMA is configured separately</p>
+          <p className="text-xs text-blue-600 mt-0.5">
+            Survey schedules and questions are managed in the{' '}
+            <Link href={`/studies/${studyId}/esm`} className="underline font-semibold hover:text-blue-800">ESM / EMA</Link>{' '}
+            section, not here.
+          </p>
         </div>
       </div>
 
@@ -130,8 +182,12 @@ export default function SensorConfigPage() {
                         <label className="block text-xs font-medium text-gray-500 mb-1">Sampling interval (seconds)</label>
                         <input
                           type="number"
-                          value={cfg.interval_seconds || 300}
-                          onChange={e => updateConfig(sensor.key, 'interval_seconds', parseInt(e.target.value))}
+                          key={`${sensor.key}-interval-${cfg.interval_seconds || 300}`}
+                          defaultValue={cfg.interval_seconds || 300}
+                          onBlur={e => {
+                            const val = parseInt(e.target.value)
+                            updateConfig(sensor.key, 'interval_seconds', isNaN(val) ? 300 : val)
+                          }}
                           className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                           min={10}
                         />
@@ -146,8 +202,12 @@ export default function SensorConfigPage() {
                       <label className="block text-xs font-medium text-gray-500 mb-1">Movement threshold (meters)</label>
                       <input
                         type="number"
-                        value={(cfg.config as any)?.movement_threshold || 50}
-                        onChange={e => updateConfig(sensor.key, 'config', { ...cfg.config, movement_threshold: parseInt(e.target.value) })}
+                        key={`location-threshold-${(cfg.config as any)?.movement_threshold ?? 50}`}
+                        defaultValue={(cfg.config as any)?.movement_threshold ?? 50}
+                        onBlur={e => {
+                          const val = parseInt(e.target.value)
+                          updateConfig(sensor.key, 'config', { ...cfg.config, movement_threshold: isNaN(val) ? 0 : val })
+                        }}
                         className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-28 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                         min={0}
                       />
