@@ -8,7 +8,7 @@ import {
   ArrowLeft, ArrowRight, Check, FlaskConical,
   Smartphone, Phone, MessageSquare, MapPin, BatteryCharging,
   Bell, Monitor, Zap, Sun, MousePointerClick, ClipboardList,
-  Clock,
+  Clock, ShieldCheck, BadgeCheck,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -29,6 +29,8 @@ interface WizardState {
   description: string
   appDescription: string
   syncInterval: number
+  guidedPermissions: boolean
+  autoParticipantId: boolean
 
   // Step 2 – Data to Collect
   sensors: Record<string, { enabled: boolean; interval_seconds: number | null; config: Record<string, any> }>
@@ -204,6 +206,67 @@ function StepBasicInfo({ state, setState }: { state: WizardState; setState: (s: 
             <option value={1440}>Once a day</option>
           </select>
           <p className="text-xs text-gray-400">How often the app uploads data to the server</p>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1.5">App Permissions</label>
+        <div className="grid grid-cols-2 gap-2">
+          {/* Guided Permissions */}
+          <div
+            className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
+              state.guidedPermissions ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
+            }`}
+            onClick={() => set({ guidedPermissions: !state.guidedPermissions })}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                state.guidedPermissions ? 'bg-blue-100' : 'bg-gray-100'
+              }`}>
+                <ShieldCheck size={17} className={state.guidedPermissions ? 'text-blue-600' : 'text-gray-400'} />
+              </div>
+              <div className="min-w-0">
+                <p className={`font-semibold text-sm ${state.guidedPermissions ? 'text-gray-900' : 'text-gray-600'}`}>
+                  Guided Permissions
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
+                  Walk participants through granting permissions on first launch
+                </p>
+              </div>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
+              <input type="checkbox" checked={state.guidedPermissions} onChange={e => set({ guidedPermissions: e.target.checked })} className="sr-only peer" />
+              <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
+            </label>
+          </div>
+
+          {/* Auto Participant ID */}
+          <div
+            className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
+              state.autoParticipantId ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
+            }`}
+            onClick={() => set({ autoParticipantId: !state.autoParticipantId })}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                state.autoParticipantId ? 'bg-blue-100' : 'bg-gray-100'
+              }`}>
+                <BadgeCheck size={17} className={state.autoParticipantId ? 'text-blue-600' : 'text-gray-400'} />
+              </div>
+              <div className="min-w-0">
+                <p className={`font-semibold text-sm ${state.autoParticipantId ? 'text-gray-900' : 'text-gray-600'}`}>
+                  Auto Participant ID
+                </p>
+                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
+                  Automatically assign a unique ID to each participant on enrollment
+                </p>
+              </div>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
+              <input type="checkbox" checked={state.autoParticipantId} onChange={e => set({ autoParticipantId: e.target.checked })} className="sr-only peer" />
+              <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
+            </label>
+          </div>
         </div>
       </div>
     </div>
@@ -551,6 +614,8 @@ export default function NewStudyPage() {
     description: '',
     appDescription: '',
     syncInterval: 30,
+    guidedPermissions: false,
+    autoParticipantId: false,
     sensors: defaultSensors(),
     enableEsm: false,
   })
@@ -566,6 +631,10 @@ export default function NewStudyPage() {
       const { data: { user } } = await supabase.auth.getUser()
 
       // 1. Create study
+      const config: Record<string, any> = {}
+      if (state.guidedPermissions) config.guided_permissions = true
+      if (state.autoParticipantId) config.auto_participant_id = true
+
       const { data: study, error: studyError } = await supabase
         .from('studies')
         .insert({
@@ -573,6 +642,7 @@ export default function NewStudyPage() {
           description: state.description.trim() || null,
           app_description: state.appDescription.trim() || null,
           sync_interval_minutes: state.syncInterval,
+          config,
           status: 'draft',
           created_by: user?.id ?? null,
         })

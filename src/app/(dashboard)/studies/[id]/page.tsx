@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare } from 'lucide-react'
+import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck } from 'lucide-react'
 
 interface Study {
   id: string
@@ -13,6 +13,7 @@ interface Study {
   app_description: string | null
   status: string
   sync_interval_minutes: number
+  config: Record<string, any> | null
   created_at: string
 }
 
@@ -32,12 +33,19 @@ export default function StudyDetailPage() {
   const [study, setStudy] = useState<Study | null>(null)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Partial<Study>>({})
+  const [guidedPermissions, setGuidedPermissions] = useState(false)
+  const [autoParticipantId, setAutoParticipantId] = useState(false)
   const [participantCount, setParticipantCount] = useState(0)
 
   useEffect(() => {
     async function load() {
       const { data } = await supabase.from('studies').select('*').eq('id', id).single()
-      if (data) { setStudy(data); setForm(data) }
+      if (data) {
+        setStudy(data)
+        setForm(data)
+        setGuidedPermissions(!!(data.config?.guided_permissions))
+        setAutoParticipantId(!!(data.config?.auto_participant_id))
+      }
       const { count } = await supabase.from('participants').select('*', { count: 'exact', head: true }).eq('study_id', id)
       setParticipantCount(count || 0)
     }
@@ -46,14 +54,20 @@ export default function StudyDetailPage() {
 
   async function handleSave() {
     if (!study) return
+    const updatedConfig = { ...(study.config ?? {}) }
+    if (guidedPermissions) updatedConfig.guided_permissions = true
+    else delete updatedConfig.guided_permissions
+    if (autoParticipantId) updatedConfig.auto_participant_id = true
+    else delete updatedConfig.auto_participant_id
     const { error } = await supabase.from('studies').update({
       name: form.name || study.name,
       description: form.description ?? study.description,
       app_description: form.app_description ?? study.app_description,
       status: form.status || study.status,
       sync_interval_minutes: form.sync_interval_minutes ?? study.sync_interval_minutes,
+      config: updatedConfig,
     }).eq('id', id)
-    if (!error) { setStudy({ ...study, ...form } as Study); setEditing(false) }
+    if (!error) { setStudy({ ...study, ...form, config: updatedConfig } as Study); setEditing(false) }
   }
 
   async function handleDelete() {
@@ -139,11 +153,72 @@ export default function StudyDetailPage() {
                 />
               </div>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">App Permissions</label>
+              <div className="grid grid-cols-2 gap-2">
+                {/* Guided Permissions */}
+                <div
+                  className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
+                    guidedPermissions ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                  onClick={() => setGuidedPermissions(v => !v)}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                      guidedPermissions ? 'bg-blue-100' : 'bg-gray-100'
+                    }`}>
+                      <ShieldCheck size={17} className={guidedPermissions ? 'text-blue-600' : 'text-gray-400'} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`font-semibold text-sm ${guidedPermissions ? 'text-gray-900' : 'text-gray-600'}`}>
+                        Guided Permissions
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
+                        Walk participants through granting permissions on first launch
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={guidedPermissions} onChange={e => setGuidedPermissions(e.target.checked)} className="sr-only peer" />
+                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
+                  </label>
+                </div>
+
+                {/* Auto Participant ID */}
+                <div
+                  className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
+                    autoParticipantId ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                  onClick={() => setAutoParticipantId(v => !v)}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                      autoParticipantId ? 'bg-blue-100' : 'bg-gray-100'
+                    }`}>
+                      <BadgeCheck size={17} className={autoParticipantId ? 'text-blue-600' : 'text-gray-400'} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`font-semibold text-sm ${autoParticipantId ? 'text-gray-900' : 'text-gray-600'}`}>
+                        Auto Participant ID
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
+                        Automatically assign a unique ID to each participant on enrollment
+                      </p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={autoParticipantId} onChange={e => setAutoParticipantId(e.target.checked)} className="sr-only peer" />
+                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
+                  </label>
+                </div>
+              </div>
+            </div>
+
             <div className="flex items-center gap-3 pt-1">
               <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors">
                 Save Changes
               </button>
-              <button onClick={() => { setEditing(false); setForm(study) }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+              <button onClick={() => { setEditing(false); setForm(study); setGuidedPermissions(!!(study.config?.guided_permissions)); setAutoParticipantId(!!(study.config?.auto_participant_id)) }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
               <button onClick={handleDelete} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
@@ -170,6 +245,16 @@ export default function StudyDetailPage() {
                 <div className="flex items-center gap-4 mt-3 text-xs text-gray-400">
                   <span>{participantCount} participants</span>
                   <span>Sync every {study.sync_interval_minutes} min</span>
+                  {study.config?.guided_permissions && (
+                    <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
+                      <ShieldCheck size={12} /> Guided permissions
+                    </span>
+                  )}
+                  {study.config?.auto_participant_id && (
+                    <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
+                      <BadgeCheck size={12} /> Auto participant ID
+                    </span>
+                  )}
                 </div>
               </div>
               <button

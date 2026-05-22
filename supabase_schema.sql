@@ -212,8 +212,9 @@ CREATE TABLE data_screen_interaction (
     id BIGSERIAL PRIMARY KEY,
     participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
     interaction_type TEXT NOT NULL CHECK (interaction_type IN ('touch', 'swipe', 'long_press', 'scroll')),
-    x_coord REAL,
-    y_coord REAL,
+    app_name TEXT,
+    app_category TEXT,
+    interaction_data JSONB,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_screen_interaction_participant ON data_screen_interaction(participant_id, recorded_at);
