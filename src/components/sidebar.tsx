@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import {
   LayoutDashboard, FlaskConical, LogOut, Users, Database,
-  ClipboardList, Settings, List,
+  ClipboardList, Settings, List, MessageSquare,
 } from 'lucide-react'
 
 interface Study {
@@ -15,12 +15,16 @@ interface Study {
   status: string
 }
 
-const STUDY_SUB_PAGES = [
-  { suffix: '',              label: 'Overview',      icon: LayoutDashboard },
-  { suffix: '/participants', label: 'Participants',  icon: Users },
-  { suffix: '/data',         label: 'Sensor Data',   icon: Database },
-  { suffix: '/esm',          label: 'ESM / EMA',     icon: ClipboardList },
-  { suffix: '/config',       label: 'Sensor Config', icon: Settings },
+const STUDY_MAIN_PAGES = [
+  { suffix: '',               label: 'Overview',      icon: LayoutDashboard },
+  { suffix: '/participants',  label: 'Participants',   icon: Users },
+  { suffix: '/data',          label: 'Sensor Data',    icon: Database },
+  { suffix: '/esm-responses', label: 'ESM Responses',  icon: MessageSquare },
+]
+
+const STUDY_CONFIG_PAGES = [
+  { suffix: '/esm',    label: 'ESM / EMA Config', icon: ClipboardList },
+  { suffix: '/config', label: 'Sensor Config',    icon: Settings },
 ]
 
 
@@ -87,7 +91,6 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-3 overflow-y-auto min-h-0 space-y-0.5">
-        {/* Dashboard */}
         <Link
           href="/"
           className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
@@ -98,8 +101,7 @@ export default function Sidebar() {
           Dashboard
         </Link>
 
-        {/* Study sub-pages */}
-        {effectiveStudyId && STUDY_SUB_PAGES.map(sub => {
+        {effectiveStudyId && STUDY_MAIN_PAGES.map(sub => {
           const href = `/studies/${effectiveStudyId}${sub.suffix}`
           const active = sub.suffix === ''
             ? pathname === `/studies/${effectiveStudyId}`
@@ -121,6 +123,26 @@ export default function Sidebar() {
 
       {/* Bottom */}
       <div className="px-3 py-3 border-t border-gray-100 space-y-0.5 shrink-0">
+        {/* Config pages */}
+        {effectiveStudyId && STUDY_CONFIG_PAGES.map(sub => {
+          const href = `/studies/${effectiveStudyId}${sub.suffix}`
+          const active = pathname.startsWith(href)
+          return (
+            <Link
+              key={sub.suffix}
+              href={href}
+              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                active ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
+              }`}
+            >
+              <sub.icon size={15} className={active ? 'text-blue-600' : 'text-gray-400'} />
+              {sub.label}
+            </Link>
+          )
+        })}
+
+        <div className="h-px bg-gray-100 my-1" />
+
         <Link
           href="/studies"
           className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium w-full transition-all ${

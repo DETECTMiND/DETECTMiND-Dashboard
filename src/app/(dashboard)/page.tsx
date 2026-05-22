@@ -4,143 +4,264 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import {
   Users, AlertTriangle, CheckCircle2, Wifi,
-  Database, ArrowUpRight, ChevronRight,
+  Database, ChevronRight, MessageSquare,
 } from 'lucide-react'
 import Link from 'next/link'
-import { formatDistanceToNow } from 'date-fns'
+import { formatDistanceToNow, startOfDay, startOfWeek, startOfMonth } from 'date-fns'
 
-interface SensorCount {
-  key: string
-  label: string
-  count: number
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ParticipantRow {
+  id: string
+  label: string | null
+  device_id: string
+  study_id: string
+  status: string
+  last_sync_at: string | null
+  permissions: Record<string, boolean> | null
 }
 
-interface SyncBreakdown {
-  success: number
-  partial: number
-  error: number
-  total: number
-}
-
-interface RecentSync {
+interface SyncRow {
   synced_at: string
   status: string
   records_synced: number
-  participant: { label: string; device_id: string; study: { id: string; name: string } }
+  participant_id: string
 }
+
+interface SensorCount { key: string; label: string; count: number }
+
+interface EsmScheduleRate {
+  id: string
+  name: string
+  total: number
+  responded: number
+  expired: number
+  pending: number
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const SYNC_STATUS: Record<string, { dot: string; badge: string; label: string }> = {
   success: { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'Success' },
-  partial:  { dot: 'bg-amber-400',  badge: 'bg-amber-50 text-amber-700 border-amber-200',    label: 'Partial' },
-  error:    { dot: 'bg-red-400',    badge: 'bg-red-50 text-red-700 border-red-200',           label: 'Error' },
+  partial: { dot: 'bg-amber-400',  badge: 'bg-amber-50 text-amber-700 border-amber-200',       label: 'Partial' },
+  error:   { dot: 'bg-red-400',    badge: 'bg-red-50 text-red-700 border-red-200',              label: 'Error'   },
 }
 
 const SENSOR_LABELS: Record<string, string> = {
-  data_app_usage:         'App Usage',
-  data_notifications:     'Notifications',
-  data_battery:           'Battery',
-  data_calls:             'Calls',
-  data_sms:               'SMS',
-  data_esm_responses:     'ESM/EMA',
-  data_location:          'Location',
-  data_light:             'Light',
-  data_screen_state:      'Screen State',
-  data_screen_interaction:'Screen Interaction',
+  data_app_usage:          'App Usage',
+  data_notifications:      'Notifications',
+  data_battery:            'Battery',
+  data_calls:              'Calls',
+  data_sms:                'SMS',
+  data_esm_responses:      'ESM/EMA',
+  data_location:           'Location',
+  data_light:              'Light',
+  data_screen_state:       'Screen State',
+  data_screen_interaction: 'Screen Interaction',
 }
 
-const SENSOR_TABLES = Object.keys(SENSOR_LABELS) as Array<keyof typeof SENSOR_LABELS>
+const SENSOR_TIME_COLS: Record<string, string> = {
+  data_app_usage:          'start_time',
+  data_notifications:      'posted_at',
+  data_battery:            'recorded_at',
+  data_calls:              'event_time',
+  data_sms:                'event_time',
+  data_esm_responses:      'triggered_at',
+  data_location:           'recorded_at',
+  data_light:              'recorded_at',
+  data_screen_state:       'recorded_at',
+  data_screen_interaction: 'recorded_at',
+}
 
-function formatCount(n: number) {
+const SENSOR_TABLES = Object.keys(SENSOR_LABELS)
+
+type TimeFilter = 'today' | 'week' | 'month' | 'all'
+const TIME_FILTERS: { key: TimeFilter; label: string }[] = [
+  { key: 'today', label: 'Today' },
+  { key: 'week',  label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+  { key: 'all',   label: 'All Time' },
+]
+
+function fmt(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
   return n.toLocaleString()
 }
+
+function getRangeStart(filter: TimeFilter): string | null {
+  const now = new Date()
+  if (filter === 'today') return startOfDay(now).toISOString()
+  if (filter === 'week')  return startOfWeek(now, { weekStartsOn: 1 }).toISOString()
+  if (filter === 'month') return startOfMonth(now).toISOString()
+  return null
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OverviewPage() {
   const supabase = createClient()
 
-  const [participants, setParticipants] = useState<{ total: number; active: number } | null>(null)
-  const [sensorCounts, setSensorCounts] = useState<SensorCount[] | null>(null)
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>('all')
+  const [allParticipants, setAllParticipants] = useState<ParticipantRow[]>([])
+  const [studies, setStudies] = useState<Record<string, { id: string; name: string }>>({})
+  const [sensorCounts, setSensorCounts] = useState<SensorCount[]>([])
   const [totalRecords, setTotalRecords] = useState<number | null>(null)
-  const [syncBreakdown, setSyncBreakdown] = useState<SyncBreakdown | null>(null)
-  const [recentSyncs, setRecentSyncs] = useState<RecentSync[] | null>(null)
-  const [issueParticipants, setIssueParticipants] = useState<any[] | null>(null)
+  const [syncRows, setSyncRows] = useState<SyncRow[]>([])
+  const [esmRates, setEsmRates] = useState<EsmScheduleRate[]>([])
+  const [esmResponseTimes, setEsmResponseTimes] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
 
+  // ── Load base data (doesn't change with time filter) ──────────────────────
   useEffect(() => {
     async function load() {
-      // Participants + last-sync info
-      const { data: pData } = await supabase
-        .from('participants')
-        .select('id, status, permissions, label, device_id, study_id, last_sync_at')
-
-      const parts = pData || []
-      const issues = parts.filter(p => {
-        if (p.status !== 'active') return false
-        const perms = p.permissions as Record<string, boolean> | null
-        if (!perms) return true
-        return Object.values(perms).some(v => v === false)
-      })
-      setParticipants({ total: parts.length, active: parts.filter(p => p.status === 'active').length })
-      setIssueParticipants(issues)
-
-      // Sensor record counts — all in parallel
-      const countResults = await Promise.all(
-        SENSOR_TABLES.map(tbl =>
-          supabase.from(tbl as any).select('*', { count: 'exact', head: true })
-        )
-      )
-      const counts: SensorCount[] = SENSOR_TABLES.map((tbl, i) => ({
-        key: tbl,
-        label: SENSOR_LABELS[tbl],
-        count: countResults[i].count ?? 0,
-      })).sort((a, b) => b.count - a.count)
-      setSensorCounts(counts)
-      setTotalRecords(counts.reduce((sum, c) => sum + c.count, 0))
-
-      // Sync breakdown from last 50 syncs
-      const { data: syncData } = await supabase
-        .from('sync_log')
-        .select('synced_at, status, records_synced, participant_id')
-        .order('synced_at', { ascending: false })
-        .limit(50)
-
-      const syncs = syncData || []
-      const breakdown: SyncBreakdown = { success: 0, partial: 0, error: 0, total: syncs.length }
-      syncs.forEach(s => { if (s.status in breakdown) (breakdown as any)[s.status]++ })
-      setSyncBreakdown(breakdown)
-
-      // Enrich recent 20 syncs with participant + study info
-      const recent20 = syncs.slice(0, 20)
-      if (recent20.length > 0) {
-        const pIds = [...new Set(recent20.map(s => s.participant_id))]
-        const { data: pInfo } = await supabase.from('participants').select('id, label, device_id, study_id').in('id', pIds)
-        const { data: sInfo } = await supabase.from('studies').select('id, name')
-        const pMap = Object.fromEntries((pInfo || []).map(p => [p.id, p]))
-        const sMap = Object.fromEntries((sInfo || []).map(s => [s.id, s]))
-        setRecentSyncs(
-          recent20.map(sync => ({
-            ...sync,
-            participant: {
-              ...(pMap[sync.participant_id] || { label: null, device_id: 'unknown' }),
-              study: sMap[(pMap[sync.participant_id] || {}).study_id] || { id: '', name: 'Unknown' },
-            },
-          })) as any
-        )
-      } else {
-        setRecentSyncs([])
-      }
+      const [{ data: pData }, { data: sData }] = await Promise.all([
+        supabase.from('participants').select('id, label, device_id, study_id, status, last_sync_at, permissions'),
+        supabase.from('studies').select('id, name'),
+      ])
+      setAllParticipants((pData || []) as ParticipantRow[])
+      setStudies(Object.fromEntries((sData || []).map(s => [s.id, s])))
     }
     load()
   }, [])
 
-  const loading = participants === null || sensorCounts === null || recentSyncs === null || issueParticipants === null
+  // ── Load time-filtered data ───────────────────────────────────────────────
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const since = getRangeStart(timeFilter)
 
-  if (loading) {
+      const countResults = await Promise.all(
+        SENSOR_TABLES.map(tbl => {
+          let q = supabase.from(tbl as any).select('*', { count: 'exact', head: true })
+          if (since) q = q.gte(SENSOR_TIME_COLS[tbl], since)
+          return q
+        })
+      )
+      const counts: SensorCount[] = SENSOR_TABLES.map((tbl, i) => ({
+        key: tbl, label: SENSOR_LABELS[tbl], count: countResults[i].count ?? 0,
+      })).sort((a, b) => b.count - a.count)
+      setSensorCounts(counts)
+      setTotalRecords(counts.reduce((s, c) => s + c.count, 0))
+
+      let sq = supabase.from('sync_log').select('synced_at, status, records_synced, participant_id').order('synced_at', { ascending: false })
+      if (since) sq = sq.gte('synced_at', since)
+      sq = sq.limit(2000)
+      const { data: syncData } = await sq
+      setSyncRows((syncData || []) as SyncRow[])
+
+      // ESM response rates per schedule
+      const { data: schedules } = await supabase.from('esm_schedules').select('id, name')
+      if (schedules && schedules.length > 0) {
+        const rates = await Promise.all(schedules.map(async s => {
+          function base() {
+            let q = supabase.from('data_esm_responses').select('*', { count: 'exact', head: true }).eq('schedule_id', s.id)
+            if (since) q = q.gte('triggered_at', since)
+            return q
+          }
+          const [{ count: total }, { count: responded }, { count: expired }, { count: pending }] = await Promise.all([
+            base(),
+            base().not('responded_at', 'is', null).eq('expired', false),
+            base().eq('expired', true),
+            base().is('responded_at', null).eq('expired', false),
+          ])
+          return { id: s.id, name: s.name, total: total ?? 0, responded: responded ?? 0, expired: expired ?? 0, pending: pending ?? 0 }
+        }))
+        setEsmRates(rates.filter(r => r.total > 0))
+      } else {
+        setEsmRates([])
+      }
+
+      // ESM response timestamps for heatmap (responded only)
+      let rq = supabase.from('data_esm_responses').select('responded_at').not('responded_at', 'is', null).eq('expired', false)
+      if (since) rq = rq.gte('triggered_at', since)
+      const { data: rtData } = await rq
+      setEsmResponseTimes((rtData || []).map((r: any) => r.responded_at as string))
+
+      setLoading(false)
+    }
+    load()
+  }, [timeFilter])
+
+  // ── Derived ───────────────────────────────────────────────────────────────
+
+  const activeParticipants = allParticipants.filter(p => p.status === 'active')
+  const withdrawnCount = allParticipants.filter(p => p.status === 'withdrawn').length
+
+  const staleCount = activeParticipants.filter(p => {
+    if (!p.last_sync_at) return true
+    return Date.now() - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
+  }).length
+
+  const permIssueCount = activeParticipants.filter(p => {
+    if (!p.permissions) return true
+    return Object.values(p.permissions).some(v => v === false)
+  }).length
+
+  const actionNeededCount = staleCount + permIssueCount
+
+  const pMap = Object.fromEntries(allParticipants.map(p => [p.id, p]))
+
+  const latestSyncPerParticipant: Record<string, SyncRow> = {}
+  for (const s of syncRows) {
+    const p = pMap[s.participant_id]
+    if (!p || p.status !== 'active') continue
+    if (!latestSyncPerParticipant[s.participant_id]) {
+      latestSyncPerParticipant[s.participant_id] = s
+    }
+  }
+  const latestSyncs = Object.values(latestSyncPerParticipant)
+  const successRate = latestSyncs.length > 0
+    ? Math.round((latestSyncs.filter(s => s.status === 'success').length / latestSyncs.length) * 100)
+    : null
+
+  const syncBreakdownCounts = {
+    success: latestSyncs.filter(s => s.status === 'success').length,
+    partial: latestSyncs.filter(s => s.status === 'partial').length,
+    error:   latestSyncs.filter(s => s.status === 'error').length,
+  }
+
+  const recent20 = syncRows.slice(0, 25).map(sync => ({
+    ...sync,
+    participant: pMap[sync.participant_id] || null,
+    study: pMap[sync.participant_id] ? studies[pMap[sync.participant_id].study_id] : null,
+  }))
+
+  const maxCount = Math.max(...sensorCounts.map(c => c.count), 1)
+
+  // Activity Heatmap: participant × day → synced (boolean)
+  const heatmapParticipants = activeParticipants.slice(0, 12)
+  const heatmapDays: string[] = []
+  const numDays = timeFilter === 'today' ? 1 : timeFilter === 'week' ? 7 : timeFilter === 'month' ? 30 : 14
+  for (let i = numDays - 1; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i)
+    heatmapDays.push(d.toISOString().slice(0, 10))
+  }
+  const heatmapSynced = new Set(syncRows.map(s => `${s.participant_id}|${s.synced_at.slice(0, 10)}`))
+
+  // ESM Response Time Heatmap: hour (0-23) × day-of-week (0=Sun..6=Sat)
+  const esmHeatmap: number[][] = Array.from({ length: 7 }, () => new Array(24).fill(0))
+  for (const ts of esmResponseTimes) {
+    const d = new Date(ts)
+    esmHeatmap[d.getDay()][d.getHours()]++
+  }
+  const esmHeatMax = Math.max(...esmHeatmap.flat(), 1)
+
+  // Pick a study to link to for participants page: first study that has participants, or first study
+  const participantStudyId = allParticipants[0]?.study_id ?? Object.keys(studies)[0] ?? null
+
+  // ── Skeleton ──────────────────────────────────────────────────────────────
+  if (loading && allParticipants.length === 0) {
     return (
-      <div className="space-y-8 animate-pulse">
-        <div>
-          <div className="h-7 bg-gray-200 rounded-lg w-32 mb-2" />
-          <div className="h-4 bg-gray-100 rounded w-64" />
+      <div className="space-y-6 animate-pulse">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="h-7 bg-gray-200 rounded w-32 mb-1" />
+            <div className="h-4 bg-gray-100 rounded w-56" />
+          </div>
+          <div className="flex gap-1">
+            {[...Array(4)].map((_, i) => <div key={i} className="h-8 w-20 bg-gray-200 rounded-lg" />)}
+          </div>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[...Array(4)].map((_, i) => <div key={i} className="h-32 bg-gray-200 rounded-xl" />)}
@@ -153,153 +274,192 @@ export default function OverviewPage() {
     )
   }
 
-  const maxCount = Math.max(...(sensorCounts?.map(c => c.count) ?? [1]), 1)
-  const successRate = syncBreakdown && syncBreakdown.total > 0
-    ? Math.round((syncBreakdown.success / syncBreakdown.total) * 100)
-    : null
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
 
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Overview</h1>
           <p className="text-gray-500 text-sm mt-0.5">Data collection health across all studies</p>
         </div>
-        <Link
-          href="/studies"
-          className="flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-700 transition-colors"
-        >
-          View studies <ArrowUpRight size={14} />
-        </Link>
+
+        {/* Time filter */}
+        <div className="flex items-center bg-gray-100 rounded-xl p-1 gap-0.5">
+          {TIME_FILTERS.map(f => (
+            <button
+              key={f.key}
+              onClick={() => setTimeFilter(f.key)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                timeFilter === f.key
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${loading ? 'opacity-50' : 'opacity-100'}`}>
 
         {/* Participants */}
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-start justify-between mb-4">
-            <div className="p-2.5 rounded-xl bg-emerald-50">
-              <Users size={18} className="text-emerald-600" />
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col justify-between min-h-[160px]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
+              <Users size={15} className="text-emerald-600" />
             </div>
-            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mt-1">Enrolled</span>
+            <span className="text-sm font-medium text-gray-500">Participants</span>
           </div>
-          <div className="text-3xl font-bold text-gray-900 tabular-nums">{participants.total}</div>
-          <div className="text-sm text-gray-500 mt-0.5">Participants</div>
-          <div className="mt-4 space-y-1">
-            <div className="flex justify-between text-xs text-gray-400">
-              <span>{participants.active} active</span>
-              <span>{participants.total ? Math.round((participants.active / participants.total) * 100) : 0}%</span>
-            </div>
-            <div className="h-1 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-500 rounded-full transition-all"
-                style={{ width: participants.total ? `${(participants.active / participants.total) * 100}%` : '0%' }}
-              />
+          <div>
+            <div className="text-4xl font-bold text-gray-900 tabular-nums tracking-tight">{allParticipants.length}</div>
+            <div className="mt-3 flex items-center gap-3 text-[13px]">
+              {participantStudyId ? (
+                <>
+                  <Link href={`/studies/${participantStudyId}/participants?filter=active`}
+                    className="flex items-center gap-1.5 text-emerald-600 font-medium hover:text-emerald-700 transition-colors">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />{activeParticipants.length} active
+                  </Link>
+                  <span className="text-gray-200">|</span>
+                  <Link href={`/studies/${participantStudyId}/participants?filter=withdrawn`}
+                    className="text-gray-400 font-medium hover:text-gray-600 transition-colors">
+                    {withdrawnCount} withdrawn
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <span className="flex items-center gap-1.5 text-emerald-600 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />{activeParticipants.length} active
+                  </span>
+                  <span className="text-gray-200">|</span>
+                  <span className="text-gray-400 font-medium">{withdrawnCount} withdrawn</span>
+                </>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Total Records */}
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-start justify-between mb-4">
-            <div className="p-2.5 rounded-xl bg-blue-50">
-              <Database size={18} className="text-blue-600" />
+        {/* Records collected */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col justify-between min-h-[160px]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+              <Database size={15} className="text-blue-600" />
             </div>
-            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mt-1">All sensors</span>
+            <span className="text-sm font-medium text-gray-500">Records Collected</span>
           </div>
-          <div className="text-3xl font-bold text-gray-900 tabular-nums">{formatCount(totalRecords ?? 0)}</div>
-          <div className="text-sm text-gray-500 mt-0.5">Records Collected</div>
-          <div className="mt-4 text-xs text-gray-400">
-            Across {sensorCounts?.filter(c => c.count > 0).length ?? 0} active sensor{sensorCounts?.filter(c => c.count > 0).length !== 1 ? 's' : ''}
+          <div>
+            <div className="text-4xl font-bold text-gray-900 tabular-nums tracking-tight">{fmt(totalRecords ?? 0)}</div>
+            <div className="mt-3 text-[13px] text-gray-400 font-medium">
+              {sensorCounts.filter(c => c.count > 0).length} active sensor{sensorCounts.filter(c => c.count > 0).length !== 1 ? 's' : ''}
+            </div>
           </div>
         </div>
 
-        {/* Sync Health */}
-        <div className="bg-white rounded-xl p-5 border border-gray-200">
-          <div className="flex items-start justify-between mb-4">
-            <div className="p-2.5 rounded-xl bg-violet-50">
-              <Wifi size={18} className="text-violet-600" />
+        {/* Sync success rate */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 flex flex-col justify-between min-h-[160px]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">
+              <Wifi size={15} className="text-violet-600" />
             </div>
-            <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mt-1">Last 50</span>
+            <span className="text-sm font-medium text-gray-500">Sync Success Rate</span>
           </div>
-          <div className="text-3xl font-bold text-gray-900 tabular-nums">
-            {successRate !== null ? `${successRate}%` : '—'}
-          </div>
-          <div className="text-sm text-gray-500 mt-0.5">Sync Success Rate</div>
-          <div className="mt-4 flex items-center gap-2.5 text-[11px]">
-            <span className="flex items-center gap-1 text-emerald-600">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-              {syncBreakdown?.success ?? 0}
-            </span>
-            <span className="flex items-center gap-1 text-amber-600">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
-              {syncBreakdown?.partial ?? 0}
-            </span>
-            <span className="flex items-center gap-1 text-red-500">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" />
-              {syncBreakdown?.error ?? 0}
-            </span>
-            <span className="text-gray-300">of {syncBreakdown?.total ?? 0}</span>
+          <div>
+            <div className="text-4xl font-bold text-gray-900 tabular-nums tracking-tight">
+              {successRate !== null ? `${successRate}%` : '—'}
+            </div>
+            <div className="mt-3 flex items-center gap-3 text-[13px]">
+              <span className="flex items-center gap-1.5 text-emerald-600 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />{syncBreakdownCounts.success}
+              </span>
+              <span className="flex items-center gap-1.5 text-amber-500 font-medium">
+                <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />{syncBreakdownCounts.partial}
+              </span>
+              <span className="flex items-center gap-1.5 text-red-500 font-medium">
+                <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" />{syncBreakdownCounts.error}
+              </span>
+              <span className="text-gray-300 font-medium">/ {latestSyncs.length}</span>
+            </div>
           </div>
         </div>
 
-        {/* Permission Issues */}
-        <div className={`rounded-xl p-5 border transition-all ${
-          (issueParticipants?.length ?? 0) > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'
+        {/* Action needed */}
+        <div className={`rounded-2xl border shadow-sm p-6 flex flex-col justify-between min-h-[160px] transition-all ${
+          actionNeededCount > 0 ? 'bg-red-50/50 border-red-100' : 'bg-white border-gray-100'
         }`}>
-          <div className="flex items-start justify-between mb-4">
-            <div className={`p-2.5 rounded-xl ${(issueParticipants?.length ?? 0) > 0 ? 'bg-red-100' : 'bg-gray-50'}`}>
-              <AlertTriangle size={18} className={(issueParticipants?.length ?? 0) > 0 ? 'text-red-500' : 'text-gray-400'} />
+          <div className="flex items-center gap-2.5">
+            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${actionNeededCount > 0 ? 'bg-red-100' : 'bg-emerald-50'}`}>
+              {actionNeededCount > 0
+                ? <AlertTriangle size={15} className="text-red-500" />
+                : <CheckCircle2 size={15} className="text-emerald-500" />}
             </div>
-            {(issueParticipants?.length ?? 0) > 0 && (
-              <span className="text-[10px] font-bold text-red-500 uppercase tracking-wide mt-1">Action needed</span>
-            )}
+            <span className="text-sm font-medium text-gray-500">Action Needed</span>
           </div>
-          <div className={`text-3xl font-bold tabular-nums ${(issueParticipants?.length ?? 0) > 0 ? 'text-red-600' : 'text-gray-900'}`}>
-            {issueParticipants?.length ?? 0}
-          </div>
-          <div className={`text-sm mt-0.5 ${(issueParticipants?.length ?? 0) > 0 ? 'text-red-500' : 'text-gray-500'}`}>
-            Permission Issues
-          </div>
-          <div className={`mt-4 text-xs ${(issueParticipants?.length ?? 0) > 0 ? 'text-red-400' : 'text-gray-400'}`}>
-            {(issueParticipants?.length ?? 0) === 0 ? 'All participants clear' : 'Among active participants'}
+          <div>
+            <div className={`text-4xl font-bold tabular-nums tracking-tight ${actionNeededCount > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+              {actionNeededCount > 0 ? actionNeededCount : '—'}
+            </div>
+            <div className="mt-3 flex items-center gap-3 text-[13px]">
+              {actionNeededCount > 0 ? (
+                participantStudyId ? (
+                  <>
+                    <Link href={`/studies/${participantStudyId}/participants?filter=stale`}
+                      className="flex items-center gap-1.5 text-amber-600 font-medium hover:text-amber-700 transition-colors">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />{staleCount} stale
+                    </Link>
+                    <span className="text-gray-200">|</span>
+                    <Link href={`/studies/${participantStudyId}/participants?filter=perm_missing`}
+                      className="flex items-center gap-1.5 text-red-500 font-medium hover:text-red-600 transition-colors">
+                      <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" />{permIssueCount} perm
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex items-center gap-1.5 text-amber-600 font-medium">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />{staleCount} stale
+                    </span>
+                    <span className="text-gray-200">|</span>
+                    <span className="flex items-center gap-1.5 text-red-500 font-medium">
+                      <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" />{permIssueCount} perm
+                    </span>
+                  </>
+                )
+              ) : (
+                <span className="text-emerald-600 font-medium">All clear</span>
+              )}
+            </div>
           </div>
         </div>
 
       </div>
 
       {/* Bottom row */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      <div className={`grid grid-cols-1 lg:grid-cols-5 gap-6 transition-opacity duration-200 ${loading ? 'opacity-50' : 'opacity-100'}`}>
 
         {/* Recent Syncs */}
         <div className="lg:col-span-3 bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
             <h2 className="font-semibold text-gray-800 text-sm">Recent Sync Activity</h2>
             <div className="flex items-center gap-3">
-              {syncBreakdown && syncBreakdown.total > 0 && (
-                <div className="flex items-center gap-2 text-[11px]">
-                  {syncBreakdown.error > 0 && (
-                    <span className="flex items-center gap-1 text-red-500 font-medium">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                      {syncBreakdown.error} error{syncBreakdown.error !== 1 ? 's' : ''}
-                    </span>
-                  )}
-                  {syncBreakdown.partial > 0 && (
-                    <span className="flex items-center gap-1 text-amber-600 font-medium">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                      {syncBreakdown.partial} partial
-                    </span>
-                  )}
-                </div>
+              {syncRows.some(s => s.status === 'error') && (
+                <span className="flex items-center gap-1 text-[11px] text-red-500 font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                  {syncRows.filter(s => s.status === 'error').length} error{syncRows.filter(s => s.status === 'error').length !== 1 ? 's' : ''}
+                </span>
               )}
-              <span className="text-xs text-gray-400">Last 20</span>
+              {syncRows.some(s => s.status === 'partial') && (
+                <span className="flex items-center gap-1 text-[11px] text-amber-600 font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  {syncRows.filter(s => s.status === 'partial').length} partial
+                </span>
+              )}
+              <span className="text-xs text-gray-400">Last 25</span>
             </div>
           </div>
 
-          {recentSyncs.length === 0 ? (
+          {recent20.length === 0 ? (
             <div className="px-5 py-14 text-center">
               <Wifi size={28} className="mx-auto text-gray-300 mb-2" />
               <p className="text-gray-400 text-sm">No sync data yet</p>
@@ -317,39 +477,32 @@ export default function OverviewPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {recentSyncs.map((sync, i) => {
+                {recent20.map((sync, i) => {
                   const st = SYNC_STATUS[sync.status] || SYNC_STATUS.error
+                  const p = sync.participant
+                  const study = sync.study
                   return (
                     <tr key={i} className="hover:bg-gray-50 transition-colors">
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
                           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${st.dot}`} />
-                          <p className="font-medium text-gray-800 text-xs">
-                            {sync.participant?.label || sync.participant?.device_id}
+                          <p className="font-medium text-gray-800 text-xs truncate max-w-28">
+                            {p?.label || p?.device_id || 'Unknown'}
                           </p>
                         </div>
                       </td>
                       <td className="px-3 py-3 hidden sm:table-cell">
-                        {sync.participant?.study?.id ? (
-                          <Link
-                            href={`/studies/${sync.participant.study.id}`}
-                            className="text-xs text-gray-500 hover:text-blue-600 transition-colors hover:underline"
-                          >
-                            {sync.participant.study.name}
+                        {study ? (
+                          <Link href={`/studies/${study.id}`} className="text-xs text-gray-500 hover:text-blue-600 hover:underline transition-colors truncate block max-w-32">
+                            {study.name}
                           </Link>
-                        ) : (
-                          <span className="text-xs text-gray-400">{sync.participant?.study?.name}</span>
-                        )}
+                        ) : <span className="text-xs text-gray-300">—</span>}
                       </td>
                       <td className="px-3 py-3 text-right hidden md:table-cell">
-                        <span className="text-xs text-gray-400 tabular-nums">
-                          {sync.records_synced?.toLocaleString() ?? '—'}
-                        </span>
+                        <span className="text-xs text-gray-400 tabular-nums">{sync.records_synced?.toLocaleString() ?? '—'}</span>
                       </td>
                       <td className="px-3 py-3 text-right hidden md:table-cell">
-                        <span className="text-xs text-gray-400">
-                          {formatDistanceToNow(new Date(sync.synced_at), { addSuffix: true })}
-                        </span>
+                        <span className="text-xs text-gray-400">{formatDistanceToNow(new Date(sync.synced_at), { addSuffix: true })}</span>
                       </td>
                       <td className="px-5 py-3 text-right">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border ${st.badge}`}>
@@ -364,21 +517,21 @@ export default function OverviewPage() {
           )}
         </div>
 
-        {/* Right column: Sensor Breakdown + Permission Issues stacked */}
+        {/* Right column — Records by Sensor + ESM Response Rate */}
         <div className="lg:col-span-2 flex flex-col gap-6">
 
-          {/* Sensor data breakdown */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm flex-1">
+          {/* Records by Sensor */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <h2 className="font-semibold text-gray-800 text-sm">Records by Sensor</h2>
-              <span className="text-xs text-gray-400">{formatCount(totalRecords ?? 0)} total</span>
+              <span className="text-xs text-gray-400">{fmt(totalRecords ?? 0)} total</span>
             </div>
             <div className="px-5 py-3 space-y-2.5">
-              {sensorCounts?.map(sensor => (
+              {sensorCounts.map(sensor => (
                 <div key={sensor.key}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-gray-600 font-medium">{sensor.label}</span>
-                    <span className="text-xs text-gray-400 tabular-nums">{formatCount(sensor.count)}</span>
+                    <span className="text-xs text-gray-400 tabular-nums">{fmt(sensor.count)}</span>
                   </div>
                   <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                     <div
@@ -388,57 +541,49 @@ export default function OverviewPage() {
                   </div>
                 </div>
               ))}
-              {sensorCounts?.every(c => c.count === 0) && (
+              {sensorCounts.every(c => c.count === 0) && (
                 <p className="text-gray-400 text-xs text-center py-4">No sensor data collected yet</p>
               )}
             </div>
           </div>
 
-          {/* Permission Issues */}
+          {/* ESM Response Rate */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-800 text-sm">Permission Issues</h2>
-              {(issueParticipants?.length ?? 0) > 0 && (
-                <span className="flex items-center justify-center w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full">
-                  {issueParticipants?.length}
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                <MessageSquare size={14} className="text-violet-500" />
+                <h2 className="font-semibold text-gray-800 text-sm">ESM Response Rate</h2>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] font-medium">
+                <span className="flex items-center gap-1 text-emerald-600"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />responded</span>
+                <span className="flex items-center gap-1 text-red-400"><span className="w-1.5 h-1.5 rounded-full bg-red-300 inline-block" />expired</span>
+                <span className="flex items-center gap-1 text-gray-400"><span className="w-1.5 h-1.5 rounded-full bg-gray-200 inline-block" />pending</span>
+              </div>
             </div>
-
-            {(issueParticipants?.length ?? 0) === 0 ? (
-              <div className="px-5 py-8 flex flex-col items-center text-center">
-                <div className="w-9 h-9 bg-emerald-50 rounded-full flex items-center justify-center mb-2.5">
-                  <CheckCircle2 size={18} className="text-emerald-500" />
-                </div>
-                <p className="text-gray-700 text-sm font-medium">All clear</p>
-                <p className="text-gray-400 text-xs mt-1">All active participants have required permissions</p>
+            {esmRates.length === 0 ? (
+              <div className="px-5 py-8 text-center">
+                <MessageSquare size={22} className="mx-auto text-gray-300 mb-2" />
+                <p className="text-gray-400 text-xs">No ESM responses in this period</p>
               </div>
             ) : (
-              <div className="divide-y divide-gray-50 max-h-52 overflow-y-auto">
-                {issueParticipants?.map(p => {
-                  const missing = Object.entries(p.permissions || {})
-                    .filter(([, v]) => v === false)
-                    .map(([k]) => k)
+              <div className="px-5 py-3 space-y-4">
+                {esmRates.map(s => {
+                  const rate = s.total > 0 ? Math.round((s.responded / s.total) * 100) : 0
+                  const expiredPct = s.total > 0 ? (s.expired / s.total) * 100 : 0
+                  const pendingPct = s.total > 0 ? (s.pending / s.total) * 100 : 0
                   return (
-                    <div key={p.id} className="px-5 py-3 hover:bg-gray-50 transition-colors">
-                      <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-800 truncate">{p.label || p.device_id}</p>
-                          <div className="flex gap-1 mt-1 flex-wrap">
-                            {missing.length === 0 ? (
-                              <span className="text-amber-600 text-[11px] bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md font-medium">
-                                No permissions reported
-                              </span>
-                            ) : (
-                              missing.map(m => (
-                                <span key={m} className="bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-md text-[11px] font-medium">
-                                  {m}
-                                </span>
-                              ))
-                            )}
-                          </div>
+                    <div key={s.id}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs text-gray-700 font-medium truncate max-w-36">{s.name}</span>
+                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                          <span className="text-xs font-bold text-gray-900 tabular-nums">{rate}%</span>
+                          <span className="text-[11px] text-gray-400 tabular-nums">{s.responded}/{s.total}</span>
                         </div>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden flex">
+                        <div className="h-full bg-emerald-400 transition-all" style={{ width: `${rate}%` }} />
+                        <div className="h-full bg-red-300 transition-all" style={{ width: `${expiredPct}%` }} />
+                        <div className="h-full bg-gray-200 transition-all" style={{ width: `${pendingPct}%` }} />
                       </div>
                     </div>
                   )
@@ -447,8 +592,121 @@ export default function OverviewPage() {
             )}
           </div>
 
+          {/* Participant Activity Heatmap */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-800 text-sm">Participant Activity</h2>
+              <span className="text-xs text-gray-400">synced per day</span>
+            </div>
+            {heatmapParticipants.length === 0 ? (
+              <div className="px-5 py-8 text-center">
+                <p className="text-gray-400 text-xs">No active participants</p>
+              </div>
+            ) : (
+              <div className="px-5 py-4 overflow-x-auto">
+                {/* Day labels */}
+                <div className="flex items-center mb-2 ml-24 gap-0.5">
+                  {heatmapDays.map(day => (
+                    <div key={day} className="flex-1 text-center">
+                      <span className="text-[9px] text-gray-300 font-medium">
+                        {new Date(day + 'T12:00:00').toLocaleDateString('en', { weekday: 'narrow' })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {/* Rows */}
+                <div className="space-y-1">
+                  {heatmapParticipants.map(p => (
+                    <div key={p.id} className="flex items-center gap-0.5">
+                      <span className="w-24 shrink-0 text-[11px] text-gray-500 font-medium truncate pr-2 text-right">
+                        {p.label || p.device_id.slice(-8)}
+                      </span>
+                      {heatmapDays.map(day => {
+                        const active = heatmapSynced.has(`${p.id}|${day}`)
+                        return (
+                          <div
+                            key={day}
+                            title={`${p.label || p.device_id} · ${day}`}
+                            className={`flex-1 h-5 rounded-sm transition-colors ${active ? 'bg-emerald-400' : 'bg-gray-100'}`}
+                          />
+                        )
+                      })}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end gap-3 mt-3 text-[11px] text-gray-400">
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-emerald-400 inline-block" /> synced</span>
+                  <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-gray-100 inline-block" /> no sync</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ESM Response Time Heatmap */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <MessageSquare size={14} className="text-violet-500" />
+                <h2 className="font-semibold text-gray-800 text-sm">ESM Response Times</h2>
+              </div>
+              <span className="text-xs text-gray-400">by hour &amp; day</span>
+            </div>
+            {esmResponseTimes.length === 0 ? (
+              <div className="px-5 py-8 text-center">
+                <MessageSquare size={22} className="mx-auto text-gray-300 mb-2" />
+                <p className="text-gray-400 text-xs">No responses in this period</p>
+              </div>
+            ) : (
+              <div className="px-4 py-4 overflow-x-auto">
+                <div className="flex items-center mb-1 ml-9">
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <div key={h} className="flex-1 text-center">
+                      {h % 4 === 0 && (
+                        <span className="text-[9px] text-gray-400 font-medium">
+                          {h === 0 ? '12a' : h < 12 ? `${h}a` : h === 12 ? '12p' : `${h - 12}p`}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-1">
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, dow) => (
+                    <div key={dow} className="flex items-center gap-0.5">
+                      <span className="w-9 shrink-0 text-[10px] text-gray-400 font-medium text-right pr-2">{day}</span>
+                      {esmHeatmap[dow].map((count, hour) => {
+                        const intensity = count / esmHeatMax
+                        const bg = count === 0
+                          ? 'bg-gray-100'
+                          : intensity < 0.25 ? 'bg-violet-100'
+                          : intensity < 0.5  ? 'bg-violet-300'
+                          : intensity < 0.75 ? 'bg-violet-500'
+                          : 'bg-violet-700'
+                        return (
+                          <div
+                            key={hour}
+                            title={`${day} ${hour}:00 — ${count} response${count !== 1 ? 's' : ''}`}
+                            className={`flex-1 h-5 rounded-sm ${bg} transition-colors cursor-default`}
+                          />
+                        )
+                      })}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end gap-1 mt-3">
+                  <span className="text-[10px] text-gray-400 mr-1">fewer</span>
+                  {['bg-gray-100', 'bg-violet-100', 'bg-violet-300', 'bg-violet-500', 'bg-violet-700'].map(c => (
+                    <span key={c} className={`w-3.5 h-3.5 rounded-sm ${c} inline-block`} />
+                  ))}
+                  <span className="text-[10px] text-gray-400 ml-1">more</span>
+                </div>
+              </div>
+            )}
+          </div>
+
         </div>
+
       </div>
+
     </div>
   )
 }

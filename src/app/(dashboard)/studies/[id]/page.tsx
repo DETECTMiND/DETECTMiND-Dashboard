@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight } from 'lucide-react'
+import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare } from 'lucide-react'
 
 interface Study {
   id: string
@@ -75,10 +75,11 @@ export default function StudyDetailPage() {
   }
 
   const tabs = [
-    { href: `/studies/${id}/participants`, label: 'Participants', icon: Users, description: `${participantCount} enrolled` },
-    { href: `/studies/${id}/data`, label: 'Sensor Data', icon: Database, description: 'Browse & export' },
-    { href: `/studies/${id}/esm`, label: 'ESM / EMA', icon: ClipboardList, description: 'Survey schedules' },
-    { href: `/studies/${id}/config`, label: 'Sensor Config', icon: Settings, description: 'Collection settings' },
+    { href: `/studies/${id}/participants`,  label: 'Participants',    icon: Users,         description: `${participantCount} enrolled` },
+    { href: `/studies/${id}/data`,          label: 'Sensor Data',     icon: Database,      description: 'Browse & export' },
+    { href: `/studies/${id}/esm-responses`, label: 'ESM Responses',    icon: MessageSquare, description: 'Survey responses' },
+    { href: `/studies/${id}/esm`,           label: 'ESM / EMA Config', icon: ClipboardList, description: 'Survey schedules' },
+    { href: `/studies/${id}/config`,        label: 'Sensor Config',   icon: Settings,      description: 'Collection settings' },
   ]
 
   return (
@@ -182,7 +183,7 @@ export default function StudyDetailPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         {tabs.map(tab => (
           <Link
             key={tab.href}
