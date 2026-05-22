@@ -1,12 +1,13 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import {
   Users, AlertTriangle, CheckCircle2, Wifi,
   Database, ChevronRight, MessageSquare,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { formatDistanceToNow, startOfDay, startOfWeek, startOfMonth } from 'date-fns'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -99,8 +100,17 @@ function getRangeStart(filter: TimeFilter): string | null {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function OverviewPage() {
+function OverviewContent() {
   const supabase = createClient()
+  const searchParams = useSearchParams()
+  const studyParam = searchParams.get('study')
+
+  // Resolve selected study: prefer URL param, fall back to localStorage
+  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(() => {
+    if (studyParam) return studyParam
+    if (typeof window !== 'undefined') return localStorage.getItem('pinnedStudyId')
+    return null
+  })
 
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all')
   const [allParticipants, setAllParticipants] = useState<ParticipantRow[]>([])
@@ -112,6 +122,11 @@ export default function OverviewPage() {
   const [esmResponseTimes, setEsmResponseTimes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Sync selectedStudyId when URL param changes
+  useEffect(() => {
+    if (studyParam) setSelectedStudyId(studyParam)
+  }, [studyParam])
+
   // ── Load base data (doesn't change with time filter) ──────────────────────
   useEffect(() => {
     async function load() {
@@ -119,8 +134,19 @@ export default function OverviewPage() {
         supabase.from('participants').select('id, label, device_id, study_id, status, last_sync_at, permissions'),
         supabase.from('studies').select('id, name'),
       ])
-      setAllParticipants((pData || []) as ParticipantRow[])
-      setStudies(Object.fromEntries((sData || []).map(s => [s.id, s])))
+      const allP = (pData || []) as ParticipantRow[]
+      const studyMap = Object.fromEntries((sData || []).map(s => [s.id, s]))
+      setStudies(studyMap)
+
+      // Resolve selected study — use first study if nothing pinned
+      setSelectedStudyId(prev => {
+        if (prev && studyMap[prev]) return prev
+        const firstId = Object.keys(studyMap)[0] ?? null
+        if (firstId) localStorage.setItem('pinnedStudyId', firstId)
+        return firstId
+      })
+
+      setAllParticipants(allP)
     }
     load()
   }, [])
@@ -131,10 +157,29 @@ export default function OverviewPage() {
       setLoading(true)
       const since = getRangeStart(timeFilter)
 
+      // Participant IDs scoped to the selected study
+      const studyParticipantIds = selectedStudyId
+        ? allParticipants.filter(p => p.study_id === selectedStudyId).map(p => p.id)
+        : allParticipants.map(p => p.id)
+
+      // If the study has no participants, zero everything out immediately
+      if (selectedStudyId && studyParticipantIds.length === 0) {
+        const zeroCounts = SENSOR_TABLES.map(tbl => ({ key: tbl, label: SENSOR_LABELS[tbl], count: 0 }))
+        setSensorCounts(zeroCounts)
+        setTotalRecords(0)
+        setSyncRows([])
+        setEsmRates([])
+        setEsmResponseTimes([])
+        setLoading(false)
+        return
+      }
+
+      // Sensor counts
       const countResults = await Promise.all(
         SENSOR_TABLES.map(tbl => {
           let q = supabase.from(tbl as any).select('*', { count: 'exact', head: true })
           if (since) q = q.gte(SENSOR_TIME_COLS[tbl], since)
+          q = q.in('participant_id', studyParticipantIds)
           return q
         })
       )
@@ -144,18 +189,23 @@ export default function OverviewPage() {
       setSensorCounts(counts)
       setTotalRecords(counts.reduce((s, c) => s + c.count, 0))
 
+      // Sync log
       let sq = supabase.from('sync_log').select('synced_at, status, records_synced, participant_id').order('synced_at', { ascending: false })
       if (since) sq = sq.gte('synced_at', since)
-      sq = sq.limit(2000)
+      sq = sq.in('participant_id', studyParticipantIds).limit(2000)
       const { data: syncData } = await sq
       setSyncRows((syncData || []) as SyncRow[])
 
-      // ESM response rates per schedule
-      const { data: schedules } = await supabase.from('esm_schedules').select('id, name')
+      // ESM schedules — scoped to selected study
+      const schedQuery = supabase.from('esm_schedules').select('id, name')
+      if (selectedStudyId) schedQuery.eq('study_id', selectedStudyId)
+      const { data: schedules } = await schedQuery
       if (schedules && schedules.length > 0) {
         const rates = await Promise.all(schedules.map(async s => {
           function base() {
-            let q = supabase.from('data_esm_responses').select('*', { count: 'exact', head: true }).eq('schedule_id', s.id)
+            let q = supabase.from('data_esm_responses').select('*', { count: 'exact', head: true })
+              .eq('schedule_id', s.id)
+              .in('participant_id', studyParticipantIds)
             if (since) q = q.gte('triggered_at', since)
             return q
           }
@@ -172,8 +222,10 @@ export default function OverviewPage() {
         setEsmRates([])
       }
 
-      // ESM response timestamps for heatmap (responded only)
-      let rq = supabase.from('data_esm_responses').select('responded_at').not('responded_at', 'is', null).eq('expired', false)
+      // ESM response timestamps for heatmap
+      let rq = supabase.from('data_esm_responses').select('responded_at')
+        .not('responded_at', 'is', null).eq('expired', false)
+        .in('participant_id', studyParticipantIds)
       if (since) rq = rq.gte('triggered_at', since)
       const { data: rtData } = await rq
       setEsmResponseTimes((rtData || []).map((r: any) => r.responded_at as string))
@@ -181,12 +233,16 @@ export default function OverviewPage() {
       setLoading(false)
     }
     load()
-  }, [timeFilter])
+  }, [timeFilter, selectedStudyId, allParticipants])
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const activeParticipants = allParticipants.filter(p => p.status === 'active')
-  const withdrawnCount = allParticipants.filter(p => p.status === 'withdrawn').length
+  const studyParticipants = selectedStudyId
+    ? allParticipants.filter(p => p.study_id === selectedStudyId)
+    : allParticipants
+
+  const activeParticipants = studyParticipants.filter(p => p.status === 'active')
+  const withdrawnCount = studyParticipants.filter(p => p.status === 'withdrawn').length
 
   const staleCount = activeParticipants.filter(p => {
     if (!p.last_sync_at) return true
@@ -200,7 +256,7 @@ export default function OverviewPage() {
 
   const actionNeededCount = staleCount + permIssueCount
 
-  const pMap = Object.fromEntries(allParticipants.map(p => [p.id, p]))
+  const pMap = Object.fromEntries(studyParticipants.map(p => [p.id, p]))
 
   const latestSyncPerParticipant: Record<string, SyncRow> = {}
   for (const s of syncRows) {
@@ -247,11 +303,10 @@ export default function OverviewPage() {
   }
   const esmHeatMax = Math.max(...esmHeatmap.flat(), 1)
 
-  // Pick a study to link to for participants page: first study that has participants, or first study
-  const participantStudyId = allParticipants[0]?.study_id ?? Object.keys(studies)[0] ?? null
+  const participantStudyId = selectedStudyId ?? studyParticipants[0]?.study_id ?? Object.keys(studies)[0] ?? null
 
   // ── Skeleton ──────────────────────────────────────────────────────────────
-  if (loading && allParticipants.length === 0) {
+  if (loading && studyParticipants.length === 0 && sensorCounts.length === 0) {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="flex items-center justify-between">
@@ -315,7 +370,7 @@ export default function OverviewPage() {
             <span className="text-sm font-medium text-gray-500">Participants</span>
           </div>
           <div>
-            <div className="text-4xl font-bold text-gray-900 tabular-nums tracking-tight">{allParticipants.length}</div>
+            <div className="text-4xl font-bold text-gray-900 tabular-nums tracking-tight">{studyParticipants.length}</div>
             <div className="mt-3 flex items-center gap-3 text-[13px]">
               {participantStudyId ? (
                 <>
@@ -708,5 +763,13 @@ export default function OverviewPage() {
       </div>
 
     </div>
+  )
+}
+
+export default function OverviewPage() {
+  return (
+    <Suspense>
+      <OverviewContent />
+    </Suspense>
   )
 }

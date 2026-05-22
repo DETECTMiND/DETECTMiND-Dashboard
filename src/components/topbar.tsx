@@ -77,12 +77,12 @@ export default function Topbar() {
     setPinnedStudyId(newId)
     localStorage.setItem('pinnedStudyId', newId)
     setDropdownOpen(false)
-    // If currently on a study sub-page, navigate to same sub-page of new study
-    if (activeStudyId && activeStudyId !== 'new') {
+    // On dashboard stay on dashboard, just update the study filter param
+    if (!activeStudyId || activeStudyId === 'new') {
+      router.push(`/?study=${newId}`)
+    } else {
       const subPath = pathname.replace(`/studies/${activeStudyId}`, '') || ''
       router.push(`/studies/${newId}${subPath}`)
-    } else {
-      router.push(`/studies/${newId}`)
     }
   }
 
