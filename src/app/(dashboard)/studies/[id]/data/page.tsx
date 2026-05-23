@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useRef, useState, Suspense } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Download, Database, Users, Search, Check, X, ChevronDown } from 'lucide-react'
+import { ArrowLeft, Download, Database, Users, Search, Check, X, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
 
 const SENSOR_TABLES = [
   { key: 'data_app_usage',          label: 'App Usage',           timeCol: 'start_time'   },
@@ -19,11 +19,15 @@ const SENSOR_TABLES = [
   { key: 'data_screen_interaction', label: 'Screen Interaction',  timeCol: 'recorded_at'  },
 ]
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
+
 interface Participant {
   id: string
   device_id: string
   label: string | null
 }
+
+type SortDir = 'asc' | 'desc'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +66,15 @@ function avatarColor(id: string) {
   let hash = 0
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
   return AVATAR_COLORS[hash % AVATAR_COLORS.length]
+}
+
+// ─── Sort icon ────────────────────────────────────────────────────────────────
+
+function SortIcon({ col, sortCol, sortDir }: { col: string; sortCol: string; sortDir: SortDir }) {
+  if (col !== sortCol) return <ChevronsUpDown size={11} className="text-gray-300 shrink-0" />
+  return sortDir === 'asc'
+    ? <ChevronUp size={11} className="text-blue-500 shrink-0" />
+    : <ChevronDown size={11} className="text-blue-500 shrink-0" />
 }
 
 // ─── Participant Picker ───────────────────────────────────────────────────────
@@ -202,6 +215,12 @@ function SensorDataInner() {
   const [exporting, setExporting]                 = useState(false)
   const [countsLoading, setCountsLoading]         = useState(true)
 
+  // Sorting & pagination state
+  const [sortCol, setSortCol]   = useState<string>(SENSOR_TABLES[0].timeCol)
+  const [sortDir, setSortDir]   = useState<SortDir>('desc')
+  const [page, setPage]         = useState(0)
+  const [pageSize, setPageSize] = useState(50)
+
   // Load participants + enabled sensor configs
   useEffect(() => {
     async function loadParticipants() {
@@ -212,13 +231,16 @@ function SensorDataInner() {
       const pList = (pData || []) as Participant[]
       setParticipants(pList)
 
-      // Filter sensor tabs to only enabled configs; fall back to all if none configured yet
       const enabledTypes = new Set((cfgData || []).map((r: any) => r.sensor_type))
       const filtered = enabledTypes.size > 0
         ? SENSOR_TABLES.filter(t => enabledTypes.has(t.key.replace(/^data_/, '')))
         : SENSOR_TABLES
       setEnabledTables(filtered)
-      setSelectedTable(filtered[0] ?? SENSOR_TABLES[0])
+      const firstTable = filtered[0] ?? SENSOR_TABLES[0]
+      setSelectedTable(firstTable)
+      setSortCol(firstTable.timeCol)
+      setSortDir('desc')
+      setPage(0)
 
       const urlParticipant = searchParams.get('participant')
       if (urlParticipant && pList.some(p => p.id === urlParticipant)) {
@@ -253,7 +275,10 @@ function SensorDataInner() {
     loadCounts()
   }, [selectedParticipant, participants, enabledTables])
 
-  // Load rows for selected table + participant
+  // Reset page when sort or page size changes (table/participant changes handle their own page reset)
+  useEffect(() => { setPage(0) }, [sortCol, sortDir, pageSize])
+
+  // Load rows for selected table + participant + sort + page
   useEffect(() => {
     async function loadData() {
       if (participants.length === 0) return
@@ -262,13 +287,17 @@ function SensorDataInner() {
         ? participants.map(p => p.id)
         : [selectedParticipant]
 
+      const effectiveSortCol = sortCol || selectedTable.timeCol
+      const from = page * pageSize
+      const to = from + pageSize - 1
+
       const [rowsRes, countRes] = await Promise.all([
         supabase
           .from(selectedTable.key)
           .select('*')
           .in('participant_id', pIds)
-          .order(selectedTable.timeCol, { ascending: false })
-          .limit(100),
+          .order(effectiveSortCol, { ascending: sortDir === 'asc' })
+          .range(from, to),
         supabase
           .from(selectedTable.key)
           .select('*', { count: 'exact', head: true })
@@ -279,15 +308,25 @@ function SensorDataInner() {
       setLoading(false)
     }
     loadData()
-  }, [selectedTable, selectedParticipant, participants])
+  }, [selectedTable, selectedParticipant, participants, sortCol, sortDir, page, pageSize])
 
   // Sync participant selection to URL
   function handleParticipantChange(id: string) {
     setSelectedParticipant(id)
+    setPage(0)
     const url = new URL(window.location.href)
     if (id === 'all') url.searchParams.delete('participant')
     else url.searchParams.set('participant', id)
     router.replace(url.pathname + url.search, { scroll: false })
+  }
+
+  function handleColSort(col: string) {
+    if (sortCol === col) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortCol(col)
+      setSortDir('asc')
+    }
   }
 
   function buildCSV(rows: any[]) {
@@ -310,11 +349,12 @@ function SensorDataInner() {
       : [selectedParticipant]
     if (pIds.length === 0) return
     setExporting(true)
+    const effectiveSortCol = sortCol || selectedTable.timeCol
     const { data: allRows } = await supabase
       .from(selectedTable.key)
       .select('*')
       .in('participant_id', pIds)
-      .order(selectedTable.timeCol, { ascending: false })
+      .order(effectiveSortCol, { ascending: sortDir === 'asc' })
     const csv = buildCSV(allRows || [])
     if (csv) downloadCSV(csv, `${selectedTable.key}_full_export.csv`)
     setExporting(false)
@@ -326,8 +366,11 @@ function SensorDataInner() {
     ? Object.keys(data[0]).filter(k => k !== 'id' && k !== 'participant_id')
     : []
   const isFiltered = selectedParticipant !== 'all'
-  const selectedP = participants.find(p => p.id === selectedParticipant)
-  const isCapped = (totalCount ?? 0) > 100
+
+  const totalPages = totalCount !== null ? Math.ceil(totalCount / pageSize) : null
+  const isLastPage = totalPages !== null && page >= totalPages - 1
+  const rowStart = totalCount === 0 ? 0 : page * pageSize + 1
+  const rowEnd = Math.min((page + 1) * pageSize, totalCount ?? 0)
 
   return (
     <div className="space-y-4">
@@ -361,7 +404,7 @@ function SensorDataInner() {
             return (
               <button
                 key={t.key}
-                onClick={() => setSelectedTable(t)}
+                onClick={() => { setSelectedTable(t); setSortCol(t.timeCol); setSortDir('desc'); setPage(0) }}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
                   active
                     ? 'bg-blue-600 text-white shadow-sm'
@@ -386,23 +429,36 @@ function SensorDataInner() {
           })}
       </div>
 
-      {/* Toolbar — record count + export */}
+      {/* Toolbar — record count + page size + export */}
       <div className="flex items-center gap-3 flex-wrap">
         {!loading && totalCount !== null && (
-          <span className="text-xs text-gray-400">
-            {isCapped
-              ? `Showing 100 of ${totalCount.toLocaleString()} records`
-              : `${totalCount.toLocaleString()} record${totalCount !== 1 ? 's' : ''}`}
+          <span className="text-xs text-gray-400 tabular-nums">
+            {totalCount === 0
+              ? 'No records'
+              : `${rowStart}–${rowEnd} of ${totalCount.toLocaleString()} records`}
           </span>
         )}
         <div className="flex items-center gap-2 ml-auto">
+          {/* Page size selector */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-400">Rows</span>
+            <select
+              value={pageSize}
+              onChange={e => setPageSize(Number(e.target.value))}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-300 cursor-pointer"
+            >
+              {PAGE_SIZE_OPTIONS.map(s => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={() => { const csv = buildCSV(data); if (csv) downloadCSV(csv, `${selectedTable.key}_export.csv`) }}
             disabled={data.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
             <Download size={12} />
-            Export {data.length > 0 ? `${data.length} rows` : 'page'}
+            Export page
           </button>
           <button
             onClick={exportAll}
@@ -410,7 +466,7 @@ function SensorDataInner() {
             className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
             <Download size={12} />
-            {exporting ? 'Exporting…' : totalCount && totalCount > 100 ? `Export all ${totalCount.toLocaleString()}` : 'Export all'}
+            {exporting ? 'Exporting…' : totalCount ? `Export all ${totalCount.toLocaleString()}` : 'Export all'}
           </button>
         </div>
       </div>
@@ -455,8 +511,15 @@ function SensorDataInner() {
                     </th>
                   )}
                   {cols.map(col => (
-                    <th key={col} className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
-                      {formatColHeader(col)}
+                    <th
+                      key={col}
+                      onClick={() => handleColSort(col)}
+                      className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px] cursor-pointer select-none hover:bg-gray-100 transition-colors group"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span className={sortCol === col ? 'text-blue-600' : ''}>{formatColHeader(col)}</span>
+                        <SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
+                      </div>
                     </th>
                   ))}
                 </tr>
@@ -500,18 +563,69 @@ function SensorDataInner() {
         )}
       </div>
 
-      {isCapped && !loading && (
-        <p className="text-xs text-gray-400">
-          Showing the 100 most recent records.{' '}
-          <button
-            onClick={exportAll}
-            disabled={exporting}
-            className="font-semibold text-blue-600 hover:text-blue-700 transition-colors disabled:opacity-50"
-          >
-            {exporting ? 'Exporting…' : `Export all ${totalCount?.toLocaleString()}`}
-          </button>{' '}
-          to get the full dataset.
-        </p>
+      {/* Pagination controls */}
+      {!loading && totalPages !== null && totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-400 tabular-nums">
+            Page {page + 1} of {totalPages.toLocaleString()}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(0)}
+              disabled={page === 0}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              «
+            </button>
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              Previous
+            </button>
+            {/* Page number buttons — show window around current page */}
+            {Array.from({ length: totalPages }, (_, i) => i)
+              .filter(i => i === 0 || i === totalPages - 1 || Math.abs(i - page) <= 2)
+              .reduce<(number | 'gap')[]>((acc, i, idx, arr) => {
+                if (idx > 0 && i - (arr[idx - 1] as number) > 1) acc.push('gap')
+                acc.push(i)
+                return acc
+              }, [])
+              .map((item, idx) =>
+                item === 'gap' ? (
+                  <span key={`gap-${idx}`} className="px-1.5 py-1.5 text-xs text-gray-300">…</span>
+                ) : (
+                  <button
+                    key={item}
+                    onClick={() => setPage(item)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                      page === item
+                        ? 'bg-blue-600 border-blue-600 text-white'
+                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {(item as number) + 1}
+                  </button>
+                )
+              )
+            }
+            <button
+              onClick={() => setPage(p => p + 1)}
+              disabled={isLastPage}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setPage(totalPages - 1)}
+              disabled={isLastPage}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              »
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
