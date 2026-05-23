@@ -1,25 +1,55 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useRef, useState, Suspense } from 'react'
+import { useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Download, Database, Users, Search, Check, X, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react'
+import {
+  ArrowLeft, Download, Database, Users, Search, Check, X,
+  ChevronDown, ChevronUp, ChevronsUpDown, BarChart2, Table2,
+} from 'lucide-react'
+
+// Lazy-load chart components so they don't bloat initial bundle
+const BatteryChart       = lazy(() => import('@/components/charts/BatteryChart'))
+const LightChart         = lazy(() => import('@/components/charts/LightChart'))
+const ScreenStateChart   = lazy(() => import('@/components/charts/ScreenStateChart'))
+const NotificationsChart = lazy(() => import('@/components/charts/NotificationsChart'))
+const AppUsageChart      = lazy(() => import('@/components/charts/AppUsageChart'))
+const CallsSmsChart      = lazy(() => import('@/components/charts/CallsSmsChart'))
+const LocationChart      = lazy(() => import('@/components/charts/LocationChart'))
+const EsmChart           = lazy(() => import('@/components/charts/EsmChart'))
 
 const SENSOR_TABLES = [
-  { key: 'data_app_usage',          label: 'App Usage',           timeCol: 'start_time'   },
-  { key: 'data_notifications',      label: 'Notifications',       timeCol: 'posted_at'    },
-  { key: 'data_battery',            label: 'Battery',             timeCol: 'recorded_at'  },
-  { key: 'data_calls',              label: 'Calls',               timeCol: 'event_time'   },
-  { key: 'data_sms',                label: 'SMS',                 timeCol: 'event_time'   },
-  { key: 'data_esm_responses',      label: 'ESM Responses',       timeCol: 'triggered_at' },
-  { key: 'data_location',           label: 'Location',            timeCol: 'recorded_at'  },
-  { key: 'data_light',              label: 'Light',               timeCol: 'recorded_at'  },
-  { key: 'data_screen_state',       label: 'Screen State',        timeCol: 'recorded_at'  },
-  { key: 'data_screen_interaction', label: 'Screen Interaction',  timeCol: 'recorded_at'  },
+  { key: 'data_app_usage',          label: 'App Usage',           timeCol: 'start_time',   hasChart: true  },
+  { key: 'data_notifications',      label: 'Notifications',       timeCol: 'posted_at',    hasChart: true  },
+  { key: 'data_battery',            label: 'Battery',             timeCol: 'recorded_at',  hasChart: true  },
+  { key: 'data_calls',              label: 'Calls',               timeCol: 'event_time',   hasChart: true  },
+  { key: 'data_sms',                label: 'SMS',                 timeCol: 'event_time',   hasChart: true  },
+  { key: 'data_esm_responses',      label: 'ESM Responses',       timeCol: 'triggered_at', hasChart: true  },
+  { key: 'data_location',           label: 'Location',            timeCol: 'recorded_at',  hasChart: true  },
+  { key: 'data_light',              label: 'Light',               timeCol: 'recorded_at',  hasChart: true  },
+  { key: 'data_screen_state',       label: 'Screen State',        timeCol: 'recorded_at',  hasChart: true  },
+  { key: 'data_screen_interaction', label: 'Screen Interaction',  timeCol: 'recorded_at',  hasChart: false },
 ]
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
+const CHART_FETCH_LIMIT = 2000
+
+type ChartRange = '7d' | '30d' | '90d' | 'all'
+const CHART_RANGES: { key: ChartRange; label: string }[] = [
+  { key: '7d',  label: '7 days'  },
+  { key: '30d', label: '30 days' },
+  { key: '90d', label: '90 days' },
+  { key: 'all', label: 'All'     },
+]
+
+function chartRangeSince(range: ChartRange): string | null {
+  if (range === 'all') return null
+  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return d.toISOString()
+}
 
 interface Participant {
   id: string
@@ -28,6 +58,7 @@ interface Participant {
 }
 
 type SortDir = 'asc' | 'desc'
+type ViewMode = 'table' | 'chart'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +106,36 @@ function SortIcon({ col, sortCol, sortDir }: { col: string; sortCol: string; sor
   return sortDir === 'asc'
     ? <ChevronUp size={11} className="text-blue-500 shrink-0" />
     : <ChevronDown size={11} className="text-blue-500 shrink-0" />
+}
+
+// ─── Chart dispatcher ─────────────────────────────────────────────────────────
+
+function ChartView({
+  sensorKey, data, participants, showParticipant,
+}: {
+  sensorKey: string
+  data: any[]
+  participants: Participant[]
+  showParticipant: boolean
+}) {
+  const props = { data, participants, showParticipant }
+  switch (sensorKey) {
+    case 'data_battery':            return <BatteryChart {...props} />
+    case 'data_light':              return <LightChart {...props} />
+    case 'data_screen_state':       return <ScreenStateChart {...props} />
+    case 'data_notifications':      return <NotificationsChart {...props} />
+    case 'data_app_usage':          return <AppUsageChart {...props} />
+    case 'data_calls':              return <CallsSmsChart {...props} sensorKey="data_calls" />
+    case 'data_sms':                return <CallsSmsChart {...props} sensorKey="data_sms" />
+    case 'data_location':           return <LocationChart {...props} />
+    case 'data_esm_responses':      return <EsmChart {...props} />
+    default:
+      return (
+        <div className="py-12 text-center text-sm text-gray-400">
+          No chart view available for this sensor type.
+        </div>
+      )
+  }
 }
 
 // ─── Participant Picker ───────────────────────────────────────────────────────
@@ -204,16 +265,21 @@ function SensorDataInner() {
   const router = useRouter()
   const supabase = createClient()
 
-  const [participants, setParticipants]           = useState<Participant[]>([])
-  const [enabledTables, setEnabledTables]         = useState(SENSOR_TABLES)
+  const [participants, setParticipants]               = useState<Participant[]>([])
+  const [enabledTables, setEnabledTables]             = useState(SENSOR_TABLES)
   const [selectedParticipant, setSelectedParticipant] = useState<string>('all')
-  const [selectedTable, setSelectedTable]         = useState(SENSOR_TABLES[0])
-  const [data, setData]                           = useState<any[]>([])
-  const [counts, setCounts]                       = useState<Record<string, number>>({})
-  const [totalCount, setTotalCount]               = useState<number | null>(null)
-  const [loading, setLoading]                     = useState(false)
-  const [exporting, setExporting]                 = useState(false)
-  const [countsLoading, setCountsLoading]         = useState(true)
+  const [selectedTable, setSelectedTable]             = useState(SENSOR_TABLES[0])
+  const [data, setData]                               = useState<any[]>([])
+  const [chartData, setChartData]                     = useState<any[]>([])
+  const [counts, setCounts]                           = useState<Record<string, number>>({})
+  const [totalCount, setTotalCount]                   = useState<number | null>(null)
+  const [loading, setLoading]                         = useState(false)
+  const [chartLoading, setChartLoading]               = useState(false)
+  const [exporting, setExporting]                     = useState(false)
+  const [countsLoading, setCountsLoading]             = useState(true)
+  const [viewMode, setViewMode]                       = useState<ViewMode>('table')
+  const [chartRange, setChartRange]                   = useState<ChartRange>('30d')
+  const chartCacheKey                                  = useRef('')
 
   // Sorting & pagination state
   const [sortCol, setSortCol]   = useState<string>(SENSOR_TABLES[0].timeCol)
@@ -275,10 +341,10 @@ function SensorDataInner() {
     loadCounts()
   }, [selectedParticipant, participants, enabledTables])
 
-  // Reset page when sort or page size changes (table/participant changes handle their own page reset)
+  // Reset page when sort or page size changes
   useEffect(() => { setPage(0) }, [sortCol, sortDir, pageSize])
 
-  // Load rows for selected table + participant + sort + page
+  // Load table rows (paginated)
   useEffect(() => {
     async function loadData() {
       if (participants.length === 0) return
@@ -310,10 +376,38 @@ function SensorDataInner() {
     loadData()
   }, [selectedTable, selectedParticipant, participants, sortCol, sortDir, page, pageSize])
 
-  // Sync participant selection to URL
+  // Load chart data — only when chart view active, with cache guard
+  useEffect(() => {
+    async function loadChartData() {
+      if (participants.length === 0 || viewMode !== 'chart') return
+      const cacheKey = `${selectedTable.key}|${selectedParticipant}|${chartRange}`
+      if (chartCacheKey.current === cacheKey) return
+      chartCacheKey.current = cacheKey
+      setChartLoading(true)
+      const pIds = selectedParticipant === 'all'
+        ? participants.map(p => p.id)
+        : [selectedParticipant]
+
+      const since = chartRangeSince(chartRange)
+      let q = supabase
+        .from(selectedTable.key)
+        .select('*')
+        .in('participant_id', pIds)
+        .order(selectedTable.timeCol, { ascending: true })
+        .limit(CHART_FETCH_LIMIT)
+      if (since) q = q.gte(selectedTable.timeCol, since)
+
+      const { data: rows } = await q
+      setChartData(rows || [])
+      setChartLoading(false)
+    }
+    loadChartData()
+  }, [selectedTable, selectedParticipant, participants, viewMode, chartRange])
+
   function handleParticipantChange(id: string) {
     setSelectedParticipant(id)
     setPage(0)
+    chartCacheKey.current = ''
     const url = new URL(window.location.href)
     if (id === 'all') url.searchParams.delete('participant')
     else url.searchParams.set('participant', id)
@@ -366,6 +460,7 @@ function SensorDataInner() {
     ? Object.keys(data[0]).filter(k => k !== 'id' && k !== 'participant_id')
     : []
   const isFiltered = selectedParticipant !== 'all'
+  const canChart = selectedTable.hasChart
 
   const totalPages = totalCount !== null ? Math.ceil(totalCount / pageSize) : null
   const isLastPage = totalPages !== null && page >= totalPages - 1
@@ -374,7 +469,7 @@ function SensorDataInner() {
 
   return (
     <div className="space-y-4">
-      {/* Header row */}
+      {/* Header */}
       <div>
         <Link
           href={`/studies/${studyId}`}
@@ -397,68 +492,127 @@ function SensorDataInner() {
 
       {/* Sensor type tabs */}
       <div className="flex flex-wrap gap-1.5">
-          {enabledTables.map(t => {
-            const active = selectedTable.key === t.key
-            const count = counts[t.key] ?? 0
-            const hasData = count > 0
-            return (
-              <button
-                key={t.key}
-                onClick={() => { setSelectedTable(t); setSortCol(t.timeCol); setSortDir('desc'); setPage(0) }}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                  active
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : hasData
-                      ? 'bg-white border border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                      : 'bg-white border border-gray-100 text-gray-400 hover:border-gray-200'
-                }`}
-              >
-                {!countsLoading && hasData && !active && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                )}
-                {t.label}
-                {countsLoading ? (
-                  <span className="w-5 h-2.5 bg-current opacity-20 rounded animate-pulse" />
-                ) : (
-                  <span className={`tabular-nums ${active ? 'text-blue-200' : hasData ? 'text-gray-400' : 'text-gray-300'}`}>
-                    {count.toLocaleString()}
-                  </span>
-                )}
-              </button>
-            )
-          })}
+        {enabledTables.map(t => {
+          const active = selectedTable.key === t.key
+          const count = counts[t.key] ?? 0
+          const hasData = count > 0
+          return (
+            <button
+              key={t.key}
+              onClick={() => {
+                setSelectedTable(t)
+                setSortCol(t.timeCol)
+                setSortDir('desc')
+                setPage(0)
+                if (!t.hasChart) setViewMode('table')
+              }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+                active
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : hasData
+                    ? 'bg-white border border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                    : 'bg-white border border-gray-100 text-gray-400 hover:border-gray-200'
+              }`}
+            >
+              {!countsLoading && hasData && !active && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+              )}
+              {t.label}
+              {countsLoading ? (
+                <span className="w-5 h-2.5 bg-current opacity-20 rounded animate-pulse" />
+              ) : (
+                <span className={`tabular-nums ${active ? 'text-blue-200' : hasData ? 'text-gray-400' : 'text-gray-300'}`}>
+                  {count.toLocaleString()}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
 
-      {/* Toolbar — record count + page size + export */}
+      {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap">
-        {!loading && totalCount !== null && (
+        {/* View toggle */}
+        <div className="flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <button
+            onClick={() => setViewMode('table')}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
+              viewMode === 'table'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <Table2 size={12} /> Table
+          </button>
+          <button
+            onClick={() => canChart && setViewMode('chart')}
+            disabled={!canChart}
+            title={!canChart ? 'No chart available for this sensor' : undefined}
+            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
+              viewMode === 'chart'
+                ? 'bg-blue-600 text-white'
+                : canChart
+                  ? 'text-gray-600 hover:bg-gray-50'
+                  : 'text-gray-300 cursor-not-allowed'
+            }`}
+          >
+            <BarChart2 size={12} /> Chart
+          </button>
+        </div>
+
+        {viewMode === 'table' && !loading && totalCount !== null && (
           <span className="text-xs text-gray-400 tabular-nums">
             {totalCount === 0
               ? 'No records'
               : `${rowStart}–${rowEnd} of ${totalCount.toLocaleString()} records`}
           </span>
         )}
-        <div className="flex items-center gap-2 ml-auto">
-          {/* Page size selector */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-400">Rows</span>
-            <select
-              value={pageSize}
-              onChange={e => setPageSize(Number(e.target.value))}
-              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-300 cursor-pointer"
-            >
-              {PAGE_SIZE_OPTIONS.map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+
+        {viewMode === 'chart' && (
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            {CHART_RANGES.map(r => (
+              <button
+                key={r.key}
+                onClick={() => { chartCacheKey.current = ''; setChartRange(r.key) }}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                  chartRange === r.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
           </div>
+        )}
+        {viewMode === 'chart' && !chartLoading && chartData.length > 0 && (
+          <span className="text-xs text-gray-400 tabular-nums">
+            {chartData.length < CHART_FETCH_LIMIT
+              ? `${chartData.length.toLocaleString()} records`
+              : `Showing latest ${CHART_FETCH_LIMIT.toLocaleString()} records`}
+          </span>
+        )}
+
+        <div className="flex items-center gap-2 ml-auto">
+          {viewMode === 'table' && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-gray-400">Rows</span>
+              <select
+                value={pageSize}
+                onChange={e => setPageSize(Number(e.target.value))}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-300 cursor-pointer"
+              >
+                {PAGE_SIZE_OPTIONS.map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <button
-            onClick={() => { const csv = buildCSV(data); if (csv) downloadCSV(csv, `${selectedTable.key}_export.csv`) }}
-            disabled={data.length === 0}
+            onClick={() => { const csv = buildCSV(viewMode === 'chart' ? chartData : data); if (csv) downloadCSV(csv, `${selectedTable.key}_export.csv`) }}
+            disabled={(viewMode === 'table' ? data : chartData).length === 0}
             className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
           >
             <Download size={12} />
-            Export page
+            {viewMode === 'table' ? 'Export page' : 'Export view'}
           </button>
           <button
             onClick={exportAll}
@@ -471,161 +625,198 @@ function SensorDataInner() {
         </div>
       </div>
 
-      {/* Data table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {loading ? (
-          <div>
-            <div className="border-b border-gray-100 bg-gray-50 px-4 py-3 flex gap-6">
-              {[...Array(showParticipantCol ? 5 : 4)].map((_, i) => (
-                <div key={i} className={`h-3 bg-gray-200 rounded animate-pulse ${i === 0 ? 'w-24' : 'w-16'}`} />
-              ))}
+      {/* Chart view */}
+      {viewMode === 'chart' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          {chartLoading ? (
+            <div className="flex items-center justify-center h-64 gap-3 text-gray-400 text-sm">
+              <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
+              Loading chart data…
             </div>
-            {[...Array(7)].map((_, i) => (
-              <div key={i} className="border-b border-gray-50 px-4 py-3 flex gap-6">
-                {[...Array(showParticipantCol ? 5 : 4)].map((_, j) => (
-                  <div
-                    key={j}
-                    className={`h-3 bg-gray-100 rounded animate-pulse ${j === 0 ? 'w-20' : j === 1 ? 'w-28' : 'w-14'}`}
-                    style={{ animationDelay: `${i * 60}ms` }}
-                  />
+          ) : chartData.length === 0 ? (
+            <div className="px-6 py-16 text-center">
+              <Database size={32} className="mx-auto text-gray-300 mb-3" />
+              <p className="text-gray-600 font-medium">No {selectedTable.label} data</p>
+              <p className="text-gray-400 text-sm mt-1">
+                {isFiltered ? 'No records for this participant' : 'No records collected yet for this sensor'}
+              </p>
+            </div>
+          ) : (
+            <Suspense fallback={
+              <div className="flex items-center justify-center h-64 gap-3 text-gray-400 text-sm">
+                <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
+                Loading chart…
+              </div>
+            }>
+              <ChartView
+                sensorKey={selectedTable.key}
+                data={chartData}
+                participants={participants}
+                showParticipant={showParticipantCol}
+              />
+            </Suspense>
+          )}
+        </div>
+      )}
+
+      {/* Table view */}
+      {viewMode === 'table' && (
+        <>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            {loading ? (
+              <div>
+                <div className="border-b border-gray-100 bg-gray-50 px-4 py-3 flex gap-6">
+                  {[...Array(showParticipantCol ? 5 : 4)].map((_, i) => (
+                    <div key={i} className={`h-3 bg-gray-200 rounded animate-pulse ${i === 0 ? 'w-24' : 'w-16'}`} />
+                  ))}
+                </div>
+                {[...Array(7)].map((_, i) => (
+                  <div key={i} className="border-b border-gray-50 px-4 py-3 flex gap-6">
+                    {[...Array(showParticipantCol ? 5 : 4)].map((_, j) => (
+                      <div
+                        key={j}
+                        className={`h-3 bg-gray-100 rounded animate-pulse ${j === 0 ? 'w-20' : j === 1 ? 'w-28' : 'w-14'}`}
+                        style={{ animationDelay: `${i * 60}ms` }}
+                      />
+                    ))}
+                  </div>
                 ))}
               </div>
-            ))}
-          </div>
-        ) : data.length === 0 ? (
-          <div className="px-6 py-16 text-center">
-            <Database size={32} className="mx-auto text-gray-300 mb-3" />
-            <p className="text-gray-600 font-medium">No {selectedTable.label} data</p>
-            <p className="text-gray-400 text-sm mt-1">
-              {isFiltered ? 'No records for this participant' : 'No records collected yet for this sensor'}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 z-10">
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  {showParticipantCol && (
-                    <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
-                      Participant
-                    </th>
-                  )}
-                  {cols.map(col => (
-                    <th
-                      key={col}
-                      onClick={() => handleColSort(col)}
-                      className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px] cursor-pointer select-none hover:bg-gray-100 transition-colors group"
-                    >
-                      <div className="flex items-center gap-1">
-                        <span className={sortCol === col ? 'text-blue-600' : ''}>{formatColHeader(col)}</span>
-                        <SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
-                      </div>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {data.map((row, i) => {
-                  const p = pMap[row.participant_id]
-                  const name = p ? participantName(p) : row.participant_id
-                  return (
-                    <tr key={i} className="hover:bg-blue-50/30 transition-colors">
+            ) : data.length === 0 ? (
+              <div className="px-6 py-16 text-center">
+                <Database size={32} className="mx-auto text-gray-300 mb-3" />
+                <p className="text-gray-600 font-medium">No {selectedTable.label} data</p>
+                <p className="text-gray-400 text-sm mt-1">
+                  {isFiltered ? 'No records for this participant' : 'No records collected yet for this sensor'}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 z-10">
+                    <tr className="border-b border-gray-200 bg-gray-50">
                       {showParticipantCol && (
-                        <td className="px-4 py-2.5 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${p ? avatarColor(p.id) : 'bg-gray-100 text-gray-500'}`}>
-                              {avatarInitial(name)}
-                            </span>
-                            <span className="text-gray-700 font-medium truncate max-w-28">{name}</span>
-                          </div>
-                        </td>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
+                          Participant
+                        </th>
                       )}
-                      {cols.map(k => {
-                        const raw = row[k]
-                        const display = formatCellValue(k, raw)
-                        const isEmpty = display === '—'
-                        return (
-                          <td
-                            key={k}
-                            className={`px-4 py-2.5 whitespace-nowrap max-w-52 truncate ${isEmpty ? 'text-gray-300' : 'text-gray-600'}`}
-                            title={isEmpty ? undefined : display}
-                          >
-                            {display}
-                          </td>
-                        )
-                      })}
+                      {cols.map(col => (
+                        <th
+                          key={col}
+                          onClick={() => handleColSort(col)}
+                          className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px] cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                        >
+                          <div className="flex items-center gap-1">
+                            <span className={sortCol === col ? 'text-blue-600' : ''}>{formatColHeader(col)}</span>
+                            <SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
+                          </div>
+                        </th>
+                      ))}
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {data.map((row, i) => {
+                      const p = pMap[row.participant_id]
+                      const name = p ? participantName(p) : row.participant_id
+                      return (
+                        <tr key={i} className="hover:bg-blue-50/30 transition-colors">
+                          {showParticipantCol && (
+                            <td className="px-4 py-2.5 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${p ? avatarColor(p.id) : 'bg-gray-100 text-gray-500'}`}>
+                                  {avatarInitial(name)}
+                                </span>
+                                <span className="text-gray-700 font-medium truncate max-w-28">{name}</span>
+                              </div>
+                            </td>
+                          )}
+                          {cols.map(k => {
+                            const raw = row[k]
+                            const display = formatCellValue(k, raw)
+                            const isEmpty = display === '—'
+                            return (
+                              <td
+                                key={k}
+                                className={`px-4 py-2.5 whitespace-nowrap max-w-52 truncate ${isEmpty ? 'text-gray-300' : 'text-gray-600'}`}
+                                title={isEmpty ? undefined : display}
+                              >
+                                {display}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* Pagination controls */}
-      {!loading && totalPages !== null && totalPages > 1 && (
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-400 tabular-nums">
-            Page {page + 1} of {totalPages.toLocaleString()}
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setPage(0)}
-              disabled={page === 0}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            >
-              «
-            </button>
-            <button
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            >
-              Previous
-            </button>
-            {/* Page number buttons — show window around current page */}
-            {Array.from({ length: totalPages }, (_, i) => i)
-              .filter(i => i === 0 || i === totalPages - 1 || Math.abs(i - page) <= 2)
-              .reduce<(number | 'gap')[]>((acc, i, idx, arr) => {
-                if (idx > 0 && i - (arr[idx - 1] as number) > 1) acc.push('gap')
-                acc.push(i)
-                return acc
-              }, [])
-              .map((item, idx) =>
-                item === 'gap' ? (
-                  <span key={`gap-${idx}`} className="px-1.5 py-1.5 text-xs text-gray-300">…</span>
-                ) : (
-                  <button
-                    key={item}
-                    onClick={() => setPage(item)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                      page === item
-                        ? 'bg-blue-600 border-blue-600 text-white'
-                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    {(item as number) + 1}
-                  </button>
-                )
-              )
-            }
-            <button
-              onClick={() => setPage(p => p + 1)}
-              disabled={isLastPage}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            >
-              Next
-            </button>
-            <button
-              onClick={() => setPage(totalPages - 1)}
-              disabled={isLastPage}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-            >
-              »
-            </button>
-          </div>
-        </div>
+          {/* Pagination */}
+          {!loading && totalPages !== null && totalPages > 1 && (
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400 tabular-nums">
+                Page {page + 1} of {totalPages.toLocaleString()}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(0)}
+                  disabled={page === 0}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  «
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Previous
+                </button>
+                {Array.from({ length: totalPages }, (_, i) => i)
+                  .filter(i => i === 0 || i === totalPages - 1 || Math.abs(i - page) <= 2)
+                  .reduce<(number | 'gap')[]>((acc, i, idx, arr) => {
+                    if (idx > 0 && i - (arr[idx - 1] as number) > 1) acc.push('gap')
+                    acc.push(i)
+                    return acc
+                  }, [])
+                  .map((item, idx) =>
+                    item === 'gap' ? (
+                      <span key={`gap-${idx}`} className="px-1.5 py-1.5 text-xs text-gray-300">…</span>
+                    ) : (
+                      <button
+                        key={item}
+                        onClick={() => setPage(item)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                          page === item
+                            ? 'bg-blue-600 border-blue-600 text-white'
+                            : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                        }`}
+                      >
+                        {(item as number) + 1}
+                      </button>
+                    )
+                  )
+                }
+                <button
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={isLastPage}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => setPage(totalPages - 1)}
+                  disabled={isLastPage}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                >
+                  »
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

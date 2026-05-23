@@ -322,7 +322,7 @@ function SensorCard({
 
       {enabled && sensor.hasInterval && (
         <div
-          className="px-4 pb-3.5 flex items-center gap-3"
+          className="px-4 pb-3.5 flex items-center flex-wrap gap-2"
           onClick={e => e.stopPropagation()}
         >
           <div className="flex items-center gap-2 bg-white border border-blue-200 rounded-lg px-3 py-1.5">
@@ -337,13 +337,13 @@ function SensorCard({
             />
             <span className="text-xs text-gray-500">sec</span>
           </div>
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-gray-400 shrink-0">
             = {(((interval || sensor.defaultInterval || 300)) / 60).toFixed(1)} min
           </span>
           {sensor.key === 'location' && (
             <div className="flex items-center gap-2 bg-white border border-blue-200 rounded-lg px-3 py-1.5">
               <MapPin size={12} className="text-blue-500 shrink-0" />
-              <span className="text-xs text-gray-500">Move</span>
+              <span className="text-xs text-gray-500 shrink-0">Move ≥</span>
               <input
                 type="number"
                 value={config.movement_threshold ?? 50}
