@@ -18,6 +18,20 @@ const SENSOR_TYPES = [
   { key: 'light', label: 'Ambient Light', hasInterval: true, description: 'Ambient light readings at intervals' },
 ]
 
+const SCREEN_INTERACTION_DEFAULTS = {
+  interaction_types: {
+    swipe: true,
+    tap: true,
+    long_press: true,
+  },
+  skip_rules: {
+    skip_system_ui: true,
+    skip_launchers: true,
+    skip_keyboards: true,
+    skip_system_settings: true,
+  },
+}
+
 interface SensorConfig {
   id?: string
   sensor_type: string
@@ -41,13 +55,22 @@ export default function SensorConfigPage() {
       SENSOR_TYPES.forEach(t => {
         const existing = (data || []).find(d => d.sensor_type === t.key)
         if (existing) {
-          // Ensure location always has a movement_threshold in config
           if (t.key === 'location' && existing.config && (existing.config as any).movement_threshold === undefined) {
             existing.config = { ...existing.config, movement_threshold: 50 }
           }
+          if (t.key === 'screen_interaction') {
+            existing.config = {
+              ...SCREEN_INTERACTION_DEFAULTS,
+              ...existing.config,
+              interaction_types: { ...SCREEN_INTERACTION_DEFAULTS.interaction_types, ...(existing.config?.interaction_types ?? {}) },
+              skip_rules: { ...SCREEN_INTERACTION_DEFAULTS.skip_rules, ...(existing.config?.skip_rules ?? {}) },
+            }
+          }
           map[t.key] = existing
         } else {
-          const defaultConfig = t.key === 'location' ? { movement_threshold: 50 } : {}
+          let defaultConfig: Record<string, any> = {}
+          if (t.key === 'location') defaultConfig = { movement_threshold: 50 }
+          if (t.key === 'screen_interaction') defaultConfig = SCREEN_INTERACTION_DEFAULTS
           map[t.key] = { sensor_type: t.key, enabled: true, interval_seconds: t.hasInterval ? 300 : null, config: defaultConfig }
         }
       })
@@ -61,6 +84,26 @@ export default function SensorConfigPage() {
       ...prev,
       [key]: { ...prev[key], [field]: value },
     }))
+    setSaved(false)
+  }
+
+  function updateScreenInteractionConfig(section: 'interaction_types' | 'skip_rules', subKey: string, value: boolean) {
+    setConfigs(prev => {
+      const cfg = prev['screen_interaction']
+      return {
+        ...prev,
+        screen_interaction: {
+          ...cfg,
+          config: {
+            ...cfg.config,
+            [section]: {
+              ...(cfg.config as any)[section],
+              [subKey]: value,
+            },
+          },
+        },
+      }
+    })
     setSaved(false)
   }
 
@@ -215,6 +258,58 @@ export default function SensorConfigPage() {
                   )}
                 </div>
               )}
+
+              {cfg.enabled && sensor.key === 'screen_interaction' && (() => {
+                const siCfg = cfg.config as typeof SCREEN_INTERACTION_DEFAULTS
+                return (
+                  <div className="px-5 pb-5 border-t border-gray-50 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-5">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Data to Collect</p>
+                      <p className="text-xs text-gray-400 mb-3">Interaction types</p>
+                      <div className="space-y-2">
+                        {([
+                          { key: 'swipe', label: 'SWIPE' },
+                          { key: 'tap', label: 'TAP' },
+                          { key: 'long_press', label: 'LONG_PRESS' },
+                        ] as const).map(({ key, label }) => (
+                          <label key={key} className="flex items-center gap-2.5 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={siCfg?.interaction_types?.[key] ?? true}
+                              onChange={e => updateScreenInteractionConfig('interaction_types', key, e.target.checked)}
+                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer"
+                            />
+                            <span className="text-xs font-mono text-gray-700 group-hover:text-gray-900">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Skip Rules</p>
+                      <p className="text-xs text-gray-400 mb-3">Packages</p>
+                      <div className="space-y-2">
+                        {([
+                          { key: 'skip_system_ui', label: 'Skip system UI' },
+                          { key: 'skip_launchers', label: 'Skip launchers' },
+                          { key: 'skip_keyboards', label: 'Skip keyboards' },
+                          { key: 'skip_system_settings', label: 'Skip system settings' },
+                        ] as const).map(({ key, label }) => (
+                          <label key={key} className="flex items-center gap-2.5 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={siCfg?.skip_rules?.[key] ?? true}
+                              onChange={e => updateScreenInteractionConfig('skip_rules', key, e.target.checked)}
+                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer"
+                            />
+                            <span className="text-xs text-gray-700 group-hover:text-gray-900">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
           )
         })}
