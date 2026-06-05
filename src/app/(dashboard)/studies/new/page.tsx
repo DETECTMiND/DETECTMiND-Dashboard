@@ -83,9 +83,9 @@ const SENSOR_OPTIONS: SensorOption[] = [
     category: 'behavioral',
   },
   {
-    key: 'screen_interaction',
-    label: 'Screen Interaction',
-    description: 'Touch, swipe, long press, and scroll events',
+    key: 'gestures',
+    label: 'User Gestures',
+    description: 'Tap, scroll, long press, and window content change events',
     icon: MousePointerClick,
     hasInterval: false,
     category: 'behavioral',
@@ -131,13 +131,31 @@ const STEPS = [
   { number: 4, label: 'Review' },
 ]
 
+const SCREEN_INTERACTION_DEFAULTS = {
+  interaction_types: {
+    TYPE_VIEW_SCROLLED: true,
+    TYPE_VIEW_CLICKED: true,
+    TYPE_VIEW_LONG_CLICKED: true,
+    TYPE_WINDOW_CONTENT_CHANGED: true,
+  },
+  skip_rules: {
+    skip_system_ui: true,
+    skip_launchers: true,
+    skip_keyboards: true,
+    skip_system_settings: true,
+  },
+}
+
 const defaultSensors = (): WizardState['sensors'] => {
   const s: WizardState['sensors'] = {}
   SENSOR_OPTIONS.forEach(opt => {
+    let config: Record<string, any> = {}
+    if (opt.key === 'location') config = { movement_threshold: 50 }
+    if (opt.key === 'gestures') config = SCREEN_INTERACTION_DEFAULTS
     s[opt.key] = {
       enabled: false,
       interval_seconds: opt.defaultInterval ?? null,
-      config: opt.key === 'location' ? { movement_threshold: 50 } : {},
+      config,
     }
   })
   return s
@@ -319,6 +337,53 @@ function SensorCard({
           <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{sensor.description}</p>
         </div>
       </div>
+
+      {enabled && sensor.key === 'gestures' && (
+        <div className="px-4 pb-4 border-t border-blue-100 pt-3 grid grid-cols-2 gap-4" onClick={e => e.stopPropagation()}>
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Interaction Types</p>
+            <div className="space-y-1.5">
+              {([
+                { key: 'TYPE_VIEW_SCROLLED', label: 'TYPE_VIEW_SCROLLED' },
+                { key: 'TYPE_VIEW_CLICKED', label: 'TYPE_VIEW_CLICKED' },
+                { key: 'TYPE_VIEW_LONG_CLICKED', label: 'TYPE_VIEW_LONG_CLICKED' },
+                { key: 'TYPE_WINDOW_CONTENT_CHANGED', label: 'TYPE_WINDOW_CONTENT_CHANGED' },
+              ] as const).map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.interaction_types?.[key] ?? true}
+                    onChange={e => onChange({ config: { ...config, interaction_types: { ...config.interaction_types, [key]: e.target.checked } } })}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer shrink-0"
+                  />
+                  <span className="text-xs font-mono text-gray-600 truncate">{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Skip Rules</p>
+            <div className="space-y-1.5">
+              {([
+                { key: 'skip_system_ui', label: 'System UI' },
+                { key: 'skip_launchers', label: 'Launchers' },
+                { key: 'skip_keyboards', label: 'Keyboards' },
+                { key: 'skip_system_settings', label: 'System Settings' },
+              ] as const).map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.skip_rules?.[key] ?? true}
+                    onChange={e => onChange({ config: { ...config, skip_rules: { ...config.skip_rules, [key]: e.target.checked } } })}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer shrink-0"
+                  />
+                  <span className="text-xs text-gray-600">{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {enabled && sensor.hasInterval && (
         <div
@@ -686,7 +751,7 @@ export default function NewStudyPage() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-3xl mx-auto">
       {/* Header */}
       <div className="mb-8">
         <Link

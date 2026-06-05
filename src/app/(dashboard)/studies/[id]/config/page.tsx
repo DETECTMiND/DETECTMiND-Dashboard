@@ -12,7 +12,7 @@ const SENSOR_TYPES = [
   { key: 'calls', label: 'Phone Calls', hasInterval: false, description: 'Logs incoming and outgoing call events' },
   { key: 'sms', label: 'SMS Messages', hasInterval: false, description: 'Logs sent and received SMS messages' },
   { key: 'screen_state', label: 'Screen State', hasInterval: false, description: 'Screen on/off/lock/unlock events' },
-  { key: 'screen_interaction', label: 'Screen Interaction', hasInterval: false, description: 'Touch and swipe events' },
+  { key: 'gestures', label: 'User Gestures', hasInterval: false, description: 'Tap, scroll, long press, and window content change events' },
   { key: 'location', label: 'Location', hasInterval: true, description: 'GPS/network location at intervals or movement threshold' },
   { key: 'battery', label: 'Battery', hasInterval: true, description: 'Records battery level at intervals' },
   { key: 'light', label: 'Ambient Light', hasInterval: true, description: 'Ambient light readings at intervals' },
@@ -20,9 +20,10 @@ const SENSOR_TYPES = [
 
 const SCREEN_INTERACTION_DEFAULTS = {
   interaction_types: {
-    swipe: true,
-    tap: true,
-    long_press: true,
+    TYPE_VIEW_SCROLLED: true,
+    TYPE_VIEW_CLICKED: true,
+    TYPE_VIEW_LONG_CLICKED: true,
+    TYPE_WINDOW_CONTENT_CHANGED: true,
   },
   skip_rules: {
     skip_system_ui: true,
@@ -58,7 +59,7 @@ export default function SensorConfigPage() {
           if (t.key === 'location' && existing.config && (existing.config as any).movement_threshold === undefined) {
             existing.config = { ...existing.config, movement_threshold: 50 }
           }
-          if (t.key === 'screen_interaction') {
+          if (t.key === 'gestures') {
             existing.config = {
               ...SCREEN_INTERACTION_DEFAULTS,
               ...existing.config,
@@ -70,7 +71,7 @@ export default function SensorConfigPage() {
         } else {
           let defaultConfig: Record<string, any> = {}
           if (t.key === 'location') defaultConfig = { movement_threshold: 50 }
-          if (t.key === 'screen_interaction') defaultConfig = SCREEN_INTERACTION_DEFAULTS
+          if (t.key === 'gestures') defaultConfig = SCREEN_INTERACTION_DEFAULTS
           map[t.key] = { sensor_type: t.key, enabled: true, interval_seconds: t.hasInterval ? 300 : null, config: defaultConfig }
         }
       })
@@ -89,10 +90,10 @@ export default function SensorConfigPage() {
 
   function updateScreenInteractionConfig(section: 'interaction_types' | 'skip_rules', subKey: string, value: boolean) {
     setConfigs(prev => {
-      const cfg = prev['screen_interaction']
+      const cfg = prev['gestures']
       return {
         ...prev,
-        screen_interaction: {
+        gestures: {
           ...cfg,
           config: {
             ...cfg.config,
@@ -259,7 +260,7 @@ export default function SensorConfigPage() {
                 </div>
               )}
 
-              {cfg.enabled && sensor.key === 'screen_interaction' && (() => {
+              {cfg.enabled && sensor.key === 'gestures' && (() => {
                 const siCfg = cfg.config as typeof SCREEN_INTERACTION_DEFAULTS
                 return (
                   <div className="px-5 pb-5 border-t border-gray-50 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-5">
@@ -268,9 +269,10 @@ export default function SensorConfigPage() {
                       <p className="text-xs text-gray-400 mb-3">Interaction types</p>
                       <div className="space-y-2">
                         {([
-                          { key: 'swipe', label: 'SWIPE' },
-                          { key: 'tap', label: 'TAP' },
-                          { key: 'long_press', label: 'LONG_PRESS' },
+                          { key: 'TYPE_VIEW_SCROLLED', label: 'TYPE_VIEW_SCROLLED' },
+                          { key: 'TYPE_VIEW_CLICKED', label: 'TYPE_VIEW_CLICKED' },
+                          { key: 'TYPE_VIEW_LONG_CLICKED', label: 'TYPE_VIEW_LONG_CLICKED' },
+                          { key: 'TYPE_WINDOW_CONTENT_CHANGED', label: 'TYPE_WINDOW_CONTENT_CHANGED' },
                         ] as const).map(({ key, label }) => (
                           <label key={key} className="flex items-center gap-2.5 cursor-pointer group">
                             <input

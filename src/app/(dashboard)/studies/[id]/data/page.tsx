@@ -29,7 +29,7 @@ const SENSOR_TABLES = [
   { key: 'data_location',           label: 'Location',            timeCol: 'recorded_at',  hasChart: true  },
   { key: 'data_light',              label: 'Light',               timeCol: 'recorded_at',  hasChart: true  },
   { key: 'data_screen_state',       label: 'Screen State',        timeCol: 'recorded_at',  hasChart: true  },
-  { key: 'data_screen_interaction', label: 'Screen Interaction',  timeCol: 'recorded_at',  hasChart: false },
+  { key: 'data_gestures', label: 'User Gestures',       timeCol: 'recorded_at',  hasChart: false },
 ]
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250]

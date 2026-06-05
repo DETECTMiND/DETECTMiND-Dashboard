@@ -48,7 +48,7 @@ CREATE TABLE sensor_configs (
     study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
     sensor_type TEXT NOT NULL CHECK (sensor_type IN (
         'app_usage', 'notifications', 'battery', 'calls', 'sms',
-        'location', 'light', 'screen_state', 'screen_interaction'
+        'location', 'light', 'screen_state', 'gestures'
     )),
     enabled BOOLEAN NOT NULL DEFAULT true,
     interval_seconds INT, -- sampling interval (for location, light, battery)
@@ -207,17 +207,17 @@ CREATE TABLE data_screen_state (
 );
 CREATE INDEX idx_screen_state_participant ON data_screen_state(participant_id, recorded_at);
 
--- 9. Screen Interaction (touch, swipe)
-CREATE TABLE data_screen_interaction (
+-- 9. User Gestures (accessibility events)
+CREATE TABLE data_gestures (
     id BIGSERIAL PRIMARY KEY,
     participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
-    interaction_type TEXT NOT NULL CHECK (interaction_type IN ('touch', 'swipe', 'long_press', 'scroll')),
+    interaction_type TEXT NOT NULL CHECK (interaction_type IN ('TYPE_VIEW_SCROLLED', 'TYPE_VIEW_CLICKED', 'TYPE_VIEW_LONG_CLICKED', 'TYPE_WINDOW_CONTENT_CHANGED')),
     app_name TEXT,
     app_category TEXT,
     interaction_data JSONB,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX idx_screen_interaction_participant ON data_screen_interaction(participant_id, recorded_at);
+CREATE INDEX idx_gestures_participant ON data_gestures(participant_id, recorded_at);
 
 -- ============================================================
 -- SYNC LOG (track sync health)
@@ -270,7 +270,7 @@ ALTER TABLE data_esm_responses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_location ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_light ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_screen_state ENABLE ROW LEVEL SECURITY;
-ALTER TABLE data_screen_interaction ENABLE ROW LEVEL SECURITY;
+ALTER TABLE data_gestures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sync_log ENABLE ROW LEVEL SECURITY;
 
 -- Authenticated users (researchers) can read/write all data
@@ -288,7 +288,7 @@ CREATE POLICY "Authenticated users full access" ON data_esm_responses FOR ALL US
 CREATE POLICY "Authenticated users full access" ON data_location FOR ALL USING (auth.role() = 'authenticated');
 CREATE POLICY "Authenticated users full access" ON data_light FOR ALL USING (auth.role() = 'authenticated');
 CREATE POLICY "Authenticated users full access" ON data_screen_state FOR ALL USING (auth.role() = 'authenticated');
-CREATE POLICY "Authenticated users full access" ON data_screen_interaction FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Authenticated users full access" ON data_gestures FOR ALL USING (auth.role() = 'authenticated');
 CREATE POLICY "Authenticated users full access" ON sync_log FOR ALL USING (auth.role() = 'authenticated');
 
 -- Anon (mobile app with device key) can insert sensor data and read configs
@@ -301,7 +301,7 @@ CREATE POLICY "Anon can insert sensor data" ON data_esm_responses FOR INSERT WIT
 CREATE POLICY "Anon can insert sensor data" ON data_location FOR INSERT WITH CHECK (auth.role() = 'anon');
 CREATE POLICY "Anon can insert sensor data" ON data_light FOR INSERT WITH CHECK (auth.role() = 'anon');
 CREATE POLICY "Anon can insert sensor data" ON data_screen_state FOR INSERT WITH CHECK (auth.role() = 'anon');
-CREATE POLICY "Anon can insert sensor data" ON data_screen_interaction FOR INSERT WITH CHECK (auth.role() = 'anon');
+CREATE POLICY "Anon can insert sensor data" ON data_gestures FOR INSERT WITH CHECK (auth.role() = 'anon');
 CREATE POLICY "Anon can insert sync log" ON sync_log FOR INSERT WITH CHECK (auth.role() = 'anon');
 
 -- Anon can read study configs and sensor configs (for the app to fetch settings)

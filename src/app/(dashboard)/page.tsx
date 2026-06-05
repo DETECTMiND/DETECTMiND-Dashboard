@@ -58,7 +58,7 @@ const SENSOR_LABELS: Record<string, string> = {
   data_location:           'Location',
   data_light:              'Light',
   data_screen_state:       'Screen State',
-  data_screen_interaction: 'Screen Interaction',
+  data_gestures: 'User Gestures',
 }
 
 const SENSOR_TIME_COLS: Record<string, string> = {
@@ -71,7 +71,7 @@ const SENSOR_TIME_COLS: Record<string, string> = {
   data_location:           'recorded_at',
   data_light:              'recorded_at',
   data_screen_state:       'recorded_at',
-  data_screen_interaction: 'recorded_at',
+  data_gestures: 'recorded_at',
 }
 
 const SENSOR_TABLES = Object.keys(SENSOR_LABELS)
