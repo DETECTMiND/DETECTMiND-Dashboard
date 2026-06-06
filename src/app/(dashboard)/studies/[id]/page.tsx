@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck } from 'lucide-react'
+import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard } from 'lucide-react'
 
 interface Study {
   id: string
@@ -16,6 +16,15 @@ interface Study {
   config: Record<string, any> | null
   created_at: string
 }
+
+const DEFAULT_BANKING_APPS = [
+  'uk.co.hsbc.hsbcukmobilebanking',
+  'com.barclays.android.barclaysmobilebanking',
+  'com.htsu.hsbcpersonalbanking',
+  'com.monzo.android',
+  'com.starlingbank.android',
+  'com.revolut.app',
+]
 
 const STATUS_STYLES: Record<string, string> = {
   draft:     'bg-gray-100 text-gray-600 border border-gray-200',
@@ -36,6 +45,25 @@ export default function StudyDetailPage() {
   const [guidedPermissions, setGuidedPermissions] = useState(false)
   const [autoParticipantId, setAutoParticipantId] = useState(false)
   const [participantCount, setParticipantCount] = useState(0)
+  const [bankingPause, setBankingPause] = useState<{
+    enabled: boolean
+    apps: string[]
+    reminder_minutes: number
+    escalation_minutes: number
+  }>({
+    enabled: true,
+    apps: [
+      'uk.co.hsbc.hsbcukmobilebanking',
+      'com.barclays.android.barclaysmobilebanking',
+      'com.htsu.hsbcpersonalbanking',
+      'com.monzo.android',
+      'com.starlingbank.android',
+      'com.revolut.app',
+    ],
+    reminder_minutes: 30,
+    escalation_minutes: 120,
+  })
+  const [newAppId, setNewAppId] = useState('')
 
   useEffect(() => {
     async function load() {
@@ -45,6 +73,14 @@ export default function StudyDetailPage() {
         setForm(data)
         setGuidedPermissions(!!(data.config?.guided_permissions))
         setAutoParticipantId(!!(data.config?.auto_participant_id))
+        if (data.config?.banking_pause) {
+          setBankingPause({
+            enabled: data.config.banking_pause.enabled ?? true,
+            apps: data.config.banking_pause.apps ?? DEFAULT_BANKING_APPS,
+            reminder_minutes: data.config.banking_pause.reminder_minutes ?? 30,
+            escalation_minutes: data.config.banking_pause.escalation_minutes ?? 120,
+          })
+        }
       }
       const { count } = await supabase.from('participants').select('*', { count: 'exact', head: true }).eq('study_id', id)
       setParticipantCount(count || 0)
@@ -59,6 +95,7 @@ export default function StudyDetailPage() {
     else delete updatedConfig.guided_permissions
     if (autoParticipantId) updatedConfig.auto_participant_id = true
     else delete updatedConfig.auto_participant_id
+    updatedConfig.banking_pause = { ...bankingPause }
     const { error } = await supabase.from('studies').update({
       name: form.name || study.name,
       description: form.description ?? study.description,
@@ -214,11 +251,115 @@ export default function StudyDetailPage() {
               </div>
             </div>
 
+            {/* Banking Pause */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Banking App Pause</label>
+              <div className={`rounded-xl border-2 transition-all ${bankingPause.enabled ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white'}`}>
+                <div className="flex items-center justify-between px-4 py-3.5">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${bankingPause.enabled ? 'bg-blue-100' : 'bg-gray-100'}`}>
+                      <CreditCard size={17} className={bankingPause.enabled ? 'text-blue-600' : 'text-gray-400'} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`font-semibold text-sm ${bankingPause.enabled ? 'text-gray-900' : 'text-gray-600'}`}>Banking Pause</p>
+                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">Pause participants when banking apps are detected open</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
+                    <input type="checkbox" checked={bankingPause.enabled} onChange={e => setBankingPause(p => ({ ...p, enabled: e.target.checked }))} className="sr-only peer" />
+                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
+                  </label>
+                </div>
+                <div className="px-4 pb-4 pt-1 border-t border-blue-100 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Reminder (minutes)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={bankingPause.reminder_minutes}
+                        onChange={e => setBankingPause(p => ({ ...p, reminder_minutes: parseInt(e.target.value) || 30 }))}
+                        className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">Escalation (minutes)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        value={bankingPause.escalation_minutes}
+                        onChange={e => setBankingPause(p => ({ ...p, escalation_minutes: parseInt(e.target.value) || 120 }))}
+                        className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-2">Monitored App Package IDs</label>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {bankingPause.apps.map(app => (
+                        <span key={app} className="inline-flex items-center gap-1.5 text-xs bg-white border border-gray-200 text-gray-700 px-2.5 py-1 rounded-full font-mono">
+                          {app}
+                          <button
+                            type="button"
+                            onClick={() => setBankingPause(p => ({ ...p, apps: p.apps.filter(a => a !== app) }))}
+                            className="text-gray-400 hover:text-red-500 transition-colors"
+                          >
+                            <X size={11} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newAppId}
+                        onChange={e => setNewAppId(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            const trimmed = newAppId.trim()
+                            if (trimmed && !bankingPause.apps.includes(trimmed)) {
+                              setBankingPause(p => ({ ...p, apps: [...p.apps, trimmed] }))
+                              setNewAppId('')
+                            }
+                          }
+                        }}
+                        placeholder="com.example.bankapp"
+                        className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const trimmed = newAppId.trim()
+                          if (trimmed && !bankingPause.apps.includes(trimmed)) {
+                            setBankingPause(p => ({ ...p, apps: [...p.apps, trimmed] }))
+                            setNewAppId('')
+                          }
+                        }}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-colors"
+                      >
+                        <Plus size={12} /> Add
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="flex items-center gap-3 pt-1">
               <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors">
                 Save Changes
               </button>
-              <button onClick={() => { setEditing(false); setForm(study); setGuidedPermissions(!!(study.config?.guided_permissions)); setAutoParticipantId(!!(study.config?.auto_participant_id)) }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+              <button onClick={() => {
+                setEditing(false)
+                setForm(study)
+                setGuidedPermissions(!!(study.config?.guided_permissions))
+                setAutoParticipantId(!!(study.config?.auto_participant_id))
+                setBankingPause(study.config?.banking_pause
+                  ? { enabled: study.config.banking_pause.enabled ?? true, apps: study.config.banking_pause.apps ?? DEFAULT_BANKING_APPS, reminder_minutes: study.config.banking_pause.reminder_minutes ?? 30, escalation_minutes: study.config.banking_pause.escalation_minutes ?? 120 }
+                  : { enabled: true, apps: DEFAULT_BANKING_APPS, reminder_minutes: 30, escalation_minutes: 120 })
+                setNewAppId('')
+              }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
               <button onClick={handleDelete} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
@@ -253,6 +394,11 @@ export default function StudyDetailPage() {
                   {study.config?.auto_participant_id && (
                     <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
                       <BadgeCheck size={12} /> Auto participant ID
+                    </span>
+                  )}
+                  {study.config?.banking_pause?.enabled && (
+                    <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
+                      <CreditCard size={12} /> Banking pause ({study.config.banking_pause.apps?.length ?? 0} apps)
                     </span>
                   )}
                 </div>

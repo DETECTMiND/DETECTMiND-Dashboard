@@ -699,6 +699,19 @@ export default function NewStudyPage() {
       const config: Record<string, any> = {}
       if (state.guidedPermissions) config.guided_permissions = true
       if (state.autoParticipantId) config.auto_participant_id = true
+      config.banking_pause = {
+        enabled: true,
+        apps: [
+          'uk.co.hsbc.hsbcukmobilebanking',
+          'com.barclays.android.barclaysmobilebanking',
+          'com.htsu.hsbcpersonalbanking',
+          'com.monzo.android',
+          'com.starlingbank.android',
+          'com.revolut.app',
+        ],
+        reminder_minutes: 30,
+        escalation_minutes: 120,
+      }
 
       const { data: study, error: studyError } = await supabase
         .from('studies')
