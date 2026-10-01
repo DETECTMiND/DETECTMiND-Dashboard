@@ -85,7 +85,7 @@ export default function Sidebar() {
           <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center">
             <FlaskConical size={14} className="text-white" />
           </div>
-          <span className="text-sm font-bold text-gray-900 tracking-tight">Research</span>
+          <span className="text-sm font-bold text-gray-900 tracking-tight">DETECTMiND</span>
         </div>
       </div>
 
