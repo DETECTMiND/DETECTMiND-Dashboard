@@ -53,7 +53,7 @@ const SENSOR_OPTIONS: SensorOption[] = [
   {
     key: 'notifications',
     label: 'App Notifications',
-    description: 'Notification events per app (title, posted/removed time)',
+    description: 'Notification events per app (posted, opened and dismissed time)',
     icon: Bell,
     hasInterval: false,
     category: 'behavioral',

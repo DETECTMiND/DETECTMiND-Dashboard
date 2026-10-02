@@ -120,7 +120,8 @@ CREATE TABLE data_notifications (
     app_name TEXT,
     posted_at TIMESTAMPTZ NOT NULL,
     removed_at TIMESTAMPTZ,
-    title TEXT,
+    removal_reason TEXT, -- clicked | dismissed | app_cancel | timeout | listener_cancel | blocked | other
+    title TEXT,          -- legacy, no longer collected
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_notifications_participant ON data_notifications(participant_id, posted_at);
@@ -157,7 +158,7 @@ CREATE TABLE data_sms (
     direction TEXT NOT NULL CHECK (direction IN ('incoming', 'outgoing')),
     event_time TIMESTAMPTZ NOT NULL,
     contact_hash TEXT, -- hashed phone number for privacy
-    body_hash TEXT,    -- optional hashed message body
+    body_hash TEXT,    -- legacy, no longer collected
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_sms_participant ON data_sms(participant_id, event_time);
@@ -305,7 +306,7 @@ CREATE POLICY "Anon can insert sensor data" ON data_gestures FOR INSERT WITH CHE
 CREATE POLICY "Anon can insert sync log" ON sync_log FOR INSERT WITH CHECK (auth.role() = 'anon');
 
 -- Anon can read study configs and sensor configs (for the app to fetch settings)
-CREATE POLICY "Anon can read studies" ON studies FOR SELECT USING (auth.role() = 'anon' AND status = 'active');
+CREATE POLICY "Anon can read studies" ON studies FOR SELECT USING (auth.role() = 'anon' AND status IN ('active', 'paused', 'completed'));
 CREATE POLICY "Anon can read sensor configs" ON sensor_configs FOR SELECT USING (auth.role() = 'anon');
 CREATE POLICY "Anon can read esm schedules" ON esm_schedules FOR SELECT USING (auth.role() = 'anon');
 CREATE POLICY "Anon can read esm questions" ON esm_questions FOR SELECT USING (auth.role() = 'anon');
