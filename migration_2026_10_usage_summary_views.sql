@@ -12,8 +12,8 @@
 -- `off`/`locked` event. GAP-CAP: if an `on` has no closing event before the next
 -- `on` (a dropped event, e.g. the service was killed), the session is capped at
 -- 2 hours so a missing event cannot inflate totals. Edit the two `7200` literals
--- to change the cap. Timestamps are bucketed in UTC — see note at the bottom to
--- switch to a study-local timezone.
+-- to change the cap. Timestamps are bucketed in Europe/London local time — see
+-- note at the bottom to switch to a different study timezone.
 
 -- 1. Screen-on sessions -------------------------------------------------------
 CREATE OR REPLACE VIEW screen_sessions
@@ -55,7 +55,7 @@ WITH (security_invoker = on) AS
 WITH sessions AS (
     SELECT
         participant_id,
-        (start_ts AT TIME ZONE 'UTC')::date AS usage_date,
+        (start_ts AT TIME ZONE 'Europe/London')::date AS usage_date,
         session_seconds,
         was_capped
     FROM screen_sessions
@@ -63,7 +63,7 @@ WITH sessions AS (
 unlocks AS (
     SELECT
         participant_id,
-        (recorded_at::timestamptz AT TIME ZONE 'UTC')::date AS usage_date,
+        (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
         COUNT(*) AS unlock_count
     FROM data_screen_state
     WHERE state = 'unlocked'
@@ -101,9 +101,10 @@ hour_buckets AS (
         participant_id,
         start_ts,
         end_ts,
+        -- hour marks aligned to Europe/London local time, returned as timestamptz
         generate_series(
-            date_trunc('hour', start_ts),
-            date_trunc('hour', end_ts),
+            date_trunc('hour', start_ts AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London',
+            date_trunc('hour', end_ts   AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London',
             interval '1 hour'
         ) AS hour_start
     FROM bounded
@@ -111,8 +112,8 @@ hour_buckets AS (
 SELECT
     participant_id,
     hour_start AS usage_hour,
-    (hour_start AT TIME ZONE 'UTC')::date AS usage_date,
-    EXTRACT(HOUR FROM hour_start)::int    AS hour_of_day,
+    (hour_start AT TIME ZONE 'Europe/London')::date       AS usage_date,
+    EXTRACT(HOUR FROM hour_start AT TIME ZONE 'Europe/London')::int AS hour_of_day,
     SUM(
         EXTRACT(EPOCH FROM (
             LEAST(end_ts, hour_start + interval '1 hour')
@@ -133,7 +134,7 @@ CREATE OR REPLACE VIEW daily_app_usage
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (start_time::timestamptz AT TIME ZONE 'UTC')::date AS usage_date,
+    (start_time::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
     package_name,
     MAX(app_name)                          AS app_name,
     SUM(duration_seconds)                  AS foreground_seconds,
@@ -146,7 +147,7 @@ GROUP BY participant_id, usage_date, package_name;
 -- underlying tables' RLS in force.
 GRANT SELECT ON screen_sessions, daily_usage, hourly_usage, daily_app_usage TO authenticated;
 
--- Note on timezone: these views bucket by UTC. For a single study timezone,
--- replace `AT TIME ZONE 'UTC'` with e.g. `AT TIME ZONE 'Europe/London'`
--- (Postgres converts the stored UTC timestamp to that zone). Do not change the
--- session-pairing logic.
+-- Note on timezone: these views bucket by Europe/London. To change the study
+-- timezone, replace every `AT TIME ZONE 'Europe/London'` with the target IANA zone
+-- (e.g. 'America/New_York'). Postgres converts the stored UTC timestamp to that
+-- zone. Do not change the session-pairing logic.

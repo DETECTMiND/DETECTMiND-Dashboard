@@ -321,7 +321,7 @@ CREATE POLICY "Anon can update participants" ON participants FOR UPDATE USING (a
 -- keeps the underlying tables' RLS in force (authenticated researchers only).
 -- A screen-on "session" runs from an on/unlocked event to the next off/locked
 -- event; if a closing event is missing (dropped event) the session is capped at
--- 2 hours. Timestamps bucketed in UTC. See migration_2026_10_usage_summary_views.sql.
+-- 2 hours. Timestamps bucketed in Europe/London. See migration_2026_10_usage_summary_views.sql.
 
 CREATE OR REPLACE VIEW screen_sessions
 WITH (security_invoker = on) AS
@@ -361,7 +361,7 @@ WITH (security_invoker = on) AS
 WITH sessions AS (
     SELECT
         participant_id,
-        (start_ts AT TIME ZONE 'UTC')::date AS usage_date,
+        (start_ts AT TIME ZONE 'Europe/London')::date AS usage_date,
         session_seconds,
         was_capped
     FROM screen_sessions
@@ -369,7 +369,7 @@ WITH sessions AS (
 unlocks AS (
     SELECT
         participant_id,
-        (recorded_at::timestamptz AT TIME ZONE 'UTC')::date AS usage_date,
+        (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
         COUNT(*) AS unlock_count
     FROM data_screen_state
     WHERE state = 'unlocked'
@@ -406,9 +406,10 @@ hour_buckets AS (
         participant_id,
         start_ts,
         end_ts,
+        -- hour marks aligned to Europe/London local time, returned as timestamptz
         generate_series(
-            date_trunc('hour', start_ts),
-            date_trunc('hour', end_ts),
+            date_trunc('hour', start_ts AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London',
+            date_trunc('hour', end_ts   AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London',
             interval '1 hour'
         ) AS hour_start
     FROM bounded
@@ -416,8 +417,8 @@ hour_buckets AS (
 SELECT
     participant_id,
     hour_start AS usage_hour,
-    (hour_start AT TIME ZONE 'UTC')::date AS usage_date,
-    EXTRACT(HOUR FROM hour_start)::int    AS hour_of_day,
+    (hour_start AT TIME ZONE 'Europe/London')::date       AS usage_date,
+    EXTRACT(HOUR FROM hour_start AT TIME ZONE 'Europe/London')::int AS hour_of_day,
     SUM(
         EXTRACT(EPOCH FROM (
             LEAST(end_ts, hour_start + interval '1 hour')
@@ -437,7 +438,7 @@ CREATE OR REPLACE VIEW daily_app_usage
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (start_time::timestamptz AT TIME ZONE 'UTC')::date AS usage_date,
+    (start_time::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
     package_name,
     MAX(app_name)                          AS app_name,
     SUM(duration_seconds)                  AS foreground_seconds,
