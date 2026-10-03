@@ -26,8 +26,11 @@ view, not in the app and not re-derived ad-hoc in React. One source of truth.
 | `hourly_usage` | participant × hour | hourly table + heatmap + avg-by-hour |
 | `daily_app_usage` | participant × day × app | top-apps |
 
-Dashboard page: `studies/[id]/processed/page.tsx` — per-participant selector,
-summary cards, average-minutes-per-hour chart, and a date × hour heatmap table.
+Dashboard page: `studies/[id]/processed/page.tsx` — Sensor-Data-style UX:
+dataset pills (Hourly / Daily), participant selector incl. **All Participants
+(overall)**, Table/Chart toggle, CSV export, and an avg/sum toggle for the
+overall view. Hourly table = date × hour heatmap (per participant) or
+minutes-per-hour-of-day (overall); daily = per-day table + bar chart.
 
 All views bucket by **Europe/London**. Change the timezone in one place
 (`migration_2026_10_usage_summary_views.sql` / `supabase_schema.sql`).
@@ -67,6 +70,14 @@ likely research value.
 
 9. **Communication summary** — calls/SMS counts and durations per day, from
    `data_calls` / `data_sms` (hashed contacts, so counts only).
+
+10. **Step counts** — requires a NEW raw sensor in the app
+    (`TYPE_STEP_COUNTER`, `ACTIVITY_RECOGNITION` permission, Android 10+). The
+    sensor is hardware-based, so it exists on most modern phones but NOT all —
+    the app must check `getDefaultSensor(TYPE_STEP_COUNTER) != null` and degrade
+    gracefully. Once collected as `data_steps(participant_id, count, recorded_at)`,
+    a `daily_steps` view (daily totals from the cumulative counter) feeds a
+    Processed Data section. This is app work first, then a view.
 
 ## How to add a new processed dataset (checklist)
 
