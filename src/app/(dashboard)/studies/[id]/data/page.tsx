@@ -31,6 +31,7 @@ const SENSOR_TABLES = [
   { key: 'data_screen_state',       label: 'Screen State',        timeCol: 'recorded_at',  hasChart: true  },
   { key: 'data_steps',              label: 'Steps',               timeCol: 'recorded_at',  hasChart: false },
   { key: 'data_proximity',          label: 'Proximity',           timeCol: 'recorded_at',  hasChart: false },
+  { key: 'data_gesture_pauses',     label: 'Gesture Pauses',      timeCol: 'recorded_at',  hasChart: false },
   { key: 'data_gestures', label: 'User Gestures',       timeCol: 'recorded_at',  hasChart: false },
 ]
 

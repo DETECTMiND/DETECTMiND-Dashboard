@@ -17,7 +17,7 @@ import {
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which view to read, and how to shape it.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery'
+  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'gesture_pauses'
 
 interface DatasetDef {
   key: DatasetKey
@@ -34,6 +34,7 @@ const DATASETS: DatasetDef[] = [
   { key: 'first_last',    label: 'First / Last Use', view: 'daily_first_last_use', hasChart: false },
   { key: 'notifications', label: 'Notifications',  view: 'daily_notifications',    hasChart: true  },
   { key: 'battery',       label: 'Battery',        view: 'daily_battery_summary',  hasChart: true  },
+  { key: 'gesture_pauses', label: 'Gesture Pauses', view: 'gesture_pause_sessions', hasChart: false },
 ]
 
 type ViewMode = 'table' | 'chart'
@@ -269,6 +270,26 @@ export default function ProcessedDataPage() {
         headers: ['Date', 'Avg level %', 'Min %', 'Max %', 'Time charging %'],
         rows: rows.map(r => [r.date, String(r.avg_level), String(r.min_level), String(r.max_level), String(r.pct_charging)]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.avg_level })), chartLabel: 'Avg battery %', unit: '%',
+      }
+    }
+
+    if (dataset === 'gesture_pauses') {
+      const fmtTs = (iso: string | null) => {
+        if (!iso) return '—'
+        try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
+      }
+      const rows = [...scoped]
+        .sort((a, b) => (b.paused_at || '').localeCompare(a.paused_at || ''))
+        .map(r => ({
+          participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }),
+          paused_at: fmtTs(r.paused_at),
+          resumed_at: fmtTs(r.resumed_at),
+          gap_minutes: r.gap_minutes == null ? 'open' : `${r.gap_minutes}m`,
+        }))
+      return {
+        headers: isOverall ? ['Participant', 'Paused', 'Resumed', 'Gap'] : ['Paused', 'Resumed', 'Gap'],
+        rows: rows.map(r => isOverall ? [r.participant, r.paused_at, r.resumed_at, r.gap_minutes] : [r.paused_at, r.resumed_at, r.gap_minutes]),
+        csv: rows, chart: [], chartLabel: '', unit: '',
       }
     }
 
