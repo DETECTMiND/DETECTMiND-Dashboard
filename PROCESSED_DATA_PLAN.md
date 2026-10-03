@@ -22,9 +22,18 @@ view, not in the app and not re-derived ad-hoc in React. One source of truth.
 | View | Grain | Feeds |
 |------|-------|-------|
 | `screen_sessions` | one screen-on session (gap-capped 2h) | building block |
-| `daily_usage` | participant × day | summary cards, daily totals |
-| `hourly_usage` | participant × hour | hourly table + heatmap + avg-by-hour |
-| `daily_app_usage` | participant × day × app | top-apps |
+| `daily_usage` | participant × day | Daily Usage dataset |
+| `hourly_usage` | participant × hour | Hourly Usage (heatmap + per-hour) |
+| `daily_app_usage` | participant × day × app | (top-apps, future) |
+| `daily_pickups` | participant × date × hour | Pickups dataset |
+| `daily_first_last_use` | participant × day | First/Last Use dataset |
+| `daily_notifications` | participant × day | Notifications dataset |
+| `daily_battery_summary` | participant × day | Battery dataset |
+
+Dataset pills live on the Processed Data page. Add a new dataset by: writing a
+view, adding a `migration_*.sql`, appending it to `supabase_schema.sql`, and
+adding one entry to `DATASETS` in `processed/page.tsx` (plus a shaping branch in
+the `generic` memo if its columns differ).
 
 Dashboard page: `studies/[id]/processed/page.tsx` — Sensor-Data-style UX:
 dataset pills (Hourly / Daily), participant selector incl. **All Participants
