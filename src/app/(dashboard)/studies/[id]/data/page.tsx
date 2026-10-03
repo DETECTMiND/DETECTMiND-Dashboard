@@ -32,7 +32,6 @@ const SENSOR_TABLES = [
   { key: 'data_steps',              label: 'Steps',               timeCol: 'recorded_at',  hasChart: false },
   { key: 'data_proximity',          label: 'Proximity',           timeCol: 'recorded_at',  hasChart: false },
   { key: 'data_gesture_pauses',     label: 'Gesture Pauses',      timeCol: 'recorded_at',  hasChart: false },
-  { key: 'data_permission_events',  label: 'Permission Events',   timeCol: 'recorded_at',  hasChart: false },
   { key: 'data_gestures', label: 'User Gestures',       timeCol: 'recorded_at',  hasChart: false },
 ]
 
@@ -304,7 +303,7 @@ function SensorDataInner() {
       const enabledTypes = new Set((cfgData || []).map((r: any) => r.sensor_type))
       // gesture_pauses is not a configurable sensor — it's an automatic
       // byproduct of banking-pause, so always keep it visible.
-      const ALWAYS_SHOW = new Set(['data_gesture_pauses', 'data_permission_events'])
+      const ALWAYS_SHOW = new Set(['data_gesture_pauses'])
       const filtered = enabledTypes.size > 0
         ? SENSOR_TABLES.filter(t => ALWAYS_SHOW.has(t.key) || enabledTypes.has(t.key.replace(/^data_/, '')))
         : SENSOR_TABLES

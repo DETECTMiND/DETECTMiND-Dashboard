@@ -7,10 +7,11 @@ import Link from 'next/link'
 import {
   ArrowLeft, AlertTriangle, CheckCircle2, Clock, Smartphone, Pencil,
   Database, MessageSquare, Search, X, Activity, RefreshCw,
-  TrendingUp, Zap, AlertCircle, CheckCircle,
+  TrendingUp, Zap, AlertCircle, CheckCircle, ShieldCheck,
 } from 'lucide-react'
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
 import { MergeSuggestions } from '@/components/participant-merge'
+import { PermissionHistoryModal } from '@/components/permission-history-modal'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -452,6 +453,7 @@ function ParticipantsContent() {
   const [labelValue, setLabelValue] = useState('')
   const [search, setSearch] = useState('')
   const [syncModalParticipant, setSyncModalParticipant] = useState<Participant | null>(null)
+  const [permModalParticipant, setPermModalParticipant] = useState<Participant | null>(null)
   const [activeFilter, setActiveFilter] = useState<FilterKey>(() => {
     const f = searchParams.get('filter')
     return (f && ['all', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
@@ -709,6 +711,12 @@ function ParticipantsContent() {
                         >
                           <Activity size={12} /> Sync History
                         </button>
+                        <button
+                          onClick={() => setPermModalParticipant(p)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-200 transition-all"
+                        >
+                          <ShieldCheck size={12} /> Permissions
+                        </button>
                         <select
                           value={p.status}
                           onChange={e => updateStatus(p.id, e.target.value)}
@@ -731,6 +739,14 @@ function ParticipantsContent() {
         <SyncHistoryModal
           participant={syncModalParticipant}
           onClose={() => setSyncModalParticipant(null)}
+        />
+      )}
+
+      {/* Permission History Modal */}
+      {permModalParticipant && (
+        <PermissionHistoryModal
+          participant={permModalParticipant}
+          onClose={() => setPermModalParticipant(null)}
         />
       )}
     </div>
