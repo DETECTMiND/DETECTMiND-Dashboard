@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { Users, AlertTriangle, CheckCircle, GitMerge, X, ArrowRight, ShieldAlert } from 'lucide-react'
 
+type SyncLogRow = { participant_id: string; synced_at: string; records_synced: number | null }
+
 interface Participant {
   id: string
   device_id: string
@@ -39,9 +41,8 @@ function model(p: Participant): string | null {
  * data timelines do not overlap (classic reinstall). Everything else is "review".
  */
 export function MergeSuggestions({
-  studyId, participants, onMerged,
+  participants, onMerged,
 }: {
-  studyId: string
   participants: Participant[]
   onMerged: () => void
 }) {
@@ -83,7 +84,7 @@ export function MergeSuggestions({
         .in('participant_id', ids)
       const tl: Record<string, Timeline> = {}
       for (const id of ids) tl[id] = { first: null, last: null, records: 0 }
-      for (const row of (data || []) as any[]) {
+      for (const row of (data || []) as SyncLogRow[]) {
         const t = tl[row.participant_id]
         if (!t) continue
         const ts = row.synced_at as string
@@ -137,8 +138,8 @@ export function MergeSuggestions({
       }
       setActiveBase(null); setPrimaryId(null); setConfirmText('')
       onMerged()
-    } catch (e: any) {
-      setError(e.message || 'Merge failed')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Merge failed')
     } finally {
       setMerging(false)
     }

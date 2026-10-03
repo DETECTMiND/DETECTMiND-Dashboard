@@ -538,7 +538,7 @@ function ParticipantsContent() {
 
       {/* Duplicate-participant merge suggestions */}
       {participants.length > 0 && (
-        <MergeSuggestions studyId={studyId as string} participants={participants} onMerged={load} />
+        <MergeSuggestions participants={participants} onMerged={load} />
       )}
 
       {/* Search + filters toolbar */}

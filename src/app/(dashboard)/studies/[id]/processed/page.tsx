@@ -11,7 +11,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import {
-  Participant, ParticipantPicker, participantName, avatarColor, avatarInitial,
+  Participant, ParticipantPicker, participantName,
 } from '@/components/participant-ui'
 
 // ─── Dataset registry ─────────────────────────────────────────────────────────
@@ -75,6 +75,8 @@ function downloadCSV(csv: string, filename: string) {
 }
 
 // Generic row from any view
+// Raw rows from the Supabase views have per-view shapes; treated dynamically.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>
 
 // ─── Page ──────────────────────────────────────────────────────────────────
@@ -216,7 +218,7 @@ export default function ProcessedDataPage() {
       })
       return {
         headers: isOverall ? ['Date', 'Participants', 'Steps'] : ['Date', 'Steps'],
-        rows: rows.map(r => isOverall ? [r.date, String((r as any).participants), r.steps.toLocaleString()] : [r.date, r.steps.toLocaleString()]),
+        rows: rows.map(r => isOverall ? [r.date, String((r as { participants?: number }).participants ?? 0), r.steps.toLocaleString()] : [r.date, r.steps.toLocaleString()]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.steps })), chartLabel: 'Steps', unit: '',
       }
     }
@@ -234,7 +236,7 @@ export default function ProcessedDataPage() {
       })
       return {
         headers: isOverall ? ['Date', 'Participants', 'Pickups'] : ['Date', 'Pickups'],
-        rows: rows.map(r => isOverall ? [r.date, String((r as any).participants), String(r.pickups)] : [r.date, String(r.pickups)]),
+        rows: rows.map(r => isOverall ? [r.date, String((r as { participants?: number }).participants ?? 0), String(r.pickups)] : [r.date, String(r.pickups)]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.pickups })), chartLabel: 'Pickups', unit: '',
       }
     }
@@ -251,7 +253,7 @@ export default function ProcessedDataPage() {
       })
       return {
         headers: isOverall ? ['Date', 'Participants', 'Notifications', 'Opened'] : ['Date', 'Notifications', 'Opened'],
-        rows: rows.map(r => isOverall ? [r.date, String((r as any).participants), String(r.notifications), String(r.opened)] : [r.date, String(r.notifications), String(r.opened)]),
+        rows: rows.map(r => isOverall ? [r.date, String((r as { participants?: number }).participants ?? 0), String(r.notifications), String(r.opened)] : [r.date, String(r.notifications), String(r.opened)]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.notifications })), chartLabel: 'Notifications', unit: '',
       }
     }
@@ -351,7 +353,7 @@ export default function ProcessedDataPage() {
       {/* Header */}
       <div>
         <Link href={`/studies/${studyId}`} className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4">
-          <ArrowLeft size={15} /> Back to Study
+          <ArrowLeft size={15} /> {studyName || 'Back to Study'}
         </Link>
         <div className="flex items-center justify-between gap-4">
           <div>
