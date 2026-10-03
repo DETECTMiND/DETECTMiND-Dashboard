@@ -48,7 +48,8 @@ CREATE TABLE sensor_configs (
     study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
     sensor_type TEXT NOT NULL CHECK (sensor_type IN (
         'app_usage', 'notifications', 'battery', 'calls', 'sms',
-        'location', 'light', 'screen_state', 'gestures'
+        'location', 'light', 'screen_state', 'gestures',
+        'steps', 'proximity'
     )),
     enabled BOOLEAN NOT NULL DEFAULT true,
     interval_seconds INT, -- sampling interval (for location, light, battery)
