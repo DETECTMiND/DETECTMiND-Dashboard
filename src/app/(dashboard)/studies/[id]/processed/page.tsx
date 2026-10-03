@@ -17,7 +17,7 @@ import {
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which view to read, and how to shape it.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'pickups' | 'first_last' | 'notifications' | 'battery'
+  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery'
 
 interface DatasetDef {
   key: DatasetKey
@@ -29,6 +29,7 @@ interface DatasetDef {
 const DATASETS: DatasetDef[] = [
   { key: 'hourly',        label: 'Hourly Usage',   view: 'hourly_usage',          hasChart: true  },
   { key: 'daily',         label: 'Daily Usage',    view: 'daily_usage',           hasChart: true  },
+  { key: 'steps',         label: 'Steps',          view: 'daily_steps',           hasChart: true  },
   { key: 'pickups',       label: 'Pickups',        view: 'daily_pickups',         hasChart: true  },
   { key: 'first_last',    label: 'First / Last Use', view: 'daily_first_last_use', hasChart: false },
   { key: 'notifications', label: 'Notifications',  view: 'daily_notifications',    hasChart: true  },
@@ -198,6 +199,23 @@ export default function ProcessedDataPage() {
         headers: ['Date', 'Participants', 'Screen time', 'Minutes', 'Sessions', 'Unlocks'],
         rows: rows.map(r => [r.date, String(r.participants), r.screen_time, String(r.minutes), String(r.sessions), String(r.unlocks)]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
+      }
+    }
+
+    if (dataset === 'steps') {
+      const by: Record<string, { steps: number; pdays: number }> = {}
+      for (const r of scoped) {
+        const d = by[r.usage_date] || (by[r.usage_date] = { steps: 0, pdays: 0 })
+        d.steps += r.steps; d.pdays++
+      }
+      const rows = Object.keys(by).sort().map(date => {
+        const d = by[date]; const k = isOverall ? div(d.pdays) : 1
+        return { date, steps: Math.round(d.steps / k), ...(isOverall ? { participants: d.pdays } : {}) }
+      })
+      return {
+        headers: isOverall ? ['Date', 'Participants', 'Steps'] : ['Date', 'Steps'],
+        rows: rows.map(r => isOverall ? [r.date, String((r as any).participants), r.steps.toLocaleString()] : [r.date, r.steps.toLocaleString()]),
+        csv: rows, chart: rows.map(r => ({ date: r.date, value: r.steps })), chartLabel: 'Steps', unit: '',
       }
     }
 

@@ -517,3 +517,44 @@ FROM data_battery
 GROUP BY 1, 2;
 
 GRANT SELECT ON daily_pickups, daily_first_last_use, daily_notifications, daily_battery_summary TO authenticated;
+
+-- ─── Steps & proximity sensors (see migration_2026_10_steps_proximity.sql) ───
+
+
+-- ── data_steps ──────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS data_steps (
+    id BIGSERIAL PRIMARY KEY,
+    participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    steps INT NOT NULL,                 -- steps taken during the interval
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_steps_participant ON data_steps(participant_id, recorded_at);
+ALTER TABLE data_steps ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated users full access" ON data_steps FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Anon can insert sensor data" ON data_steps FOR INSERT WITH CHECK (auth.role() = 'anon');
+
+-- ── data_proximity ──────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS data_proximity (
+    id BIGSERIAL PRIMARY KEY,
+    participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    proximity_cm REAL,                  -- distance from proximity sensor (null if none)
+    orientation TEXT NOT NULL,          -- face_up | face_down | upright | unknown
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_proximity_participant ON data_proximity(participant_id, recorded_at);
+ALTER TABLE data_proximity ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated users full access" ON data_proximity FOR ALL USING (auth.role() = 'authenticated');
+CREATE POLICY "Anon can insert sensor data" ON data_proximity FOR INSERT WITH CHECK (auth.role() = 'anon');
+
+-- ── daily_steps processed view ───────────────────────────────────────────────
+CREATE OR REPLACE VIEW daily_steps
+WITH (security_invoker = on) AS
+SELECT
+    participant_id,
+    (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
+    SUM(steps)  AS steps,
+    COUNT(*)    AS samples
+FROM data_steps
+GROUP BY 1, 2;
+
+GRANT SELECT ON daily_steps TO authenticated;

@@ -29,6 +29,12 @@ view, not in the app and not re-derived ad-hoc in React. One source of truth.
 | `daily_first_last_use` | participant × day | First/Last Use dataset |
 | `daily_notifications` | participant × day | Notifications dataset |
 | `daily_battery_summary` | participant × day | Battery dataset |
+| `daily_steps` | participant × day | Steps dataset |
+
+New raw sensors added to the app: **steps** (`data_steps`, needs
+`ACTIVITY_RECOGNITION` + a hardware step sensor) and **proximity/orientation**
+(`data_proximity`, no permission). Both are browsable on Sensor Data; Steps also
+has a Processed Data pill via `daily_steps`.
 
 Dataset pills live on the Processed Data page. Add a new dataset by: writing a
 view, adding a `migration_*.sql`, appending it to `supabase_schema.sql`, and
