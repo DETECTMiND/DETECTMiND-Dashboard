@@ -10,6 +10,7 @@ import {
   TrendingUp, Zap, AlertCircle, CheckCircle,
 } from 'lucide-react'
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
+import { MergeSuggestions } from '@/components/participant-merge'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -24,6 +25,8 @@ interface Participant {
   last_sync_at: string | null
   permissions: Record<string, boolean> | null
   device_info: Record<string, string> | null
+  merged_into?: string | null
+  merged_at?: string | null
 }
 
 const STATUS_OPTIONS = ['active', 'withdrawn']
@@ -530,6 +533,11 @@ function ParticipantsContent() {
           </p>
         </div>
       </div>
+
+      {/* Duplicate-participant merge suggestions */}
+      {participants.length > 0 && (
+        <MergeSuggestions studyId={studyId as string} participants={participants} onMerged={load} />
+      )}
 
       {/* Search + filters toolbar */}
       {participants.length > 0 && (
