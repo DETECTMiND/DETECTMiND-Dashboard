@@ -17,7 +17,7 @@ import {
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which view to read, and how to shape it.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'gesture_pauses'
+  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'gesture_pauses' | 'permission_outages'
 
 interface DatasetDef {
   key: DatasetKey
@@ -35,6 +35,7 @@ const DATASETS: DatasetDef[] = [
   { key: 'notifications', label: 'Notifications',  view: 'daily_notifications',    hasChart: true  },
   { key: 'battery',       label: 'Battery',        view: 'daily_battery_summary',  hasChart: true  },
   { key: 'gesture_pauses', label: 'Gesture Pauses', view: 'gesture_pause_sessions', hasChart: false },
+  { key: 'permission_outages', label: 'Permission Outages', view: 'permission_outages', hasChart: false },
 ]
 
 type ViewMode = 'table' | 'chart'
@@ -270,6 +271,27 @@ export default function ProcessedDataPage() {
         headers: ['Date', 'Avg level %', 'Min %', 'Max %', 'Time charging %'],
         rows: rows.map(r => [r.date, String(r.avg_level), String(r.min_level), String(r.max_level), String(r.pct_charging)]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.avg_level })), chartLabel: 'Avg battery %', unit: '%',
+      }
+    }
+
+    if (dataset === 'permission_outages') {
+      const fmtTs = (iso: string | null) => {
+        if (!iso) return '—'
+        try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
+      }
+      const rows = [...scoped]
+        .sort((a, b) => (b.revoked_at || '').localeCompare(a.revoked_at || ''))
+        .map(r => ({
+          participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }),
+          permission: r.permission,
+          revoked_at: fmtTs(r.revoked_at),
+          restored_at: fmtTs(r.restored_at),
+          outage: r.outage_minutes == null ? 'still off' : `${r.outage_minutes}m`,
+        }))
+      return {
+        headers: isOverall ? ['Participant', 'Permission', 'Turned off', 'Turned back on', 'Duration'] : ['Permission', 'Turned off', 'Turned back on', 'Duration'],
+        rows: rows.map(r => isOverall ? [r.participant, r.permission, r.revoked_at, r.restored_at, r.outage] : [r.permission, r.revoked_at, r.restored_at, r.outage]),
+        csv: rows, chart: [], chartLabel: '', unit: '',
       }
     }
 

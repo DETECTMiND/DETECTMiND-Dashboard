@@ -113,3 +113,15 @@ likely research value.
   researchers can judge reliability per participant.
 - `data_app_usage` (UsageStatsManager) is the robust cross-check for
   screen-based totals; large divergence flags missing screen_state events.
+
+## Permission audit log
+
+The app's PermissionAuditor (in the foreground service, ~45s poll, state
+persisted so it survives the process restart Android triggers on a runtime
+permission change) writes granted/revoked rows to `data_permission_events` for:
+location (fine + background), call log, SMS, activity recognition, post
+notifications, usage access, notification listener, accessibility. The
+`permission_outages` view pairs each revoke with the next grant into an outage
+interval. Surfaced as raw "Permission Events" on Sensor Data and a "Permission
+Outages" dataset on Processed Data — so you can see exactly when a participant
+turned a permission off and for how long (data-coverage gaps).
