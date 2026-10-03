@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import {
   LayoutDashboard, FlaskConical, LogOut, Users, Database,
-  ClipboardList, Settings, List, MessageSquare, Clock,
+  ClipboardList, Settings, List, MessageSquare, LayoutGrid,
 } from 'lucide-react'
 
 interface Study {
@@ -19,7 +19,7 @@ const STUDY_MAIN_PAGES = [
   { suffix: '',               label: 'Overview',      icon: LayoutDashboard },
   { suffix: '/participants',  label: 'Participants',   icon: Users },
   { suffix: '/data',          label: 'Sensor Data',    icon: Database },
-  { suffix: '/usage',         label: 'Phone Usage',    icon: Clock },
+  { suffix: '/processed',     label: 'Processed Data', icon: LayoutGrid },
   { suffix: '/esm-responses', label: 'ESM Responses',  icon: MessageSquare },
 ]
 

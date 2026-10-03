@@ -128,7 +128,7 @@ export default function StudyDetailPage() {
   const tabs = [
     { href: `/studies/${id}/participants`,  label: 'Participants',    icon: Users,         description: `${participantCount} enrolled` },
     { href: `/studies/${id}/data`,          label: 'Sensor Data',     icon: Database,      description: 'Browse & export' },
-    { href: `/studies/${id}/usage`,         label: 'Phone Usage',     icon: Clock,         description: 'Screen time summary' },
+    { href: `/studies/${id}/processed`,     label: 'Processed Data',  icon: Clock,         description: 'Hourly usage & more' },
     { href: `/studies/${id}/esm-responses`, label: 'ESM Responses',    icon: MessageSquare, description: 'Survey responses' },
     { href: `/studies/${id}/esm`,           label: 'ESM / EMA Config', icon: ClipboardList, description: 'Survey schedules' },
     { href: `/studies/${id}/config`,        label: 'Sensor Config',   icon: Settings,      description: 'Collection settings' },
