@@ -8,7 +8,7 @@ import {
   ArrowLeft, ArrowRight, Check, FlaskConical,
   Smartphone, Phone, MessageSquare, MapPin, BatteryCharging,
   Bell, Monitor, Zap, Sun, MousePointerClick, ClipboardList,
-  Clock, ShieldCheck, BadgeCheck,
+  Clock, ShieldCheck, BadgeCheck, Footprints, Compass,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -113,6 +113,24 @@ const SENSOR_OPTIONS: SensorOption[] = [
     label: 'Ambient Light',
     description: 'Ambient light sensor readings (lux) at intervals',
     icon: Sun,
+    hasInterval: true,
+    defaultInterval: 60,
+    category: 'physical',
+  },
+  {
+    key: 'steps',
+    label: 'Physical Activity (Steps)',
+    description: 'Step counts at intervals. Needs a step sensor + Activity Recognition permission',
+    icon: Footprints,
+    hasInterval: true,
+    defaultInterval: 300,
+    category: 'physical',
+  },
+  {
+    key: 'proximity',
+    label: 'Proximity / Orientation',
+    description: 'Near/far distance and device orientation (face up/down/upright) at intervals',
+    icon: Compass,
     hasInterval: true,
     defaultInterval: 60,
     category: 'physical',

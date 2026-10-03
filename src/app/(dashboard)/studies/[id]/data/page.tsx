@@ -301,8 +301,11 @@ function SensorDataInner() {
       setParticipants(pList)
 
       const enabledTypes = new Set((cfgData || []).map((r: any) => r.sensor_type))
+      // gesture_pauses is not a configurable sensor — it's an automatic
+      // byproduct of banking-pause, so always keep it visible.
+      const ALWAYS_SHOW = new Set(['data_gesture_pauses'])
       const filtered = enabledTypes.size > 0
-        ? SENSOR_TABLES.filter(t => enabledTypes.has(t.key.replace(/^data_/, '')))
+        ? SENSOR_TABLES.filter(t => ALWAYS_SHOW.has(t.key) || enabledTypes.has(t.key.replace(/^data_/, '')))
         : SENSOR_TABLES
       setEnabledTables(filtered)
       const firstTable = filtered[0] ?? SENSOR_TABLES[0]

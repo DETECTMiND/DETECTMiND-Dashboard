@@ -16,6 +16,8 @@ const SENSOR_TYPES = [
   { key: 'location', label: 'Location', hasInterval: true, description: 'GPS/network location at intervals or movement threshold' },
   { key: 'battery', label: 'Battery', hasInterval: true, description: 'Records battery level at intervals' },
   { key: 'light', label: 'Ambient Light', hasInterval: true, description: 'Ambient light readings at intervals' },
+  { key: 'steps', label: 'Physical Activity (Steps)', hasInterval: true, description: 'Step counts at intervals. Requires a device with a step sensor and the Activity Recognition permission.' },
+  { key: 'proximity', label: 'Proximity / Orientation', hasInterval: true, description: 'Near/far distance and device orientation (face up/down/upright) at intervals' },
 ]
 
 const SCREEN_INTERACTION_DEFAULTS = {
