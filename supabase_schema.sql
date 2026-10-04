@@ -920,3 +920,33 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID) TO anon, authenticated;
+
+-- ============================================================
+-- POSTGREST TABLE PRIVILEGES
+-- ============================================================
+-- clear_database.sql recreates the public schema, so Supabase's usual grants
+-- are removed with it. RLS policies do not grant table access by themselves:
+-- PostgREST roles need both the base privilege below and a matching policy.
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+
+GRANT SELECT ON studies, sensor_configs, esm_schedules, esm_questions TO anon;
+GRANT SELECT, INSERT, UPDATE ON participants TO anon;
+GRANT INSERT ON
+    data_app_usage,
+    data_notifications,
+    data_battery,
+    data_calls,
+    data_sms,
+    data_esm_responses,
+    data_location,
+    data_light,
+    data_screen_state,
+    data_gestures,
+    data_steps,
+    data_proximity,
+    data_gesture_pauses,
+    data_permission_events,
+    sync_log
+TO anon;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;

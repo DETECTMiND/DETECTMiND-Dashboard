@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { FlaskConical, Users, ChevronRight, Plus } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
@@ -24,20 +24,29 @@ const STATUS_STYLES: Record<string, { pill: string; border: string; dot: string 
 }
 
 export default function StudiesPage() {
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
   const [studies, setStudies] = useState<Study[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase.from('studies').select('*').order('created_at', { ascending: false })
-      if (!data) return
-      const { data: counts } = await supabase.from('participants').select('study_id')
+      const { data, error } = await supabase.from('studies').select('*').order('created_at', { ascending: false })
+      if (error) {
+        console.error(error)
+        setLoadError(error.message)
+        setLoading(false)
+        return
+      }
+      const { data: counts, error: countsError } = await supabase.from('participants').select('study_id')
+      if (countsError) console.error(countsError)
       const countMap: Record<string, number> = {}
       ;(counts || []).forEach(p => { countMap[p.study_id] = (countMap[p.study_id] || 0) + 1 })
-      setStudies(data.map(s => ({ ...s, participant_count: countMap[s.id] || 0 })))
+      setStudies((data || []).map(s => ({ ...s, participant_count: countMap[s.id] || 0 })))
+      setLoading(false)
     }
     load()
-  }, [])
+  }, [supabase])
 
   return (
     <div className="space-y-6">
@@ -54,7 +63,16 @@ export default function StudiesPage() {
         </Link>
       </div>
 
-      {studies.length === 0 ? (
+      {loadError ? (
+        <div role="alert" className="bg-red-50 rounded-xl border border-red-200 px-5 py-4">
+          <p className="font-semibold text-red-800 text-sm">Could not load studies</p>
+          <p className="text-red-700 text-sm mt-1">{loadError}</p>
+        </div>
+      ) : loading ? (
+        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
+          <p className="text-gray-500 text-sm">Loading studies…</p>
+        </div>
+      ) : studies.length === 0 ? (
         <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center">
           <FlaskConical size={40} className="mx-auto text-gray-300 mb-3" />
           <p className="text-gray-500 font-medium">No studies yet</p>
