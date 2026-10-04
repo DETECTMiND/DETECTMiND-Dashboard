@@ -12,6 +12,8 @@ import {
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
 import { MergeSuggestions } from '@/components/participant-merge'
 import { PermissionHistoryModal } from '@/components/permission-history-modal'
+import { PinLockouts } from '@/components/pin-lockouts'
+import { MergeAudit } from '@/components/merge-audit'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -25,9 +27,10 @@ interface Participant {
   enrolled_at: string
   last_sync_at: string | null
   permissions: Record<string, boolean> | null
-  device_info: Record<string, string> | null
+  device_info: Record<string, string | number | boolean> | null
   merged_into?: string | null
   merged_at?: string | null
+  merge_adopted_at?: string | null
 }
 
 const STATUS_OPTIONS = ['active', 'withdrawn']
@@ -51,6 +54,7 @@ interface SyncRow {
   status: string
   records_synced: number
   participant_id: string
+  error_message?: string | null
 }
 
 function pName(p: Participant) { return p.label || p.device_id }
@@ -454,18 +458,27 @@ function ParticipantsContent() {
   const [search, setSearch] = useState('')
   const [syncModalParticipant, setSyncModalParticipant] = useState<Participant | null>(null)
   const [permModalParticipant, setPermModalParticipant] = useState<Participant | null>(null)
+  const [latestSync, setLatestSync] = useState<Record<string, SyncRow>>({})
   const [activeFilter, setActiveFilter] = useState<FilterKey>(() => {
     const f = searchParams.get('filter')
     return (f && ['all', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
   })
 
   async function load() {
-    const { data } = await supabase
-      .from('participants')
-      .select('*')
-      .eq('study_id', studyId)
-      .order('enrolled_at', { ascending: false })
-    setParticipants((data || []) as Participant[])
+    const { data } = await supabase.from('participants').select('*')
+      .eq('study_id', studyId).order('enrolled_at', { ascending: false })
+    const rows = (data || []) as Participant[]
+    setParticipants(rows)
+    const ids = new Set(rows.map(p => p.id))
+    const { data: logs } = ids.size
+      ? await supabase.from('sync_log').select('synced_at,status,records_synced,participant_id,error_message')
+          .in('participant_id', [...ids]).order('synced_at', { ascending: false }).limit(2000)
+      : { data: [] }
+    const newest: Record<string, SyncRow> = {}
+    for (const log of (logs || []) as SyncRow[]) {
+      if (ids.has(log.participant_id) && !newest[log.participant_id]) newest[log.participant_id] = log
+    }
+    setLatestSync(newest)
   }
 
   useEffect(() => { load() }, [studyId])
@@ -541,6 +554,12 @@ function ParticipantsContent() {
         <MergeSuggestions participants={participants} onMerged={load} />
       )}
 
+      <PinLockouts studyId={studyId as string} />
+      <MergeAudit
+        studyId={studyId as string}
+        names={Object.fromEntries(participants.map(p => [p.id, pName(p)]))}
+      />
+
       {/* Search + filters toolbar */}
       {participants.length > 0 && (
         <div className="flex items-center gap-2 flex-wrap">
@@ -612,6 +631,7 @@ function ParticipantsContent() {
             const hasPermIssues = !isWithdrawn && hasPermIssue(p)
             const stale = !isWithdrawn && isSyncStale(p)
             const hasAlerts = stale || hasPermIssues
+            const health = latestSync[p.id]
 
             return (
               <div key={p.id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -665,8 +685,26 @@ function ParticipantsContent() {
                           </span>
                           {p.device_info?.model && <span className="text-gray-300">·</span>}
                           {p.device_info?.model && <span>{p.device_info.model}</span>}
-                          {p.device_info?.os_version && <span>OS {p.device_info.os_version}</span>}
+                          {p.device_info?.android_version && <span>Android {p.device_info.android_version}</span>}
+                          {p.device_info?.app_version && <span>App {p.device_info.app_version}</span>}
+                          {p.device_info?.pending_records && <span>{p.device_info.pending_records} pending</span>}
                         </div>
+
+                        {p.merged_into && !p.merge_adopted_at && (
+                          <div className="mt-2 text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1 inline-flex">
+                            Waiting for device to adopt primary on its next sync
+                          </div>
+                        )}
+                        {p.merged_into && p.merge_adopted_at && (
+                          <div className="mt-2 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-1 inline-flex">
+                            Device adopted primary {formatDistanceToNow(new Date(p.merge_adopted_at), { addSuffix: true })}
+                          </div>
+                        )}
+                        {health && health.status !== 'success' && (
+                          <div className="mt-2 text-[11px] text-red-600">
+                            Last sync: {health.status}{health.error_message ? ` · ${health.error_message}` : ''}
+                          </div>
+                        )}
 
                         {/* Alert tags */}
                         {hasAlerts && (

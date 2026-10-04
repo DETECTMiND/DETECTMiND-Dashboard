@@ -1,63 +1,72 @@
-import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase-server'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+type EnrollBody = {
+  study_id?: unknown
+  device_id?: unknown
+  pin?: unknown
+  device_info?: unknown
+  request_id?: unknown
+}
+
+type EnrollResult = {
+  participant_id: string | null
+  device_id: string | null
+  error_message: string | null
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const DEVICE_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 export async function POST(req: NextRequest) {
-  let body: Record<string, any>
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  let body: EnrollBody
   try {
-    body = await req.json()
+    body = await req.json() as EnrollBody
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  const { study_id, device_id, label, device_info, permissions } = body
+  const studyId = typeof body.study_id === 'string' ? body.study_id.trim() : ''
+  const deviceId = typeof body.device_id === 'string' ? body.device_id.trim() : ''
+  const pin = typeof body.pin === 'string' ? body.pin : null
+  const requestId = typeof body.request_id === 'string' && UUID.test(body.request_id) ? body.request_id : null
+  const deviceInfo = body.device_info && typeof body.device_info === 'object' && !Array.isArray(body.device_info)
+    ? body.device_info
+    : {}
 
-  if (!study_id || !device_id) {
-    return NextResponse.json({ error: 'study_id and device_id are required' }, { status: 400 })
+  if (!UUID.test(studyId) || !DEVICE_ID.test(deviceId)) {
+    return NextResponse.json({ error: 'A valid study_id and device_id are required' }, { status: 400 })
   }
 
-  // Find all existing device_ids in this study that start with the base device_id
-  const { data: existing } = await supabase
-    .from('participants')
-    .select('device_id')
-    .eq('study_id', study_id)
-    .like('device_id', `${device_id}%`)
-
-  const takenIds = new Set((existing || []).map((r: { device_id: string }) => r.device_id))
-
-  // Resolve a free device_id: try the original, then _2, _3, ...
-  let resolvedId = device_id
-  if (takenIds.has(resolvedId)) {
-    let suffix = 2
-    while (takenIds.has(`${device_id}_${suffix}`)) suffix++
-    resolvedId = `${device_id}_${suffix}`
-  }
-
+  // Keep PIN verification, throttling and ID collision handling in the single
+  // canonical database transaction used by the Android app.
   const { data, error } = await supabase
-    .from('participants')
-    .insert({
-      study_id,
-      device_id: resolvedId,
-      label: label ?? null,
-      device_info: device_info ?? {},
-      permissions: permissions ?? {},
-      status: 'active',
+    .rpc('enroll_participant', {
+      p_study: studyId,
+      p_device_id: deviceId,
+      p_pin: pin,
+      p_device_info: deviceInfo,
+      p_request_id: requestId,
     })
-    .select()
-    .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: error.message }, { status: 400 })
+  }
+
+  const result = (data as EnrollResult[] | null)?.[0]
+  if (!result) return NextResponse.json({ error: 'Enrollment returned no result' }, { status: 502 })
+  if (result.error_message) {
+    return NextResponse.json({ error: result.error_message }, { status: 400 })
   }
 
   return NextResponse.json({
-    ...data,
-    // Let the app know if the ID was remapped
-    device_id_remapped: resolvedId !== device_id,
-    original_device_id: device_id,
+    participant_id: result.participant_id,
+    device_id: result.device_id,
+    device_id_remapped: result.device_id !== deviceId,
+    original_device_id: deviceId,
   }, { status: 201 })
 }

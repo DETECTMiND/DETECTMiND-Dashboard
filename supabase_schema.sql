@@ -2,8 +2,12 @@
 -- Research Data Collection App - Supabase Database Schema
 -- ============================================================
 
--- Enable required extensions
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable required extensions. Supabase keeps extension-owned objects outside
+-- public so resetting the application schema does not orphan them.
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+SET search_path = public, extensions;
 
 -- ============================================================
 -- CORE TABLES
@@ -34,6 +38,7 @@ CREATE TABLE participants (
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'withdrawn')),
     device_info JSONB DEFAULT '{}', -- OS version, model, app version
     permissions JSONB DEFAULT '{}', -- current permission states reported by app
+    enrollment_request_id UUID UNIQUE, -- makes enrollment retries idempotent
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(study_id, device_id)
@@ -651,6 +656,23 @@ GRANT SELECT ON permission_outages TO authenticated;
 -- 1. Track merges on the participant row.
 ALTER TABLE participants ADD COLUMN IF NOT EXISTS merged_into UUID REFERENCES participants(id);
 ALTER TABLE participants ADD COLUMN IF NOT EXISTS merged_at TIMESTAMPTZ;
+ALTER TABLE participants ADD COLUMN IF NOT EXISTS merge_adopted_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS participant_merge_audit (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+    primary_participant_id UUID NOT NULL REFERENCES participants(id),
+    duplicate_participant_id UUID NOT NULL REFERENCES participants(id),
+    merged_by UUID DEFAULT auth.uid(),
+    merged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    adopted_at TIMESTAMPTZ
+);
+ALTER TABLE participant_merge_audit ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Authenticated users read merge audit" ON participant_merge_audit
+    FOR SELECT USING (auth.role() = 'authenticated');
+CREATE POLICY "Authenticated users create merge audit" ON participant_merge_audit
+    FOR INSERT WITH CHECK (auth.role() = 'authenticated');
+GRANT SELECT, INSERT ON participant_merge_audit TO authenticated;
 
 -- 2. The merge function. SECURITY INVOKER so it runs under the caller's RLS
 --    (authenticated researchers only). All re-points happen in one transaction;
@@ -670,13 +692,16 @@ BEGIN
         RAISE EXCEPTION 'Primary and duplicate must differ';
     END IF;
 
-    SELECT study_id INTO v_study_primary   FROM participants WHERE id = p_primary;
-    SELECT study_id INTO v_study_duplicate FROM participants WHERE id = p_duplicate;
+    SELECT study_id INTO v_study_primary   FROM participants WHERE id = p_primary FOR UPDATE;
+    SELECT study_id INTO v_study_duplicate FROM participants WHERE id = p_duplicate FOR UPDATE;
     IF v_study_primary IS NULL OR v_study_duplicate IS NULL THEN
         RAISE EXCEPTION 'Participant not found';
     END IF;
     IF v_study_primary <> v_study_duplicate THEN
         RAISE EXCEPTION 'Participants are in different studies';
+    END IF;
+    IF EXISTS (SELECT 1 FROM participants WHERE id = p_primary AND merged_into IS NOT NULL) THEN
+        RAISE EXCEPTION 'Primary participant has already been merged';
     END IF;
 
     -- Re-point every data table + sync_log from duplicate -> primary.
@@ -716,8 +741,12 @@ BEGIN
        SET status = 'withdrawn',
            merged_into = p_primary,
            merged_at = now(),
+           merge_adopted_at = NULL,
            updated_at = now()
      WHERE id = p_duplicate;
+
+    INSERT INTO participant_merge_audit(study_id, primary_participant_id, duplicate_participant_id)
+    VALUES(v_study_primary, p_primary, p_duplicate);
 
     RETURN jsonb_build_object(
         'primary', p_primary,
@@ -734,6 +763,18 @@ $$;
 -- has mixed in. Treat merge as a deliberate, confirmed action.
 
 GRANT EXECUTE ON FUNCTION merge_participants(UUID, UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION adopt_participant_merge(p_duplicate UUID, p_primary UUID)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM participants WHERE id=p_duplicate AND merged_into=p_primary) THEN RETURN false; END IF;
+    UPDATE participants SET merge_adopted_at=COALESCE(merge_adopted_at,now()) WHERE id=p_duplicate;
+    UPDATE participant_merge_audit SET adopted_at=COALESCE(adopted_at,now())
+      WHERE duplicate_participant_id=p_duplicate AND primary_participant_id=p_primary;
+    RETURN true;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION adopt_participant_merge(UUID, UUID) TO anon, authenticated;
 
 -- ─── Study PIN (optional 4-digit enrolment gate) ───
 -- The hash lives in a separate table (study_pins) that anon cannot read, so the
@@ -799,8 +840,10 @@ REVOKE ALL ON pin_attempts FROM anon;
 GRANT SELECT, UPDATE, DELETE ON pin_attempts TO authenticated;
 
 DROP FUNCTION IF EXISTS enroll_participant(UUID, TEXT, TEXT, JSONB);
+DROP FUNCTION IF EXISTS enroll_participant(UUID, TEXT, TEXT, JSONB, UUID);
 CREATE FUNCTION enroll_participant(
-    p_study UUID, p_device_id TEXT, p_pin TEXT DEFAULT NULL, p_device_info JSONB DEFAULT '{}'::jsonb
+    p_study UUID, p_device_id TEXT, p_pin TEXT DEFAULT NULL, p_device_info JSONB DEFAULT '{}'::jsonb,
+    p_request_id UUID DEFAULT NULL
 )
 RETURNS TABLE (participant_id UUID, device_id TEXT, error_message TEXT)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
@@ -810,6 +853,13 @@ DECLARE
     MAX_FAILS CONSTANT INT := 5; LOCK_MINUTES CONSTANT INT := 15;
     STUDY_WINDOW_MIN CONSTANT INT := 10; STUDY_MAX_FAILS CONSTANT INT := 50;
 BEGIN
+    IF p_request_id IS NOT NULL THEN
+        SELECT p.id, p.device_id INTO v_id, v_resolved FROM participants AS p
+         WHERE p.enrollment_request_id = p_request_id AND p.study_id = p_study;
+        IF v_id IS NOT NULL THEN
+            participant_id := v_id; device_id := v_resolved; error_message := NULL; RETURN NEXT; RETURN;
+        END IF;
+    END IF;
     SELECT status, pin_required INTO v_status, v_required FROM studies WHERE id = p_study;
     IF v_status IS NULL THEN RAISE EXCEPTION 'Study not found'; END IF;
     IF v_status NOT IN ('active', 'paused') THEN RAISE EXCEPTION 'Study is not open for enrolment'; END IF;
@@ -862,11 +912,11 @@ BEGIN
     ) LOOP
         v_resolved := p_device_id || '_' || v_suffix; v_suffix := v_suffix + 1;
     END LOOP;
-    INSERT INTO participants (study_id, device_id, label, status, device_info, enrolled_at)
-    VALUES (p_study, v_resolved, 'Device ' || v_resolved, 'active', COALESCE(p_device_info, '{}'::jsonb), now())
+    INSERT INTO participants (study_id, device_id, label, status, device_info, enrolled_at, enrollment_request_id)
+    VALUES (p_study, v_resolved, 'Device ' || v_resolved, 'active', COALESCE(p_device_info, '{}'::jsonb), now(), p_request_id)
     RETURNING id INTO v_id;
     participant_id := v_id; device_id := v_resolved; error_message := NULL; RETURN NEXT;
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID) TO anon, authenticated;

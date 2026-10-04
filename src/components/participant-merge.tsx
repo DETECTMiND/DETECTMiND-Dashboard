@@ -13,7 +13,7 @@ interface Participant {
   status: string
   enrolled_at: string
   last_sync_at: string | null
-  device_info: Record<string, string> | null
+  device_info: Record<string, string | number | boolean> | null
   merged_into?: string | null
 }
 
@@ -32,7 +32,8 @@ function pName(p: Participant): string {
 
 function model(p: Participant): string | null {
   const di = p.device_info || {}
-  return (di.model || di.device || di.manufacturer || null)
+  const value = di.model || di.device || di.manufacturer
+  return value == null ? null : String(value)
 }
 
 /**
@@ -188,6 +189,12 @@ export function MergeSuggestions({
                 <div className="divide-y divide-gray-50">
                   {g.members.map(m => {
                     const tl = timelines[m.id]
+                    const latestSync = Math.max(...g.members.map(member => {
+                      const value = timelines[member.id]?.last || member.last_sync_at
+                      return value ? new Date(value).getTime() : 0
+                    }))
+                    const memberSync = tl?.last || m.last_sync_at
+                    const likelyCurrent = !!memberSync && new Date(memberSync).getTime() === latestSync && latestSync > 0
                     return (
                       <div key={m.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                         <div className="min-w-0">
@@ -196,6 +203,7 @@ export function MergeSuggestions({
                             {model(m) || 'unknown device'} · enrolled {new Date(m.enrolled_at).toLocaleDateString()}
                             {tl && tl.first && ` · data ${new Date(tl.first).toLocaleDateString()} to ${tl.last ? new Date(tl.last).toLocaleDateString() : 'now'} (${tl.records.toLocaleString()})`}
                           </p>
+                          {likelyCurrent && <p className="text-[11px] font-semibold text-blue-600 mt-0.5">Likely current phone · most recent sync</p>}
                         </div>
                         <span className={`text-[11px] px-2 py-0.5 rounded-full shrink-0 ${m.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
                           {m.status}
@@ -234,24 +242,32 @@ export function MergeSuggestions({
               <button onClick={() => !merging && setActiveBase(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
             </div>
 
-            <p className="text-sm text-gray-600 mb-3">Choose which participant keeps all the data. The others are merged into it and marked withdrawn.</p>
+            <p className="text-sm text-gray-600 mb-3">Choose which participant keeps all the data. The phone using another account will switch to this primary automatically on its next successful sync.</p>
 
             <div className="space-y-2 mb-4">
-              {active.members.map(m => (
+              {active.members.map(m => {
+                const latestSync = Math.max(...active.members.map(member => {
+                  const value = timelines[member.id]?.last || member.last_sync_at
+                  return value ? new Date(value).getTime() : 0
+                }))
+                const value = timelines[m.id]?.last || m.last_sync_at
+                const likelyCurrent = !!value && new Date(value).getTime() === latestSync && latestSync > 0
+                return (
                 <label key={m.id} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer ${primaryId === m.id ? 'border-blue-300 bg-blue-50' : 'border-gray-200'}`}>
                   <input type="radio" checked={primaryId === m.id} onChange={() => setPrimaryId(m.id)} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-gray-800 truncate">{pName(m)}</p>
-                    <p className="text-xs text-gray-400">{model(m) || 'unknown'} · enrolled {new Date(m.enrolled_at).toLocaleDateString()}</p>
+                    <p className="text-xs text-gray-400">{model(m) || 'unknown'} · enrolled {new Date(m.enrolled_at).toLocaleDateString()}{likelyCurrent ? ' · likely current phone' : ''}</p>
                   </div>
                   {primaryId === m.id && <span className="text-xs font-semibold text-blue-600 shrink-0">Primary</span>}
                 </label>
-              ))}
+                )
+              })}
             </div>
 
             <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 mb-4 flex gap-2">
               <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-              <span>This re-points all sensor data from the other {active.members.length - 1} participant(s) onto the primary. The duplicate rows are kept (withdrawn) but the data move is <strong>not automatically reversible</strong>.</span>
+              <span>This re-points all sensor data from the other {active.members.length - 1} participant(s) onto the primary. Keep the current phone online after merging so it can adopt the primary. The data move is <strong>not automatically reversible</strong>.</span>
             </div>
 
             <label className="block text-xs text-gray-500 mb-1">Type <strong>MERGE</strong> to confirm</label>

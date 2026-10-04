@@ -46,6 +46,10 @@ VALUES (
   )
 );
 
+-- Production-test PIN for this seeded study: 1234.
+-- Change it from the dashboard before any real participant recruitment.
+PERFORM set_study_pin(v_digital_study_id, '1234');
+
 -- Sensor configs for Digital Habits & Focus Study
 INSERT INTO sensor_configs (study_id, sensor_type, enabled, interval_seconds, config)
 VALUES
