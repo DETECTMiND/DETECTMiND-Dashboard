@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, Download, Table2, BarChart2, LayoutGrid,
+  ArrowLeft, Download, Table2, BarChart2, LayoutGrid, Users,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -445,12 +445,15 @@ export default function ProcessedDataPage() {
       )}
       {!error && participants.length === 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-6 py-16 text-center">
+          <Users size={32} className="mx-auto text-gray-300 mb-3" />
           <p className="text-gray-600 font-medium">No participants enrolled yet</p>
+          <p className="text-gray-400 text-sm mt-1">Processed data appears once participants join and sync.</p>
         </div>
       )}
       {loading && !error && participants.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-6 py-16 text-center">
-          <div className="h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-gray-400 text-sm">Loading {def.label.toLowerCase()}…</p>
         </div>
       )}
       {!error && !loading && participants.length > 0 && !hasData && (
