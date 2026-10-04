@@ -31,6 +31,7 @@ interface WizardState {
   syncInterval: number
   guidedPermissions: boolean
   autoParticipantId: boolean
+  pin: string            // optional 4-digit PIN; empty = no PIN
 
   // Step 2 – Data to Collect
   sensors: Record<string, { enabled: boolean; interval_seconds: number | null; config: Record<string, any> }>
@@ -242,6 +243,24 @@ function StepBasicInfo({ state, setState }: { state: WizardState; setState: (s: 
             <option value={1440}>Once a day</option>
           </select>
           <p className="text-xs text-gray-400">How often the app uploads data to the server</p>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1.5">
+          Study PIN <span className="text-gray-400 font-normal">(optional)</span>
+        </label>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            inputMode="numeric"
+            maxLength={4}
+            value={state.pin}
+            onChange={e => set({ pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+            placeholder="4 digits"
+            className="w-32 px-3 py-2.5 border border-gray-200 rounded-lg text-sm tracking-[0.3em] font-mono text-center focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
+          />
+          <p className="text-xs text-gray-400">If set, only participants given this PIN can join. You can change it later.</p>
         </div>
       </div>
 
@@ -699,6 +718,7 @@ export default function NewStudyPage() {
     syncInterval: 30,
     guidedPermissions: false,
     autoParticipantId: false,
+    pin: '',
     sensors: defaultSensors(),
     enableEsm: false,
   })
@@ -761,6 +781,11 @@ export default function NewStudyPage() {
           config: state.sensors[s.key]?.config ?? {},
         }))
       )
+
+      // 2b. Set the study PIN if one was entered (hashed server-side).
+      if (/^\d{4}$/.test(state.pin)) {
+        await supabase.rpc('set_study_pin', { p_study: study.id, p_pin: state.pin })
+      }
 
       // 3. Navigate
       if (state.enableEsm) {

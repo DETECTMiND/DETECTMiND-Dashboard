@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock } from 'lucide-react'
+import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock, Lock } from 'lucide-react'
 
 interface Study {
   id: string
@@ -14,6 +14,7 @@ interface Study {
   status: string
   sync_interval_minutes: number
   config: Record<string, any> | null
+  pin_required?: boolean
   created_at: string
 }
 
@@ -45,6 +46,11 @@ export default function StudyDetailPage() {
   const [guidedPermissions, setGuidedPermissions] = useState(false)
   const [autoParticipantId, setAutoParticipantId] = useState(false)
   const [participantCount, setParticipantCount] = useState(0)
+  // PIN: pinRequired reflects whether the study currently has one; pinInput is
+  // the new value being set (empty = leave unchanged / cleared via the toggle).
+  const [pinRequired, setPinRequired] = useState(false)
+  const [pinInput, setPinInput] = useState('')
+  const [pinError, setPinError] = useState<string | null>(null)
   const [bankingPause, setBankingPause] = useState<{
     enabled: boolean
     apps: string[]
@@ -72,6 +78,7 @@ export default function StudyDetailPage() {
         setStudy(data)
         setForm(data)
         setGuidedPermissions(!!(data.config?.guided_permissions))
+        setPinRequired(!!data.pin_required)
         setAutoParticipantId(!!(data.config?.auto_participant_id))
         if (data.config?.banking_pause) {
           setBankingPause({
@@ -96,6 +103,12 @@ export default function StudyDetailPage() {
     if (autoParticipantId) updatedConfig.auto_participant_id = true
     else delete updatedConfig.auto_participant_id
     updatedConfig.banking_pause = { ...bankingPause }
+    // Validate a new PIN if one was entered.
+    if (pinInput && !/^\d{4}$/.test(pinInput)) {
+      setPinError('PIN must be exactly 4 digits')
+      return
+    }
+    setPinError(null)
     const { error } = await supabase.from('studies').update({
       name: form.name || study.name,
       description: form.description ?? study.description,
@@ -104,7 +117,20 @@ export default function StudyDetailPage() {
       sync_interval_minutes: form.sync_interval_minutes ?? study.sync_interval_minutes,
       config: updatedConfig,
     }).eq('id', id)
-    if (!error) { setStudy({ ...study, ...form, config: updatedConfig } as Study); setEditing(false) }
+    if (error) return
+    // Apply PIN changes via the server function (hashes it; never stored in plain text).
+    // - pinRequired off  -> clear any PIN
+    // - pinInput set      -> set/replace the PIN
+    // - pinRequired on but no new input -> leave the existing PIN unchanged
+    if (!pinRequired) {
+      await supabase.rpc('set_study_pin', { p_study: id, p_pin: null })
+    } else if (pinInput) {
+      const { error: pinErr } = await supabase.rpc('set_study_pin', { p_study: id, p_pin: pinInput })
+      if (pinErr) { setPinError(pinErr.message); return }
+    }
+    setPinInput('')
+    setStudy({ ...study, ...form, config: updatedConfig, pin_required: pinRequired } as Study)
+    setEditing(false)
   }
 
   async function handleDelete() {
@@ -249,6 +275,45 @@ export default function StudyDetailPage() {
                     <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
                   </label>
                 </div>
+              </div>
+            </div>
+
+            {/* Study PIN */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Study PIN</label>
+              <div className={`rounded-xl border-2 transition-all ${pinRequired ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white'}`}>
+                <div className="flex items-center justify-between px-4 py-3.5">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${pinRequired ? 'bg-blue-100' : 'bg-gray-100'}`}>
+                      <Lock size={17} className={pinRequired ? 'text-blue-600' : 'text-gray-400'} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`font-semibold text-sm ${pinRequired ? 'text-gray-900' : 'text-gray-600'}`}>Require a 4-digit PIN to join</p>
+                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">Only participants given the PIN can enrol in this study</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+                    <input type="checkbox" checked={pinRequired} onChange={e => { setPinRequired(e.target.checked); if (!e.target.checked) setPinInput('') }} className="sr-only peer" />
+                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
+                  </label>
+                </div>
+                {pinRequired && (
+                  <div className="px-4 pb-4 pt-1">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={4}
+                      value={pinInput}
+                      onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(null) }}
+                      placeholder="Set a new PIN"
+                      className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm tracking-[0.4em] font-mono text-center focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    />
+                    <p className="text-xs text-gray-400 mt-1.5">
+                      Leave blank to keep the current PIN. The PIN is stored securely and never shown again.
+                    </p>
+                    {pinError && <p className="text-xs text-red-600 mt-1">{pinError}</p>}
+                  </div>
+                )}
               </div>
             </div>
 
