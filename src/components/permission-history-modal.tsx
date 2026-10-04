@@ -30,8 +30,21 @@ function fmt(iso: string | null): string {
   try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
 }
 
+// Friendly labels for the raw permission keys the app reports.
+const PERM_LABELS: Record<string, string> = {
+  accessibility: 'Gestures (accessibility)',
+  usage_access: 'Usage access',
+  notification_listener: 'Notification access',
+  location_fine: 'Location (precise)',
+  location_background: 'Location (background)',
+  activity_recognition: 'Physical activity',
+  post_notifications: 'Notifications',
+  call_log: 'Call log',
+  sms: 'SMS',
+}
+
 function prettyPerm(p: string): string {
-  return p.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return PERM_LABELS[p] || p.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
 function fmtDuration(mins: number | null): string {

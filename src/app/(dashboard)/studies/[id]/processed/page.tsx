@@ -17,7 +17,7 @@ import {
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which view to read, and how to shape it.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'gesture_pauses' | 'permission_outages'
+  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages'
 
 interface DatasetDef {
   key: DatasetKey
@@ -34,7 +34,6 @@ const DATASETS: DatasetDef[] = [
   { key: 'first_last',    label: 'First / Last Use', view: 'daily_first_last_use', hasChart: false },
   { key: 'notifications', label: 'Notifications',  view: 'daily_notifications',    hasChart: true  },
   { key: 'battery',       label: 'Battery',        view: 'daily_battery_summary',  hasChart: true  },
-  { key: 'gesture_pauses', label: 'Gesture Pauses', view: 'gesture_pause_sessions', hasChart: false },
   { key: 'permission_outages', label: 'Permission Outages', view: 'permission_outages', hasChart: false },
 ]
 
@@ -293,26 +292,6 @@ export default function ProcessedDataPage() {
       return {
         headers: isOverall ? ['Participant', 'Permission', 'Turned off', 'Turned back on', 'Duration'] : ['Permission', 'Turned off', 'Turned back on', 'Duration'],
         rows: rows.map(r => isOverall ? [r.participant, r.permission, r.revoked_at, r.restored_at, r.outage] : [r.permission, r.revoked_at, r.restored_at, r.outage]),
-        csv: rows, chart: [], chartLabel: '', unit: '',
-      }
-    }
-
-    if (dataset === 'gesture_pauses') {
-      const fmtTs = (iso: string | null) => {
-        if (!iso) return '—'
-        try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
-      }
-      const rows = [...scoped]
-        .sort((a, b) => (b.paused_at || '').localeCompare(a.paused_at || ''))
-        .map(r => ({
-          participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }),
-          paused_at: fmtTs(r.paused_at),
-          resumed_at: fmtTs(r.resumed_at),
-          gap_minutes: r.gap_minutes == null ? 'open' : `${r.gap_minutes}m`,
-        }))
-      return {
-        headers: isOverall ? ['Participant', 'Paused', 'Resumed', 'Gap'] : ['Paused', 'Resumed', 'Gap'],
-        rows: rows.map(r => isOverall ? [r.participant, r.paused_at, r.resumed_at, r.gap_minutes] : [r.paused_at, r.resumed_at, r.gap_minutes]),
         csv: rows, chart: [], chartLabel: '', unit: '',
       }
     }
