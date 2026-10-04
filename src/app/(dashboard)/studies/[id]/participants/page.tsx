@@ -5,7 +5,7 @@ import { useEffect, useState, Suspense, useMemo, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  ArrowLeft, AlertTriangle, CheckCircle2, Clock, Smartphone, Pencil,
+  AlertTriangle, CheckCircle2, Clock, Smartphone, Pencil,
   Database, MessageSquare, Search, X, Activity, RefreshCw,
   TrendingUp, Zap, AlertCircle, CheckCircle, ShieldCheck,
 } from 'lucide-react'
@@ -39,10 +39,11 @@ const STATUS_STYLES: Record<string, string> = {
   withdrawn: 'bg-red-50 text-red-600 border border-red-200',
 }
 
-type FilterKey = 'all' | 'active' | 'withdrawn' | 'stale' | 'perm_missing'
+type FilterKey = 'all' | 'issues' | 'active' | 'withdrawn' | 'stale' | 'perm_missing'
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all',          label: 'All' },
+  { key: 'issues',       label: 'Needs attention' },
   { key: 'active',       label: 'Active' },
   { key: 'withdrawn',    label: 'Withdrawn' },
   { key: 'stale',        label: 'Sync Stale' },
@@ -458,10 +459,12 @@ function ParticipantsContent() {
   const [search, setSearch] = useState('')
   const [syncModalParticipant, setSyncModalParticipant] = useState<Participant | null>(null)
   const [permModalParticipant, setPermModalParticipant] = useState<Participant | null>(null)
+  const [detailParticipant, setDetailParticipant] = useState<Participant | null>(null)
   const [latestSync, setLatestSync] = useState<Record<string, SyncRow>>({})
+  const [renderedAt] = useState(() => Date.now())
   const [activeFilter, setActiveFilter] = useState<FilterKey>(() => {
     const f = searchParams.get('filter')
-    return (f && ['all', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
+    return (f && ['all', 'issues', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
   })
 
   async function load() {
@@ -469,6 +472,8 @@ function ParticipantsContent() {
       .eq('study_id', studyId).order('enrolled_at', { ascending: false })
     const rows = (data || []) as Participant[]
     setParticipants(rows)
+    const requestedParticipant = searchParams.get('participant')
+    if (requestedParticipant) setDetailParticipant(rows.find(p => p.id === requestedParticipant) || null)
     const ids = new Set(rows.map(p => p.id))
     const { data: logs } = ids.size
       ? await supabase.from('sync_log').select('synced_at,status,records_synced,participant_id,error_message')
@@ -501,7 +506,7 @@ function ParticipantsContent() {
 
   function isSyncStale(p: Participant): boolean {
     if (!p.last_sync_at) return true
-    return Date.now() - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
+    return renderedAt - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
   }
 
   function hasPermIssue(p: Participant): boolean {
@@ -519,6 +524,7 @@ function ParticipantsContent() {
       if (!name.includes(q) && !did.includes(q)) return false
     }
     if (activeFilter === 'active')       return p.status === 'active'
+    if (activeFilter === 'issues')       return p.status === 'active' && (isSyncStale(p) || hasPermIssue(p))
     if (activeFilter === 'withdrawn')    return p.status === 'withdrawn'
     if (activeFilter === 'stale')        return p.status === 'active' && isSyncStale(p)
     if (activeFilter === 'perm_missing') return p.status === 'active' && hasPermIssue(p)
@@ -527,6 +533,7 @@ function ParticipantsContent() {
 
   const filterCounts: Record<FilterKey, number> = {
     all:          participants.length,
+    issues:       activeOnly.filter(p => isSyncStale(p) || hasPermIssue(p)).length,
     active:       participants.filter(p => p.status === 'active').length,
     withdrawn:    participants.filter(p => p.status === 'withdrawn').length,
     stale:        activeOnly.filter(p => isSyncStale(p)).length,
@@ -539,9 +546,6 @@ function ParticipantsContent() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
-          <Link href={`/studies/${studyId}`} className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-3">
-            <ArrowLeft size={14} /> Back to Study
-          </Link>
           <h1 className="text-2xl font-bold text-gray-900">Participants</h1>
           <p className="text-gray-400 text-sm mt-0.5">
             {`${participants.length} enrolled · ${filterCounts.active} active`}
@@ -731,30 +735,7 @@ function ParticipantsContent() {
 
                       {/* Actions */}
                       <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                        <Link
-                          href={`/studies/${studyId}/data?participant=${p.id}`}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-500 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-all"
-                        >
-                          <Database size={12} /> Sensor Data
-                        </Link>
-                        <Link
-                          href={`/studies/${studyId}/esm-responses?participant=${p.id}`}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-500 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200 transition-all"
-                        >
-                          <MessageSquare size={12} /> ESM Responses
-                        </Link>
-                        <button
-                          onClick={() => setSyncModalParticipant(p)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-500 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all"
-                        >
-                          <Activity size={12} /> Sync History
-                        </button>
-                        <button
-                          onClick={() => setPermModalParticipant(p)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-500 hover:bg-amber-50 hover:text-amber-600 hover:border-amber-200 transition-all"
-                        >
-                          <ShieldCheck size={12} /> Permissions
-                        </button>
+                        <button onClick={() => setDetailParticipant(p)} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">View details</button>
                         <select
                           value={p.status}
                           onChange={e => updateStatus(p.id, e.target.value)}
@@ -786,6 +767,27 @@ function ParticipantsContent() {
           participant={permModalParticipant}
           onClose={() => setPermModalParticipant(null)}
         />
+      )}
+      {detailParticipant && (
+        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="participant-detail-title">
+          <button className="absolute inset-0 bg-slate-950/40" onClick={() => setDetailParticipant(null)} aria-label="Close participant details" />
+          <aside className="relative flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-gray-200 p-5">
+              <div><p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Participant</p><h2 id="participant-detail-title" className="mt-1 text-xl font-bold text-gray-900">{pName(detailParticipant)}</h2><p className="mt-1 font-mono text-xs text-gray-500">{detailParticipant.device_id}</p></div>
+              <button onClick={() => setDetailParticipant(null)} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100" aria-label="Close participant details"><X size={18} /></button>
+            </div>
+            <div className="flex-1 space-y-5 overflow-y-auto p-5">
+              <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Status</p><p className="mt-1 text-sm font-semibold capitalize text-gray-900">{detailParticipant.status}</p></div><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Last sync</p><p className="mt-1 text-sm font-semibold text-gray-900">{detailParticipant.last_sync_at ? formatDistanceToNow(new Date(detailParticipant.last_sync_at), { addSuffix: true }) : 'Never'}</p></div></div>
+              <div><h3 className="text-sm font-semibold text-gray-900">Health</h3><div className="mt-2 flex flex-wrap gap-2">{isSyncStale(detailParticipant) && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Sync overdue</span>}{hasPermIssue(detailParticipant) && <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">Permission issue</span>}{!isSyncStale(detailParticipant) && !hasPermIssue(detailParticipant) && <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Healthy</span>}</div></div>
+              <div className="grid gap-2">
+                <Link href={`/studies/${studyId}/data?participant=${detailParticipant.id}`} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-sm font-semibold text-gray-700 hover:bg-gray-50"><Database size={16} />Sensor data</Link>
+                <Link href={`/studies/${studyId}/esm-responses?participant=${detailParticipant.id}`} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-sm font-semibold text-gray-700 hover:bg-gray-50"><MessageSquare size={16} />Survey responses</Link>
+                <button onClick={() => { setDetailParticipant(null); setSyncModalParticipant(detailParticipant) }} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"><Activity size={16} />Sync history</button>
+                <button onClick={() => { setDetailParticipant(null); setPermModalParticipant(detailParticipant) }} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"><ShieldCheck size={16} />Permission history</button>
+              </div>
+            </div>
+          </aside>
+        </div>
       )}
     </div>
   )

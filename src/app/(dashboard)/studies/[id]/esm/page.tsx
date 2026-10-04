@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
+import WorkspaceTabs from '@/components/workspace-tabs'
 import {
   ArrowLeft, Plus, Trash2, Clock, Shuffle, AlignLeft,
   Hash, SlidersHorizontal, List, CheckSquare, ToggleLeft,
@@ -798,6 +799,8 @@ export default function ESMPage() {
           )}
         </div>
       </div>
+
+      <WorkspaceTabs label="Survey sections" items={[{ label: 'Responses', href: `/studies/${studyId}/esm-responses` }, { label: 'Setup', href: `/studies/${studyId}/esm` }]} />
 
       {/* Create schedule panel */}
       {showCreateSchedule && (

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
+import WorkspaceTabs from '@/components/workspace-tabs'
 import {
   ArrowLeft, Download, Table2, BarChart2, LayoutGrid, Users,
 } from 'lucide-react'
@@ -344,6 +345,8 @@ export default function ProcessedDataPage() {
           )}
         </div>
       </div>
+
+      <WorkspaceTabs label="Data sections" items={[{ label: 'Raw data', href: `/studies/${studyId}/data` }, { label: 'Processed', href: `/studies/${studyId}/processed` }]} />
 
       {/* Dataset pills */}
       <div className="flex flex-wrap gap-1.5">

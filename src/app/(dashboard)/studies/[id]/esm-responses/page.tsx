@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useRef, useState, Suspense } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import WorkspaceTabs from '@/components/workspace-tabs'
 import {
   ArrowLeft, Download, Users, Search, Check, X, ChevronDown,
   ClipboardList, ChevronRight, ChevronUp, Clock, CheckCircle2, AlertTriangle,
@@ -599,6 +600,8 @@ function ESMResponsesInner() {
         </div>
       </div>
 
+      <WorkspaceTabs label="Survey sections" items={[{ label: 'Responses', href: `/studies/${studyId}/esm-responses` }, { label: 'Setup', href: `/studies/${studyId}/esm` }]} />
+
       {/* Status filter pills */}
       <div className="flex items-center gap-2 flex-wrap">
         {STATUS_PILLS.map(pill => {
@@ -631,22 +634,13 @@ function ESMResponsesInner() {
           </span>
         )}
         <div className="flex items-center gap-2 ml-auto">
-          <button
-            onClick={() => { const csv = buildCSV(data); if (csv) downloadCSV(csv, 'esm_responses_page.csv') }}
-            disabled={data.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            <Download size={12} />
-            Export {data.length > 0 ? `${data.length} rows` : 'page'}
-          </button>
-          <button
-            onClick={exportAll}
-            disabled={participants.length === 0 || exporting || (totalCount ?? 0) === 0}
-            className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            <Download size={12} />
-            {exporting ? 'Exporting…' : totalCount && totalCount > 100 ? `Export all ${totalCount.toLocaleString()}` : 'Export all'}
-          </button>
+          <details className="relative">
+            <summary className="flex list-none items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"><Download size={12} />{exporting ? 'Exporting…' : 'Export'}<ChevronDown size={12} /></summary>
+            <div className="absolute right-0 z-20 mt-1 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
+              <button onClick={() => { const csv = buildCSV(data); if (csv) downloadCSV(csv, 'esm_responses_page.csv') }} disabled={data.length === 0} className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Export current view</button>
+              <button onClick={exportAll} disabled={participants.length === 0 || exporting || (totalCount ?? 0) === 0} className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Export filtered dataset{totalCount ? ` (${totalCount.toLocaleString()})` : ''}</button>
+            </div>
+          </details>
         </div>
       </div>
 

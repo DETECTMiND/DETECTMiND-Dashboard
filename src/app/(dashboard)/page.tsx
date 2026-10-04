@@ -121,6 +121,7 @@ function OverviewContent() {
   const [esmRates, setEsmRates] = useState<EsmScheduleRate[]>([])
   const [esmResponseTimes, setEsmResponseTimes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
+  const [renderedAt] = useState(() => Date.now())
 
   // Sync selectedStudyId when URL param changes
   useEffect(() => {
@@ -246,7 +247,7 @@ function OverviewContent() {
 
   const staleCount = activeParticipants.filter(p => {
     if (!p.last_sync_at) return true
-    return Date.now() - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
+    return renderedAt - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
   }).length
 
   const permIssueCount = activeParticipants.filter(p => {
@@ -254,7 +255,15 @@ function OverviewContent() {
     return Object.values(p.permissions).some(v => v === false)
   }).length
 
-  const actionNeededCount = staleCount + permIssueCount
+  const participantsNeedingAttention = activeParticipants.map(p => {
+    const issues: string[] = []
+    if (!p.last_sync_at || renderedAt - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000) issues.push(p.last_sync_at ? 'Sync overdue' : 'Never synced')
+    if (!p.permissions) issues.push('Permissions not reported')
+    else if (Object.values(p.permissions).some(v => v === false)) issues.push('Permission disabled')
+    return { participant: p, issues }
+  }).filter(item => item.issues.length > 0)
+
+  const actionNeededCount = participantsNeedingAttention.length
 
   const pMap = Object.fromEntries(studyParticipants.map(p => [p.id, p]))
 
@@ -336,8 +345,8 @@ function OverviewContent() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Overview</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Data collection health across all studies</p>
+          <h1 className="text-2xl font-bold text-gray-900">Study overview</h1>
+          <p className="text-gray-500 text-sm mt-0.5">Collection health for {selectedStudyId && studies[selectedStudyId] ? studies[selectedStudyId].name : 'the selected study'}</p>
         </div>
 
         {/* Time filter */}
@@ -489,6 +498,34 @@ function OverviewContent() {
         </div>
 
       </div>
+
+      {/* Prioritised operational queue */}
+      <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm" aria-labelledby="attention-heading">
+        <div className="flex items-center justify-between gap-4 border-b border-gray-100 px-5 py-4">
+          <div>
+            <h2 id="attention-heading" className="font-semibold text-gray-900">Needs attention</h2>
+            <p className="mt-0.5 text-xs text-gray-500">Participants with collection issues, ordered for follow-up</p>
+          </div>
+          {participantStudyId && <Link href={`/studies/${participantStudyId}/participants?filter=${actionNeededCount ? 'issues' : 'all'}`} className="shrink-0 text-xs font-semibold text-blue-600 hover:text-blue-700">View participants</Link>}
+        </div>
+        {participantsNeedingAttention.length === 0 ? (
+          <div className="flex items-center gap-3 px-5 py-5 text-sm text-emerald-700">
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-50"><CheckCircle2 size={16} /></span>
+            <div><p className="font-semibold">Everything looks healthy</p><p className="text-xs text-gray-500">All active participants are syncing and reporting permissions.</p></div>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100">
+            {participantsNeedingAttention.slice(0, 5).map(({ participant, issues }) => (
+              <div key={participant.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-50 text-amber-700"><AlertTriangle size={15} /></span>
+                <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-gray-900">{participant.label || participant.device_id}</p><p className="text-xs text-gray-500">{issues.join(' · ')}</p></div>
+                {participantStudyId && <Link href={`/studies/${participantStudyId}/participants?participant=${participant.id}`} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700">Review</Link>}
+              </div>
+            ))}
+            {participantsNeedingAttention.length > 5 && <div className="px-5 py-3 text-center text-xs text-gray-500">+{participantsNeedingAttention.length - 5} more participants need attention</div>}
+          </div>
+        )}
+      </section>
 
       {/* Bottom row */}
       <div className={`grid grid-cols-1 lg:grid-cols-5 gap-6 transition-opacity duration-200 ${loading ? 'opacity-50' : 'opacity-100'}`}>

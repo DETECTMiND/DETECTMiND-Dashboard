@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
+import WorkspaceTabs from '@/components/workspace-tabs'
 import { ArrowLeft, Save, ClipboardList, CheckCircle, AlertCircle } from 'lucide-react'
 
 const SENSOR_TYPES = [
@@ -174,6 +175,8 @@ export default function SensorConfigPage() {
           </button>
         </div>
       </div>
+
+      <WorkspaceTabs label="Settings sections" items={[{ label: 'General', href: `/studies/${studyId}` }, { label: 'Sensors', href: `/studies/${studyId}/config` }]} />
 
       {/* Error banner */}
       {saveError && (
