@@ -4,7 +4,6 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import WorkspaceTabs from '@/components/workspace-tabs'
 import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock, Lock } from 'lucide-react'
 
 interface Study {
@@ -184,8 +183,6 @@ export default function StudyDetailPage() {
       <Link href="/studies" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors">
         <ArrowLeft size={15} /> Back to Studies
       </Link>
-
-      <WorkspaceTabs label="Settings sections" items={[{ label: 'General', href: `/studies/${id}` }, { label: 'Sensors', href: `/studies/${id}/config` }]} />
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         {editing ? (

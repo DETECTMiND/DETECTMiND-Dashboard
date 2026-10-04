@@ -3,10 +3,8 @@
 import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
-import Link from 'next/link'
-import WorkspaceTabs from '@/components/workspace-tabs'
 import {
-  ArrowLeft, Plus, Trash2, Clock, Shuffle, AlignLeft,
+  Plus, Trash2, Clock, Shuffle, AlignLeft,
   Hash, SlidersHorizontal, List, CheckSquare, ToggleLeft,
   Calendar, Bell, ClipboardList, X, Pencil, Save,
 } from 'lucide-react'
@@ -778,15 +776,9 @@ export default function ESMPage() {
 
       {/* Header */}
       <div>
-        <Link
-          href={`/studies/${studyId}`}
-          className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4"
-        >
-          <ArrowLeft size={15} /> Back to Study
-        </Link>
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">ESM / EMA Config</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Survey Setup</h1>
             <p className="text-gray-500 text-sm mt-0.5">Experience sampling schedules and survey questions</p>
           </div>
           {!showCreateSchedule && (
@@ -799,8 +791,6 @@ export default function ESMPage() {
           )}
         </div>
       </div>
-
-      <WorkspaceTabs label="Survey sections" items={[{ label: 'Responses', href: `/studies/${studyId}/esm-responses` }, { label: 'Setup', href: `/studies/${studyId}/esm` }]} />
 
       {/* Create schedule panel */}
       {showCreateSchedule && (

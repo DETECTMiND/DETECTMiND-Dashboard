@@ -3,10 +3,8 @@
 import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
-import Link from 'next/link'
-import WorkspaceTabs from '@/components/workspace-tabs'
 import {
-  ArrowLeft, Download, Table2, BarChart2, LayoutGrid, Users,
+  Download, Table2, BarChart2, LayoutGrid, Users,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -85,7 +83,6 @@ export default function ProcessedDataPage() {
   const studyId = params.id as string
   const supabase = createClient()
 
-  const [studyName, setStudyName] = useState('')
   const [participants, setParticipants] = useState<Participant[]>([])
   const [selected, setSelected] = useState<string>('all')
   const [dataset, setDataset] = useState<DatasetKey>('hourly')
@@ -102,14 +99,10 @@ export default function ProcessedDataPage() {
 
   const pMap = useMemo(() => Object.fromEntries(participants.map(p => [p.id, p])), [participants])
 
-  // Load participants + study name once.
+  // Load participants once.
   useEffect(() => {
     async function loadMeta() {
-      const [{ data: study }, { data: pList }] = await Promise.all([
-        supabase.from('studies').select('name').eq('id', studyId).single(),
-        supabase.from('participants').select('id, label, device_id').eq('study_id', studyId),
-      ])
-      if (study) setStudyName(study.name)
+      const { data: pList } = await supabase.from('participants').select('id, label, device_id').eq('study_id', studyId)
       setParticipants((pList as Participant[]) || [])
       if (!pList || pList.length === 0) setLoading(false)
     }
@@ -332,9 +325,6 @@ export default function ProcessedDataPage() {
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <Link href={`/studies/${studyId}`} className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4">
-          <ArrowLeft size={15} /> {studyName || 'Back to Study'}
-        </Link>
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Processed Data</h1>
@@ -345,8 +335,6 @@ export default function ProcessedDataPage() {
           )}
         </div>
       </div>
-
-      <WorkspaceTabs label="Data sections" items={[{ label: 'Raw data', href: `/studies/${studyId}/data` }, { label: 'Processed', href: `/studies/${studyId}/processed` }]} />
 
       {/* Dataset pills */}
       <div className="flex flex-wrap gap-1.5">

@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import {
   BarChart3, Check, ChevronDown, Database, FlaskConical, LayoutDashboard,
-  LogOut, Menu, MessageSquare, Settings, Users, X,
+  LogOut, Menu, MessageSquare, Settings, SlidersHorizontal, TableProperties, Users, X,
 } from 'lucide-react'
 
 interface Study { id: string; name: string; status: string }
@@ -18,20 +18,14 @@ const STATUS_DOT: Record<string, string> = {
 function navFor(studyId: string | null) {
   if (!studyId) return []
   return [
-    { label: 'Overview', href: `/?study=${studyId}`, icon: LayoutDashboard, match: (p: string) => p === '/' },
-    { label: 'Participants', href: `/studies/${studyId}/participants`, icon: Users, match: (p: string) => p.includes('/participants') },
-    { label: 'Data', href: `/studies/${studyId}/data`, icon: Database, match: (p: string) => p.includes('/data') || p.includes('/processed'), children: [
-      { label: 'Raw data', href: `/studies/${studyId}/data` },
-      { label: 'Processed', href: `/studies/${studyId}/processed` },
-    ] },
-    { label: 'Surveys', href: `/studies/${studyId}/esm-responses`, icon: MessageSquare, match: (p: string) => p.includes('/esm'), children: [
-      { label: 'Responses', href: `/studies/${studyId}/esm-responses` },
-      { label: 'Setup', href: `/studies/${studyId}/esm` },
-    ] },
-    { label: 'Settings', href: `/studies/${studyId}`, icon: Settings, match: (p: string) => p === `/studies/${studyId}` || p.includes('/config'), children: [
-      { label: 'General', href: `/studies/${studyId}` },
-      { label: 'Sensors', href: `/studies/${studyId}/config` },
-    ] },
+    { label: 'Overview', href: `/?study=${studyId}`, icon: LayoutDashboard, group: 'Workspace', match: (p: string) => p === '/' },
+    { label: 'Participants', href: `/studies/${studyId}/participants`, icon: Users, group: 'Workspace', match: (p: string) => p === `/studies/${studyId}/participants` },
+    { label: 'Raw Data', href: `/studies/${studyId}/data`, icon: Database, group: 'Data', match: (p: string) => p === `/studies/${studyId}/data` },
+    { label: 'Processed Data', href: `/studies/${studyId}/processed`, icon: TableProperties, group: 'Data', match: (p: string) => p === `/studies/${studyId}/processed` },
+    { label: 'Responses', href: `/studies/${studyId}/esm-responses`, icon: MessageSquare, group: 'Surveys', match: (p: string) => p === `/studies/${studyId}/esm-responses` },
+    { label: 'Survey Setup', href: `/studies/${studyId}/esm`, icon: SlidersHorizontal, group: 'Surveys', match: (p: string) => p === `/studies/${studyId}/esm` },
+    { label: 'General', href: `/studies/${studyId}`, icon: Settings, group: 'Settings', match: (p: string) => p === `/studies/${studyId}` },
+    { label: 'Sensors', href: `/studies/${studyId}/config`, icon: SlidersHorizontal, group: 'Settings', match: (p: string) => p === `/studies/${studyId}/config` },
   ]
 }
 
@@ -74,11 +68,10 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const effectiveId = routeSelectedId && studies.some(s => s.id === routeSelectedId) ? routeSelectedId : selectedId
   const selected = studies.find(s => s.id === effectiveId)
   const navigation = navFor(effectiveId)
+  const activeNavigation = navigation.find(item => item.match(pathname))
 
-  useEffect(() => {
-    const section = pathname === '/' ? 'Overview' : pathname === '/studies' ? 'All Studies' : pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
-    document.title = `${section.replace(/\b\w/g, c => c.toUpperCase())}${selected ? ` · ${selected.name}` : ''} | DETECTMiND`
-  }, [pathname, selected])
+  const section = pathname === '/studies' ? 'All Studies' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
+  const pageTitle = `${section.replace(/\b\w/g, c => c.toUpperCase())}${selected ? ` · ${selected.name}` : ''} | DETECTMiND`
 
   function switchStudy(id: string) {
     setSelectedId(id)
@@ -109,17 +102,15 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3" aria-label="Study navigation">
-        <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Workspace</p>
         <div className="space-y-1">
-          {navigation.map(item => {
+          {navigation.map((item, index) => {
             const active = item.match(pathname)
+            const showGroup = index === 0 || navigation[index - 1].group !== item.group
             return <div key={item.label}>
+              {showGroup && <p className={`${index === 0 ? 'mb-2' : 'mb-2 mt-5'} px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400`}>{item.group}</p>}
               <Link href={item.href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
                 <item.icon size={17} /><span>{item.label}</span>
               </Link>
-              {active && item.children && <div className="ml-8 mt-1 space-y-0.5 border-l border-slate-200 pl-3">
-                {item.children.map(child => <Link key={child.href} href={child.href} className={`block rounded-md px-2 py-1.5 text-xs ${pathname === child.href ? 'font-semibold text-blue-700' : 'text-slate-500 hover:text-slate-800'}`}>{child.label}</Link>)}
-              </div>}
             </div>
           })}
         </div>
@@ -133,12 +124,13 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   )
 
   return <div className="flex min-h-dvh bg-slate-50">
+    <title>{pageTitle}</title>
     <div className="fixed inset-y-0 left-0 z-40 hidden lg:block">{sidebar}</div>
     {mobileOpen && <div className="fixed inset-0 z-50 lg:hidden"><button className="absolute inset-0 bg-slate-950/55" onClick={() => setMobileOpen(false)} aria-label="Close navigation overlay" /><div className="absolute inset-y-0 left-0">{sidebar}</div></div>}
     <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
       <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-8">
         <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden" aria-label="Open navigation"><Menu size={18} /></button>
-        <div className="min-w-0 flex-1"><p className="text-xs font-medium capitalize text-slate-500">{pathname === '/' ? 'Overview' : pathname.split('/').filter(Boolean).at(-1)?.replace('-', ' ')}</p></div>
+        <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-500">{pathname === '/studies' ? 'All Studies' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replace('-', ' ')}</p></div>
         {studies.length > 0 && <div className="relative" ref={switcherRef}>
           <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} aria-haspopup="listbox" className="flex max-w-[15rem] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-slate-50">
             <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[selected?.status || 'draft']}`} />

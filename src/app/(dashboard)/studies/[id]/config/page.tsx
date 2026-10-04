@@ -4,8 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import WorkspaceTabs from '@/components/workspace-tabs'
-import { ArrowLeft, Save, ClipboardList, CheckCircle, AlertCircle } from 'lucide-react'
+import { Save, ClipboardList, CheckCircle, AlertCircle } from 'lucide-react'
 
 const SENSOR_TYPES = [
   { key: 'app_usage', label: 'App Usage', hasInterval: false, description: 'Tracks foreground app usage with start/end times' },
@@ -166,9 +165,6 @@ export default function SensorConfigPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Link href={`/studies/${studyId}`} className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4">
-          <ArrowLeft size={15} /> Back to Study
-        </Link>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Sensor Configuration</h1>
@@ -186,8 +182,6 @@ export default function SensorConfigPage() {
           </button>
         </div>
       </div>
-
-      <WorkspaceTabs label="Settings sections" items={[{ label: 'General', href: `/studies/${studyId}` }, { label: 'Sensors', href: `/studies/${studyId}/config` }]} />
 
       {/* Error banner */}
       {saveError && (

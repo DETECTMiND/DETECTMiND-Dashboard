@@ -3,10 +3,8 @@
 import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useRef, useState, Suspense, lazy } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
-import WorkspaceTabs from '@/components/workspace-tabs'
 import {
-  ArrowLeft, Download, Database, Users, Search, Check, X,
+  Download, Database, Users, Search, Check, X,
   ChevronDown, ChevronUp, ChevronsUpDown, BarChart2, Table2,
 } from 'lucide-react'
 
@@ -476,15 +474,9 @@ function SensorDataInner() {
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <Link
-          href={`/studies/${studyId}`}
-          className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4"
-        >
-          <ArrowLeft size={15} /> Back to Study
-        </Link>
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Sensor Data</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Raw Data</h1>
             <p className="text-gray-500 text-sm mt-0.5">Browse and export collected sensor data</p>
           </div>
           <ParticipantPicker
@@ -494,8 +486,6 @@ function SensorDataInner() {
           />
         </div>
       </div>
-
-      <WorkspaceTabs label="Data sections" items={[{ label: 'Raw data', href: `/studies/${studyId}/data` }, { label: 'Processed', href: `/studies/${studyId}/processed` }]} />
 
       {/* Sensor type tabs */}
       <div className="flex flex-wrap gap-1.5">

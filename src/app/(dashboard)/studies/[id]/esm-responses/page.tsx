@@ -3,10 +3,8 @@
 import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useRef, useState, Suspense } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
-import WorkspaceTabs from '@/components/workspace-tabs'
 import {
-  ArrowLeft, Download, Users, Search, Check, X, ChevronDown,
+  Download, Users, Search, Check, X, ChevronDown,
   ClipboardList, ChevronRight, ChevronUp, Clock, CheckCircle2, AlertTriangle,
 } from 'lucide-react'
 
@@ -574,15 +572,9 @@ function ESMResponsesInner() {
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <Link
-          href={`/studies/${studyId}`}
-          className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4"
-        >
-          <ArrowLeft size={15} /> Back to Study
-        </Link>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">ESM / EMA Responses</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Survey Responses</h1>
             <p className="text-gray-500 text-sm mt-0.5">Browse and export survey response data</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -599,8 +591,6 @@ function ESMResponsesInner() {
           </div>
         </div>
       </div>
-
-      <WorkspaceTabs label="Survey sections" items={[{ label: 'Responses', href: `/studies/${studyId}/esm-responses` }, { label: 'Setup', href: `/studies/${studyId}/esm` }]} />
 
       {/* Status filter pills */}
       <div className="flex items-center gap-2 flex-wrap">
