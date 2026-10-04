@@ -798,10 +798,11 @@ CREATE POLICY "Authenticated read pin attempts" ON pin_attempts FOR ALL
 REVOKE ALL ON pin_attempts FROM anon;
 GRANT SELECT, UPDATE, DELETE ON pin_attempts TO authenticated;
 
-CREATE OR REPLACE FUNCTION enroll_participant(
+DROP FUNCTION IF EXISTS enroll_participant(UUID, TEXT, TEXT, JSONB);
+CREATE FUNCTION enroll_participant(
     p_study UUID, p_device_id TEXT, p_pin TEXT DEFAULT NULL, p_device_info JSONB DEFAULT '{}'::jsonb
 )
-RETURNS TABLE (participant_id UUID, device_id TEXT)
+RETURNS TABLE (participant_id UUID, device_id TEXT, error_message TEXT)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
 DECLARE
     v_status TEXT; v_required BOOLEAN; v_resolved TEXT; v_suffix INT := 2; v_id UUID;
@@ -814,40 +815,57 @@ BEGIN
     IF v_status NOT IN ('active', 'paused') THEN RAISE EXCEPTION 'Study is not open for enrolment'; END IF;
 
     IF v_required THEN
-        SELECT locked_until, fails INTO v_locked, v_fails
-          FROM pin_attempts WHERE study_id = p_study AND device_id = p_device_id;
+        SELECT pa.locked_until, pa.fails INTO v_locked, v_fails
+          FROM pin_attempts AS pa WHERE pa.study_id = p_study AND pa.device_id = p_device_id;
         IF v_locked IS NOT NULL AND v_locked > now() THEN
-            RAISE EXCEPTION 'Too many incorrect PIN attempts. Try again in % minutes.',
-                CEIL(EXTRACT(EPOCH FROM (v_locked - now())) / 60.0) USING ERRCODE = 'P0002';
+            participant_id := NULL; device_id := NULL;
+            error_message := format('Too many incorrect PIN attempts. Try again in %s minute(s).',
+                CEIL(EXTRACT(EPOCH FROM (v_locked - now())) / 60.0));
+            RETURN NEXT; RETURN;
         END IF;
-        SELECT COALESCE(SUM(fails), 0) INTO v_study_fails FROM pin_attempts
-         WHERE study_id = p_study AND last_fail_at > now() - make_interval(mins => STUDY_WINDOW_MIN);
+        IF v_locked IS NOT NULL THEN
+            DELETE FROM pin_attempts AS pa
+             WHERE pa.study_id = p_study AND pa.device_id = p_device_id;
+            v_fails := 0;
+        END IF;
+        SELECT COALESCE(SUM(pa.fails), 0) INTO v_study_fails FROM pin_attempts AS pa
+         WHERE pa.study_id = p_study AND pa.last_fail_at > now() - make_interval(mins => STUDY_WINDOW_MIN);
         IF v_study_fails >= STUDY_MAX_FAILS THEN
-            RAISE EXCEPTION 'This study is temporarily locked due to too many failed attempts. Try again later.' USING ERRCODE = 'P0002';
+            participant_id := NULL; device_id := NULL;
+            error_message := 'This study is temporarily locked due to too many failed attempts. Try again later.';
+            RETURN NEXT; RETURN;
         END IF;
         IF NOT verify_study_pin(p_study, COALESCE(p_pin, '')) THEN
             INSERT INTO pin_attempts (study_id, device_id, fails, last_fail_at, locked_until)
             VALUES (p_study, p_device_id, 1, now(),
                     CASE WHEN 1 >= MAX_FAILS THEN now() + make_interval(mins => LOCK_MINUTES) END)
-            ON CONFLICT (study_id, device_id) DO UPDATE
+            ON CONFLICT ON CONSTRAINT pin_attempts_pkey DO UPDATE
                 SET fails = pin_attempts.fails + 1, last_fail_at = now(),
                     locked_until = CASE WHEN pin_attempts.fails + 1 >= MAX_FAILS
                                         THEN now() + make_interval(mins => LOCK_MINUTES) END;
-            SELECT fails INTO v_fails FROM pin_attempts WHERE study_id = p_study AND device_id = p_device_id;
-            RAISE EXCEPTION 'Incorrect study PIN. % attempt(s) left before a temporary lockout.',
-                GREATEST(MAX_FAILS - v_fails, 0) USING ERRCODE = 'P0003';
+            SELECT pa.fails INTO v_fails FROM pin_attempts AS pa
+             WHERE pa.study_id = p_study AND pa.device_id = p_device_id;
+            participant_id := NULL; device_id := NULL;
+            error_message := CASE
+                WHEN v_fails >= MAX_FAILS THEN format('Too many incorrect PIN attempts. Try again in %s minutes.', LOCK_MINUTES)
+                ELSE format('Incorrect study PIN. %s attempt(s) left before a temporary lockout.', MAX_FAILS - v_fails)
+            END;
+            RETURN NEXT; RETURN;
         END IF;
-        DELETE FROM pin_attempts WHERE study_id = p_study AND device_id = p_device_id;
+        DELETE FROM pin_attempts AS pa WHERE pa.study_id = p_study AND pa.device_id = p_device_id;
     END IF;
 
     v_resolved := p_device_id;
-    WHILE EXISTS (SELECT 1 FROM participants WHERE study_id = p_study AND device_id = v_resolved) LOOP
+    WHILE EXISTS (
+        SELECT 1 FROM participants AS p
+         WHERE p.study_id = p_study AND p.device_id = v_resolved
+    ) LOOP
         v_resolved := p_device_id || '_' || v_suffix; v_suffix := v_suffix + 1;
     END LOOP;
     INSERT INTO participants (study_id, device_id, label, status, device_info, enrolled_at)
     VALUES (p_study, v_resolved, 'Device ' || v_resolved, 'active', COALESCE(p_device_info, '{}'::jsonb), now())
     RETURNING id INTO v_id;
-    participant_id := v_id; device_id := v_resolved; RETURN NEXT;
+    participant_id := v_id; device_id := v_resolved; error_message := NULL; RETURN NEXT;
 END;
 $$;
 
