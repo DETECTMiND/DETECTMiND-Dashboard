@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import {
   BarChart3, Check, ChevronDown, Database, FlaskConical, LayoutDashboard,
-  LogOut, Menu, MessageSquare, Plus, Settings, Users, X,
+  LogOut, Menu, MessageSquare, Settings, Users, X,
 } from 'lucide-react'
 
 interface Study { id: string; name: string; status: string }
@@ -75,6 +75,11 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const selected = studies.find(s => s.id === effectiveId)
   const navigation = navFor(effectiveId)
 
+  useEffect(() => {
+    const section = pathname === '/' ? 'Overview' : pathname === '/studies' ? 'All Studies' : pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
+    document.title = `${section.replace(/\b\w/g, c => c.toUpperCase())}${selected ? ` · ${selected.name}` : ''} | DETECTMiND`
+  }, [pathname, selected])
+
   function switchStudy(id: string) {
     setSelectedId(id)
     setStudyOpen(false)
@@ -94,56 +99,35 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   }
 
   const sidebar = (
-    <aside className="flex h-full w-64 flex-col bg-slate-950 text-slate-200">
-      <div className="flex h-16 items-center justify-between border-b border-white/10 px-5">
+    <aside className="flex h-full w-64 flex-col border-r border-slate-200 bg-white text-slate-700">
+      <div className="flex h-16 items-center justify-between border-b border-slate-200 px-5">
         <Link href="/" className="flex items-center gap-2.5" aria-label="DETECTMiND home">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500"><FlaskConical size={16} /></span>
-          <span className="text-sm font-bold tracking-wide text-white">DETECTMiND</span>
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white"><FlaskConical size={16} /></span>
+          <span className="text-sm font-bold tracking-wide text-slate-900">DETECTMiND</span>
         </Link>
-        <button onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-white/10 lg:hidden" aria-label="Close navigation"><X size={18} /></button>
-      </div>
-
-      <div className="border-b border-white/10 p-3" ref={switcherRef}>
-        <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Current study</p>
-        <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} className="flex w-full items-center gap-2 rounded-xl bg-white/8 px-3 py-2.5 text-left hover:bg-white/12">
-          <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[selected?.status || 'draft']}`} />
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white">{selected?.name || 'Select a study'}</span>
-          <ChevronDown size={14} className={`text-slate-400 transition-transform ${studyOpen ? 'rotate-180' : ''}`} />
-        </button>
-        {studyOpen && (
-          <div className="mt-2 overflow-hidden rounded-xl border border-white/10 bg-slate-900 shadow-xl">
-            <div className="max-h-52 overflow-y-auto p-1.5">
-              {studies.map(study => <button key={study.id} onClick={() => switchStudy(study.id)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-white/10">
-                <span className={`h-2 w-2 rounded-full ${STATUS_DOT[study.status] || STATUS_DOT.draft}`} />
-                <span className="min-w-0 flex-1 truncate">{study.name}</span>
-                {study.id === effectiveId && <Check size={14} className="text-blue-400" />}
-              </button>)}
-            </div>
-            <Link href="/studies/new" className="flex items-center gap-2 border-t border-white/10 px-3 py-2.5 text-xs font-semibold text-blue-300 hover:bg-white/10"><Plus size={14} />New study</Link>
-          </div>
-        )}
+        <button onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 lg:hidden" aria-label="Close navigation"><X size={18} /></button>
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3" aria-label="Study navigation">
-        <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Workspace</p>
+        <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">Workspace</p>
         <div className="space-y-1">
           {navigation.map(item => {
             const active = item.match(pathname)
             return <div key={item.label}>
-              <Link href={item.href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active ? 'bg-blue-500/15 text-blue-200' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}>
+              <Link href={item.href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
                 <item.icon size={17} /><span>{item.label}</span>
               </Link>
-              {active && item.children && <div className="ml-8 mt-1 space-y-0.5 border-l border-white/10 pl-3">
-                {item.children.map(child => <Link key={child.href} href={child.href} className={`block rounded-md px-2 py-1.5 text-xs ${pathname === child.href ? 'font-semibold text-white' : 'text-slate-500 hover:text-slate-200'}`}>{child.label}</Link>)}
+              {active && item.children && <div className="ml-8 mt-1 space-y-0.5 border-l border-slate-200 pl-3">
+                {item.children.map(child => <Link key={child.href} href={child.href} className={`block rounded-md px-2 py-1.5 text-xs ${pathname === child.href ? 'font-semibold text-blue-700' : 'text-slate-500 hover:text-slate-800'}`}>{child.label}</Link>)}
               </div>}
             </div>
           })}
         </div>
       </nav>
 
-      <div className="border-t border-white/10 p-3">
-        <Link href="/studies" className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-400 hover:bg-white/5 hover:text-white"><BarChart3 size={17} />All studies</Link>
-        <button onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-400 hover:bg-white/5 hover:text-white"><LogOut size={17} />Sign out</button>
+      <div className="border-t border-slate-200 p-3">
+        <Link href="/studies" aria-current={pathname === '/studies' ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${pathname === '/studies' ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}><BarChart3 size={17} />All studies</Link>
+        <button onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900"><LogOut size={17} />Sign out</button>
       </div>
     </aside>
   )
@@ -154,8 +138,17 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
       <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-8">
         <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden" aria-label="Open navigation"><Menu size={18} /></button>
-        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-900">{selected?.name || 'Research dashboard'}</p><p className="hidden text-xs capitalize text-slate-500 sm:block">{pathname === '/' ? 'Overview' : pathname.split('/').filter(Boolean).at(-1)?.replace('-', ' ')}</p></div>
-        <Link href="/studies/new" className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"><Plus size={14} /><span className="hidden sm:inline">New study</span></Link>
+        <div className="min-w-0 flex-1"><p className="text-xs font-medium capitalize text-slate-500">{pathname === '/' ? 'Overview' : pathname.split('/').filter(Boolean).at(-1)?.replace('-', ' ')}</p></div>
+        {studies.length > 0 && <div className="relative" ref={switcherRef}>
+          <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} aria-haspopup="listbox" className="flex max-w-[15rem] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-slate-50">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[selected?.status || 'draft']}`} />
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{selected?.name || 'Select study'}</span>
+            <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform ${studyOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {studyOpen && <div className="absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl" role="listbox" aria-label="Select study">
+            {studies.map(study => <button role="option" aria-selected={study.id === effectiveId} key={study.id} onClick={() => switchStudy(study.id)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"><span className={`h-2 w-2 rounded-full ${STATUS_DOT[study.status] || STATUS_DOT.draft}`} /><span className="min-w-0 flex-1 truncate font-medium">{study.name}</span>{study.id === effectiveId && <Check size={14} className="text-blue-600" />}</button>)}
+          </div>}
+        </div>}
       </header>
       <main id="main-content" className="min-w-0 flex-1"><div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</div></main>
     </div>

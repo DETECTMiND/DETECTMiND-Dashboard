@@ -3,7 +3,7 @@
 import { createClient } from '@/lib/supabase-browser'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { FlaskConical, Pencil, X, Check, ChevronRight, Plus } from 'lucide-react'
+import { FlaskConical, Pencil, X, Check, ChevronRight } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 
 interface Study {
@@ -65,12 +65,7 @@ export default function SettingsPage() {
               {studies.length} {studies.length === 1 ? 'study' : 'studies'}
             </p>
           </div>
-          <Link
-            href="/studies/new"
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
-          >
-            <Plus size={14} /> New Study
-          </Link>
+          <Link href="/studies" className="text-sm font-semibold text-blue-600 hover:text-blue-700">View all studies</Link>
         </div>
 
         {studies.length === 0 ? (
@@ -78,12 +73,7 @@ export default function SettingsPage() {
             <FlaskConical size={32} className="mx-auto text-gray-300 mb-3" />
             <p className="text-gray-500 font-medium text-sm">No studies yet</p>
             <p className="text-gray-400 text-xs mt-1">Create your first study to get started</p>
-            <Link
-              href="/studies/new"
-              className="mt-4 inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-            >
-              <Plus size={14} /> Create Study
-            </Link>
+            <Link href="/studies" className="mt-4 inline-flex text-sm font-semibold text-blue-600 hover:text-blue-700">Go to All Studies</Link>
           </div>
         ) : (
           <div className="space-y-2">

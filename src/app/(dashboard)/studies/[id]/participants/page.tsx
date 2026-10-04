@@ -496,6 +496,7 @@ function ParticipantsContent() {
 
   async function updateStatus(participantId: string, status: string) {
     await supabase.from('participants').update({ status }).eq('id', participantId)
+    setDetailParticipant(current => current?.id === participantId ? { ...current, status } : current)
     load()
   }
 
@@ -736,13 +737,6 @@ function ParticipantsContent() {
                       {/* Actions */}
                       <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                         <button onClick={() => setDetailParticipant(p)} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">View details</button>
-                        <select
-                          value={p.status}
-                          onChange={e => updateStatus(p.id, e.target.value)}
-                          className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
-                        >
-                          {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
                       </div>
                     </div>
                   </div>
@@ -785,6 +779,7 @@ function ParticipantsContent() {
                 <button onClick={() => { setDetailParticipant(null); setSyncModalParticipant(detailParticipant) }} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"><Activity size={16} />Sync history</button>
                 <button onClick={() => { setDetailParticipant(null); setPermModalParticipant(detailParticipant) }} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"><ShieldCheck size={16} />Permission history</button>
               </div>
+              <div className="border-t border-gray-200 pt-5"><label className="text-sm font-semibold text-gray-900">Participant status<select value={detailParticipant.status} onChange={e => updateStatus(detailParticipant.id, e.target.value)} className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700">{STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}</select></label></div>
             </div>
           </aside>
         </div>

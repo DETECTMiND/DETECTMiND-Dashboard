@@ -71,6 +71,17 @@ export default function StudyDetailPage() {
     escalation_minutes: 120,
   })
   const [newAppId, setNewAppId] = useState('')
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteText, setDeleteText] = useState('')
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    if (!editing) return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [editing])
 
   useEffect(() => {
     async function load() {
@@ -135,9 +146,15 @@ export default function StudyDetailPage() {
   }
 
   async function handleDelete() {
-    const confirmation = prompt(`Type "${study?.name}" to permanently delete this study and all its data.`)
-    if (!study || confirmation !== study.name) return
-    await supabase.from('studies').delete().eq('id', id)
+    if (!study || deleteText !== study.name) return
+    setDeleting(true)
+    setDeleteError(null)
+    const { error } = await supabase.from('studies').delete().eq('id', id)
+    if (error) {
+      setDeleteError(error.message)
+      setDeleting(false)
+      return
+    }
     router.push('/studies')
   }
 
@@ -434,7 +451,7 @@ export default function StudyDetailPage() {
               }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
-              <button onClick={handleDelete} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
+              <button onClick={() => { setDeleteText(''); setDeleteError(null); setDeleteOpen(true) }} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
                 <Trash2 size={14} /> Delete Study
               </button>
             </div>
@@ -504,6 +521,16 @@ export default function StudyDetailPage() {
           </Link>
         ))}
       </div>
+
+      {deleteOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="delete-study-title">
+        <button className="absolute inset-0 bg-slate-950/45" onClick={() => !deleting && setDeleteOpen(false)} aria-label="Cancel deletion" />
+        <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="flex items-start justify-between gap-4"><div><h2 id="delete-study-title" className="text-lg font-bold text-gray-900">Delete study?</h2><p className="mt-2 text-sm text-gray-600">This permanently deletes the study and its data. Type <strong>{study.name}</strong> to confirm.</p></div><button onClick={() => setDeleteOpen(false)} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100" aria-label="Close confirmation"><X size={18} /></button></div>
+          <label className="mt-5 block text-sm font-medium text-gray-700">Study name<input autoFocus value={deleteText} onChange={e => setDeleteText(e.target.value)} className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" /></label>
+          {deleteError && <p role="alert" className="mt-3 text-sm text-red-600">{deleteError}</p>}
+          <div className="mt-6 flex justify-end gap-2"><button onClick={() => setDeleteOpen(false)} disabled={deleting} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">Cancel</button><button onClick={handleDelete} disabled={deleteText !== study.name || deleting} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">{deleting ? 'Deleting…' : 'Delete permanently'}</button></div>
+        </div>
+      </div>}
     </div>
   )
 }

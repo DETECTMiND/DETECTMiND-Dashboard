@@ -51,6 +51,14 @@ export default function SensorConfigPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   useEffect(() => {
     async function load() {
@@ -89,6 +97,7 @@ export default function SensorConfigPage() {
       [key]: { ...prev[key], [field]: value },
     }))
     setSaved(false)
+    setDirty(true)
   }
 
   function updateScreenInteractionConfig(section: 'interaction_types' | 'skip_rules', subKey: string, value: boolean) {
@@ -109,6 +118,7 @@ export default function SensorConfigPage() {
       }
     })
     setSaved(false)
+    setDirty(true)
   }
 
   async function saveAll() {
@@ -149,6 +159,7 @@ export default function SensorConfigPage() {
     }
 
     setSaved(true)
+    setDirty(false)
     setTimeout(() => setSaved(false), 3000)
   }
 
