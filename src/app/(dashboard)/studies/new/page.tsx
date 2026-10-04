@@ -257,8 +257,8 @@ function StepBasicInfo({ state, setState }: { state: WizardState; setState: (s: 
             maxLength={4}
             value={state.pin}
             onChange={e => set({ pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-            placeholder="4 digits"
-            className="w-32 px-3 py-2.5 border border-gray-200 rounded-lg text-sm tracking-[0.3em] font-mono text-center focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
+            placeholder="••••"
+            className="w-28 px-3 py-2.5 border border-gray-200 rounded-lg text-lg font-mono text-center tracking-[0.5em] pl-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
           />
           <p className="text-xs text-gray-400">If set, only participants given this PIN can join. You can change it later.</p>
         </div>

@@ -298,20 +298,22 @@ export default function StudyDetailPage() {
                   </label>
                 </div>
                 {pinRequired && (
-                  <div className="px-4 pb-4 pt-1">
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={4}
-                      value={pinInput}
-                      onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(null) }}
-                      placeholder="Set a new PIN"
-                      className="w-32 px-3 py-2 border border-gray-200 rounded-lg text-sm tracking-[0.4em] font-mono text-center focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    />
-                    <p className="text-xs text-gray-400 mt-1.5">
-                      Leave blank to keep the current PIN. The PIN is stored securely and never shown again.
-                    </p>
-                    {pinError && <p className="text-xs text-red-600 mt-1">{pinError}</p>}
+                  <div className="px-4 pb-4 pt-1 border-t border-blue-100/70">
+                    <div className="flex items-center gap-3 mt-3">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={4}
+                        value={pinInput}
+                        onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(null) }}
+                        placeholder="••••"
+                        className={`w-28 px-3 py-2.5 border rounded-lg text-lg font-mono text-center tracking-[0.5em] pl-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${pinError ? 'border-red-300' : 'border-gray-200 focus:border-blue-400'}`}
+                      />
+                      <p className="text-xs text-gray-400 leading-relaxed flex-1">
+                        Enter 4 digits to set or replace the PIN. Leave blank to keep the current one. It&apos;s stored securely and never shown again.
+                      </p>
+                    </div>
+                    {pinError && <p className="text-xs text-red-600 mt-2">{pinError}</p>}
                   </div>
                 )}
               </div>

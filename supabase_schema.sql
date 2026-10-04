@@ -755,7 +755,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON study_pins TO authenticated;
 
 -- Researcher sets/clears a study PIN (NULL/'' clears it).
 CREATE OR REPLACE FUNCTION set_study_pin(p_study UUID, p_pin TEXT)
-RETURNS void LANGUAGE plpgsql SECURITY INVOKER AS $$
+RETURNS void LANGUAGE plpgsql SECURITY INVOKER
+SET search_path = public, extensions AS $$
 BEGIN
     IF p_pin IS NULL OR length(trim(p_pin)) = 0 THEN
         DELETE FROM study_pins WHERE study_id = p_study;
@@ -773,7 +774,7 @@ $$;
 
 -- App verifies a PIN without reading the hash (SECURITY DEFINER).
 CREATE OR REPLACE FUNCTION verify_study_pin(p_study UUID, p_pin TEXT)
-RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
 DECLARE v_hash TEXT;
 BEGIN
     SELECT pin_hash INTO v_hash FROM study_pins WHERE study_id = p_study;
