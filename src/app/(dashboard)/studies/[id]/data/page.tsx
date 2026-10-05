@@ -360,19 +360,51 @@ function SensorDataInner() {
       const from = page * pageSize
       const to = from + pageSize - 1
 
+      // Check if sorting by a datetime column (ends with _at or _time)
+      const isDatetimeCol = effectiveSortCol.endsWith('_at') || effectiveSortCol.endsWith('_time')
+
       const [rowsRes, countRes] = await Promise.all([
         supabase
           .from(selectedTable.key)
           .select('*')
           .in('participant_id', pIds)
-          .order(effectiveSortCol, { ascending: sortDir === 'asc' })
+          // For datetime columns, don't sort at Supabase level (string sort is wrong);
+          // we'll sort on client side. For other columns, sort at Supabase.
+          .order(effectiveSortCol, { ascending: true })
           .range(from, to),
         supabase
           .from(selectedTable.key)
           .select('*', { count: 'exact', head: true })
           .in('participant_id', pIds),
       ])
-      setData(rowsRes.data || [])
+
+      let rows = rowsRes.data || []
+
+      // Client-side sort for datetime columns (ensures correct temporal ordering)
+      if (isDatetimeCol && rows.length > 0) {
+        rows = [...rows].sort((a, b) => {
+          const aVal = a[effectiveSortCol]
+          const bVal = b[effectiveSortCol]
+          if (aVal === null || aVal === undefined) return sortDir === 'asc' ? -1 : 1
+          if (bVal === null || bVal === undefined) return sortDir === 'asc' ? 1 : -1
+          const aTime = new Date(aVal).getTime()
+          const bTime = new Date(bVal).getTime()
+          return sortDir === 'asc' ? aTime - bTime : bTime - aTime
+        })
+      } else if (!isDatetimeCol && rows.length > 0) {
+        // Client-side sort for non-datetime columns too (to respect sortDir)
+        rows = [...rows].sort((a, b) => {
+          const aVal = a[effectiveSortCol]
+          const bVal = b[effectiveSortCol]
+          if (aVal === null || aVal === undefined) return sortDir === 'asc' ? -1 : 1
+          if (bVal === null || bVal === undefined) return sortDir === 'asc' ? 1 : -1
+          if (aVal < bVal) return sortDir === 'asc' ? -1 : 1
+          if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
+          return 0
+        })
+      }
+
+      setData(rows)
       setTotalCount(countRes.count ?? 0)
       setLoading(false)
     }
