@@ -47,8 +47,17 @@ CREATE OR REPLACE FUNCTION app_tz() RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$ SELECT 'Europe/London' $$;
 
 -- ── screen_sessions ──────────────────────────────────────────────────────────
--- Clean on->off sessions. was_capped = the close was missing/too long and the
--- duration was clamped to 30 min.
+-- Non-overlapping on->off sessions, one row per wake.
+--
+-- Why this shape: the raw stream has stray repeats (a wake logs 'on' then
+-- 'unlocked'; a sleep logs 'off' then 'locked') and dropped closes (the app is
+-- killed before it logs 'off'). We first collapse the stream to clean
+-- ALTERNATING on/off transitions, then pair each 'on' with the NEXT transition
+-- (always an 'off' after collapsing). Because sessions are built from a single
+-- ordered alternating stream, they can never overlap -- so no hour can ever
+-- exceed 60 minutes. A missing or implausibly long close is capped at 3 hours,
+-- long enough not to truncate a normal long session but short enough that a
+-- dropped close cannot invent a whole day of usage.
 DROP VIEW IF EXISTS daily_usage CASCADE;
 DROP VIEW IF EXISTS hourly_usage CASCADE;
 DROP VIEW IF EXISTS screen_sessions CASCADE;
@@ -59,52 +68,42 @@ WITH normalized AS (
     SELECT
         participant_id,
         recorded_at::timestamptz AS ts,
+        id,
         CASE WHEN state IN ('on', 'unlocked') THEN 'on' ELSE 'off' END AS dir
     FROM data_screen_state
     WHERE state IN ('on', 'off', 'locked', 'unlocked')
 ),
--- Drop consecutive same-direction events (on,unlocked -> one on; off,locked ->
--- one off) so each wake and each sleep is a single transition.
+-- Keep only direction CHANGES, so the stream strictly alternates on,off,on,off.
+-- (id breaks ties when two events share a timestamp, keeping the order stable.)
 deduped AS (
     SELECT participant_id, ts, dir
     FROM (
         SELECT
             participant_id, ts, dir,
-            LAG(dir) OVER (PARTITION BY participant_id ORDER BY ts) AS prev_dir
+            LAG(dir) OVER (PARTITION BY participant_id ORDER BY ts, id) AS prev_dir
         FROM normalized
     ) t
     WHERE prev_dir IS DISTINCT FROM dir
 ),
-with_next AS (
+paired AS (
     SELECT
         participant_id,
         ts AS start_ts,
+        dir,
         LEAD(ts)  OVER (PARTITION BY participant_id ORDER BY ts) AS next_ts,
         LEAD(dir) OVER (PARTITION BY participant_id ORDER BY ts) AS next_dir
     FROM deduped
-    WHERE dir = 'on'
 )
 SELECT
     participant_id,
     start_ts,
-    -- End at the paired 'off'. If the next event is missing or is not an 'off'
-    -- (another 'on' slipped through), or the gap is implausibly long, clamp the
-    -- session to 30 minutes instead of inventing hours of usage.
-    CASE
-        WHEN next_dir = 'off'
-             AND next_ts IS NOT NULL
-             AND next_ts - start_ts <= interval '30 minutes'
-        THEN next_ts
-        ELSE start_ts + interval '30 minutes'
-    END AS end_ts,
-    LEAST(
-        COALESCE(EXTRACT(EPOCH FROM (next_ts - start_ts)), 1800),
-        1800
-    )::bigint AS session_seconds,
-    (next_dir IS DISTINCT FROM 'off'
-     OR next_ts IS NULL
-     OR next_ts - start_ts > interval '30 minutes') AS was_capped
-FROM with_next;
+    -- Real close if we have one within 3h; otherwise cap the session at 3h.
+    LEAST(COALESCE(next_ts, start_ts + interval '3 hours'),
+          start_ts + interval '3 hours') AS end_ts,
+    (next_ts IS NULL
+     OR next_ts - start_ts > interval '3 hours') AS was_capped
+FROM paired
+WHERE dir = 'on';
 
 -- ── hourly_usage ─────────────────────────────────────────────────────────────
 -- Each session split across the local hours it spans. This is the single source
@@ -162,9 +161,9 @@ sessions AS (
     SELECT
         participant_id,
         (start_ts AT TIME ZONE app_tz())::date AS usage_date,
-        COUNT(*)                                    AS session_count,
-        AVG(session_seconds)                        AS avg_session_seconds,
-        SUM(CASE WHEN was_capped THEN 1 ELSE 0 END) AS capped_sessions
+        COUNT(*)                                        AS session_count,
+        AVG(EXTRACT(EPOCH FROM (end_ts - start_ts)))    AS avg_session_seconds,
+        SUM(CASE WHEN was_capped THEN 1 ELSE 0 END)     AS capped_sessions
     FROM screen_sessions
     GROUP BY 1, 2
 ),

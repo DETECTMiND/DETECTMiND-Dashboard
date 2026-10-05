@@ -328,9 +328,12 @@ CREATE POLICY "Anon can update participants" ON participants FOR UPDATE USING (a
 --
 -- A screen-on "session" runs from a cleaned 'on' transition to the next 'off'.
 -- The app logs a wake as two events ('on' then 'unlocked') and a sleep as two
--- ('off' then 'locked'); these are collapsed so one wake = one 'on'. A missing
--- close (app killed before logging 'off') is capped at 30 minutes so a dropped
--- event cannot manufacture hours of fictional usage. daily_usage is rolled up
+-- ('off' then 'locked'), and often drops the closing event entirely when the OS
+-- kills it. We collapse the raw stream to clean ALTERNATING on/off transitions,
+-- then pair each 'on' with the next transition -- so sessions can never overlap
+-- and no hour can exceed 60 minutes. A missing or implausibly long close is
+-- capped at 3 hours (long enough not to truncate a normal session, short enough
+-- that a dropped close cannot invent a day of usage). daily_usage is rolled up
 -- from hourly_usage, so the daily total always equals the sum of that day's
 -- hourly cells. All timestamps are bucketed in the single fixed zone returned by
 -- app_tz(). See migration_2026_10_usage_views_fix.sql.
@@ -345,49 +348,41 @@ WITH normalized AS (
     SELECT
         participant_id,
         recorded_at::timestamptz AS ts,
+        id,
         CASE WHEN state IN ('on', 'unlocked') THEN 'on' ELSE 'off' END AS dir
     FROM data_screen_state
     WHERE state IN ('on', 'off', 'locked', 'unlocked')
 ),
--- Drop consecutive same-direction events (on,unlocked -> one on; off,locked ->
--- one off) so each wake and each sleep is a single transition.
+-- Keep only direction CHANGES, so the stream strictly alternates on,off,on,off.
+-- (id breaks ties when two events share a timestamp, keeping the order stable.)
 deduped AS (
     SELECT participant_id, ts, dir
     FROM (
         SELECT
             participant_id, ts, dir,
-            LAG(dir) OVER (PARTITION BY participant_id ORDER BY ts) AS prev_dir
+            LAG(dir) OVER (PARTITION BY participant_id ORDER BY ts, id) AS prev_dir
         FROM normalized
     ) t
     WHERE prev_dir IS DISTINCT FROM dir
 ),
-with_next AS (
+paired AS (
     SELECT
         participant_id,
         ts AS start_ts,
+        dir,
         LEAD(ts)  OVER (PARTITION BY participant_id ORDER BY ts) AS next_ts,
         LEAD(dir) OVER (PARTITION BY participant_id ORDER BY ts) AS next_dir
     FROM deduped
-    WHERE dir = 'on'
 )
 SELECT
     participant_id,
     start_ts,
-    CASE
-        WHEN next_dir = 'off'
-             AND next_ts IS NOT NULL
-             AND next_ts - start_ts <= interval '30 minutes'
-        THEN next_ts
-        ELSE start_ts + interval '30 minutes'
-    END AS end_ts,
-    LEAST(
-        COALESCE(EXTRACT(EPOCH FROM (next_ts - start_ts)), 1800),
-        1800
-    )::bigint AS session_seconds,
-    (next_dir IS DISTINCT FROM 'off'
-     OR next_ts IS NULL
-     OR next_ts - start_ts > interval '30 minutes') AS was_capped
-FROM with_next;
+    LEAST(COALESCE(next_ts, start_ts + interval '3 hours'),
+          start_ts + interval '3 hours') AS end_ts,
+    (next_ts IS NULL
+     OR next_ts - start_ts > interval '3 hours') AS was_capped
+FROM paired
+WHERE dir = 'on';
 
 -- Single source of truth for screen-on time; daily_usage rolls up from it.
 CREATE OR REPLACE VIEW hourly_usage
@@ -436,9 +431,9 @@ sessions AS (
     SELECT
         participant_id,
         (start_ts AT TIME ZONE app_tz())::date AS usage_date,
-        COUNT(*)                                    AS session_count,
-        AVG(session_seconds)                        AS avg_session_seconds,
-        SUM(CASE WHEN was_capped THEN 1 ELSE 0 END) AS capped_sessions
+        COUNT(*)                                        AS session_count,
+        AVG(EXTRACT(EPOCH FROM (end_ts - start_ts)))    AS avg_session_seconds,
+        SUM(CASE WHEN was_capped THEN 1 ELSE 0 END)     AS capped_sessions
     FROM screen_sessions
     GROUP BY 1, 2
 ),
