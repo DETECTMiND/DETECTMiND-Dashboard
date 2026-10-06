@@ -395,7 +395,7 @@ FROM sessions s
 LEFT JOIN unlocks u
     ON u.participant_id = s.participant_id
    AND u.usage_date    = s.usage_date
-GROUP BY s.participant_id, s.usage_date, u.unlock_count;
+GROUP BY s.participant_id, s.usage_date;
 
 CREATE OR REPLACE VIEW hourly_usage
 WITH (security_invoker = on) AS
@@ -414,8 +414,8 @@ hour_buckets AS (
         end_ts,
         -- hour marks aligned to Europe/London local time, returned as timestamptz
         generate_series(
-            date_trunc('hour', start_ts AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London',
-            date_trunc('hour', end_ts   AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London',
+            date_trunc('hour', start_ts AT TIME ZONE 'Europe/London'),
+            date_trunc('hour', end_ts   AT TIME ZONE 'Europe/London'),
             interval '1 hour'
         ) AS hour_start
     FROM bounded
@@ -423,7 +423,7 @@ hour_buckets AS (
 SELECT
     participant_id,
     hour_start AS usage_hour,
-    (hour_start AT TIME ZONE 'Europe/London')::date       AS usage_date,
+    hour_start::date AS usage_date,
     EXTRACT(HOUR FROM hour_start AT TIME ZONE 'Europe/London')::int AS hour_of_day,
     SUM(
         EXTRACT(EPOCH FROM (
