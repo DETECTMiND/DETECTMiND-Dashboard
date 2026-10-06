@@ -639,117 +639,143 @@ function ParticipantsContent() {
             const health = latestSync[p.id]
 
             return (
-              <div key={p.id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="flex">
-                  <div className="flex-1 px-5 py-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0 flex-1">
-
-                        {/* Name row */}
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {editingLabel === p.id ? (
-                            <div className="flex items-center gap-2">
-                              <input
-                                value={labelValue}
-                                onChange={e => setLabelValue(e.target.value)}
-                                onKeyDown={e => { if (e.key === 'Enter') saveLabel(p.id); if (e.key === 'Escape') setEditingLabel(null) }}
-                                className="px-2.5 py-1 border border-blue-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                                placeholder="Label"
-                                autoFocus
-                              />
-                              <button onClick={() => saveLabel(p.id)} className="text-blue-600 text-sm font-semibold hover:text-blue-700">Save</button>
-                              <button onClick={() => setEditingLabel(null)} className="text-gray-400 text-sm hover:text-gray-600">Cancel</button>
-                            </div>
-                          ) : (
-                            <button
-                              onClick={() => { setEditingLabel(p.id); setLabelValue(p.label || '') }}
-                              className="flex items-center gap-1.5 font-semibold text-gray-900 hover:text-blue-600 transition-colors group"
-                            >
-                              {p.label || p.device_id}
-                              <Pencil size={11} className="text-gray-300 group-hover:text-blue-400 transition-colors" />
-                            </button>
-                          )}
+              <div key={p.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
+                <div className="px-5 py-5 space-y-4">
+                  {/* Header: Title + Status Dropdown */}
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      {editingLabel === p.id ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={labelValue}
+                            onChange={e => setLabelValue(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') saveLabel(p.id); if (e.key === 'Escape') setEditingLabel(null) }}
+                            className="px-3 py-2 border border-blue-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 flex-1"
+                            placeholder="Label"
+                            autoFocus
+                          />
+                          <button onClick={() => saveLabel(p.id)} className="text-blue-600 text-xs font-semibold hover:text-blue-700 whitespace-nowrap">Save</button>
+                          <button onClick={() => setEditingLabel(null)} className="text-gray-400 text-xs hover:text-gray-600 whitespace-nowrap">Cancel</button>
+                        </div>
+                      ) : (
+                        <div>
+                          <button
+                            onClick={() => { setEditingLabel(p.id); setLabelValue(p.label || '') }}
+                            className="flex items-center gap-2 font-bold text-lg text-gray-900 hover:text-blue-600 transition-colors group"
+                          >
+                            {p.label || p.device_id}
+                            <Pencil size={14} className="text-gray-300 group-hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100" />
+                          </button>
                           {p.label && (
-                            <span className="text-gray-400 text-xs font-mono bg-gray-50 px-1.5 py-0.5 rounded">
-                              {p.device_id}
-                            </span>
+                            <p className="text-xs text-gray-400 font-mono mt-1">{p.device_id}</p>
                           )}
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${STATUS_STYLES[p.status] || 'bg-gray-100 text-gray-500'}`}>
-                            {p.status}
-                          </span>
                         </div>
-
-                        {/* Meta row */}
-                        <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-xs text-gray-400">
-                          <span>Enrolled {formatDistanceToNow(new Date(p.enrolled_at), { addSuffix: true })}</span>
-                          <span className="flex items-center gap-1">
-                            <Clock size={10} />
-                            {p.last_sync_at
-                              ? `Synced ${formatDistanceToNow(new Date(p.last_sync_at), { addSuffix: true })}`
-                              : 'Never synced'}
-                          </span>
-                          {p.device_info?.model && <span className="text-gray-300">·</span>}
-                          {p.device_info?.model && <span>{p.device_info.model}</span>}
-                          {p.device_info?.android_version && <span>Android {p.device_info.android_version}</span>}
-                          {p.device_info?.app_version && <span>App {p.device_info.app_version}</span>}
-                          {p.device_info?.pending_records && <span>{p.device_info.pending_records} pending</span>}
-                        </div>
-
-                        {p.merged_into && !p.merge_adopted_at && (
-                          <div className="mt-2 text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1 inline-flex">
-                            Waiting for device to adopt primary on its next sync
-                          </div>
-                        )}
-                        {p.merged_into && p.merge_adopted_at && (
-                          <div className="mt-2 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-2 py-1 inline-flex">
-                            Device adopted primary {formatDistanceToNow(new Date(p.merge_adopted_at), { addSuffix: true })}
-                          </div>
-                        )}
-                        {health && health.status !== 'success' && (
-                          <div className="mt-2 text-[11px] text-red-600">
-                            Last sync: {health.status}{health.error_message ? ` · ${health.error_message}` : ''}
-                          </div>
-                        )}
-
-                        {/* Alert tags */}
-                        {hasAlerts && (
-                          <div className="flex flex-wrap gap-1.5 mt-2.5">
-                            {stale && (
-                              <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                                <AlertTriangle size={10} /> Sync stale
-                              </span>
-                            )}
-                            {hasPermIssues ? (
-                              missing.map(m => (
-                                <span key={m} className="inline-flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                                  <AlertTriangle size={10} /> {m}
-                                </span>
-                              ))
-                            ) : p.permissions ? (
-                              <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md text-[11px] font-semibold">
-                                <CheckCircle2 size={10} /> All permissions granted
-                              </span>
-                            ) : null}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Action buttons */}
-                      <div className="flex gap-2 flex-wrap pt-2">
-                        <Link href={`/studies/${studyId}/data?participant=${p.id}`} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium text-center transition-colors">
-                          📊 Sensor data
-                        </Link>
-                        <Link href={`/studies/${studyId}/esm-responses?participant=${p.id}`} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium text-center transition-colors">
-                          💬 Surveys
-                        </Link>
-                        <button onClick={() => setSyncModalParticipant(p)} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium transition-colors">
-                          🔄 Sync
-                        </button>
-                        <button onClick={() => setPermModalParticipant(p)} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium transition-colors">
-                          🔐 Perms
-                        </button>
-                      </div>
+                      )}
                     </div>
+
+                    {/* Status Dropdown */}
+                    <select
+                      value={p.status}
+                      onChange={e => updateStatus(p.id, e.target.value)}
+                      className={`px-4 py-2 rounded-lg text-xs font-bold border-2 cursor-pointer transition-all whitespace-nowrap ${
+                        p.status === 'active'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 hover:border-emerald-400'
+                          : 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100 hover:border-red-400'
+                      }`}
+                    >
+                      <option value="active">🟢 Active</option>
+                      <option value="withdrawn">🔴 Withdrawn</option>
+                    </select>
+                  </div>
+
+                  {/* Device Info */}
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex items-center gap-2 bg-gradient-to-r from-gray-50 to-gray-100 px-3 py-2 rounded-lg border border-gray-200">
+                      <Smartphone size={13} className="text-gray-500" />
+                      <span className="text-xs font-semibold text-gray-700">{p.device_info?.model || 'Unknown'}</span>
+                    </div>
+                    {p.device_info?.android_version && (
+                      <div className="bg-blue-50 px-3 py-2 rounded-lg border border-blue-200 text-xs font-semibold text-blue-700">
+                        Android {p.device_info.android_version}
+                      </div>
+                    )}
+                    {p.device_info?.app_version && (
+                      <div className="bg-purple-50 px-3 py-2 rounded-lg border border-purple-200 text-xs font-semibold text-purple-700">
+                        v{p.device_info.app_version}
+                      </div>
+                    )}
+                    {p.device_info?.pending_records && (
+                      <div className="bg-amber-50 px-3 py-2 rounded-lg border border-amber-200 text-xs font-semibold text-amber-700">
+                        ⏳ {p.device_info.pending_records} pending
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Timeline */}
+                  <div className="flex gap-4 text-xs text-gray-600 pb-3 border-b border-gray-100">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle size={13} className="text-gray-400 flex-shrink-0" />
+                      <span>Enrolled <span className="font-semibold">{formatDistanceToNow(new Date(p.enrolled_at), { addSuffix: true })}</span></span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Clock size={13} className={`flex-shrink-0 ${p.last_sync_at ? 'text-gray-400' : 'text-red-500'}`} />
+                      <span className={p.last_sync_at ? '' : 'text-red-600 font-semibold'}>
+                        {p.last_sync_at
+                          ? `Synced ${formatDistanceToNow(new Date(p.last_sync_at), { addSuffix: true })}`
+                          : 'Never synced'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Health & Alerts */}
+                  <div className="flex flex-wrap gap-2">
+                    {p.merged_into && !p.merge_adopted_at && (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg">
+                        ⏳ Waiting to adopt
+                      </span>
+                    )}
+                    {p.merged_into && p.merge_adopted_at && (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                        ✅ Primary adopted
+                      </span>
+                    )}
+                    {health && health.status !== 'success' && (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-3 py-1.5 rounded-lg">
+                        ⚠️ Sync {health.status}
+                      </span>
+                    )}
+                    {stale && (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
+                        ⏰ Sync stale
+                      </span>
+                    )}
+                    {hasPermIssues ? (
+                      missing.map(m => (
+                        <span key={m} className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-3 py-1.5 rounded-lg">
+                          🔒 {m}
+                        </span>
+                      ))
+                    ) : p.permissions ? (
+                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                        ✓ All permissions
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="grid grid-cols-4 gap-2 pt-2">
+                    <Link href={`/studies/${studyId}/data?participant=${p.id}`} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold text-center transition-all shadow-sm hover:shadow">
+                      📊 Data
+                    </Link>
+                    <Link href={`/studies/${studyId}/esm-responses?participant=${p.id}`} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold text-center transition-all shadow-sm hover:shadow">
+                      💬 Survey
+                    </Link>
+                    <button onClick={() => setSyncModalParticipant(p)} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold transition-all shadow-sm hover:shadow">
+                      🔄 Sync
+                    </button>
+                    <button onClick={() => setPermModalParticipant(p)} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold transition-all shadow-sm hover:shadow">
+                      🔐 Perms
+                    </button>
                   </div>
                 </div>
               </div>
