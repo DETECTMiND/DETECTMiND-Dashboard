@@ -54,13 +54,13 @@ SELECT
     ROUND(SUM(s.session_seconds) / 3600.0, 2)     AS screen_on_hours,
     COUNT(*)                                      AS session_count,
     ROUND(AVG(s.session_seconds) / 60.0, 1)       AS avg_session_minutes,
-    COALESCE(u.unlock_count, 0)                   AS unlock_count,
+    COALESCE(MAX(u.unlock_count), 0)              AS unlock_count,
     SUM(CASE WHEN s.was_capped THEN 1 ELSE 0 END) AS capped_sessions
 FROM sessions s
 LEFT JOIN unlocks u
     ON u.participant_id = s.participant_id
    AND u.usage_date    = s.usage_date
-GROUP BY s.participant_id, s.usage_date, u.participant_id, u.usage_date;
+GROUP BY s.participant_id, s.usage_date;
 
 -- ─── hourly_usage (FIXED: timezone conversions simplified) ────────────────────
 CREATE OR REPLACE VIEW hourly_usage
