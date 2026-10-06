@@ -47,7 +47,7 @@ FROM sessions s
 LEFT JOIN unlocks u
     ON u.participant_id = s.participant_id
    AND u.usage_date    = s.usage_date
-GROUP BY s.participant_id, s.usage_date;
+GROUP BY s.participant_id, s.usage_date, u.participant_id, u.usage_date;
 
 -- Recreate hourly_usage with simplified timezone handling
 CREATE OR REPLACE VIEW hourly_usage
