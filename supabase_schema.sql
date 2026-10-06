@@ -368,7 +368,12 @@ WITH sessions AS (
     SELECT
         participant_id,
         start_ts::date AS usage_date,
-        session_seconds,
+        -- Cap session_seconds to only count time up to now() for today
+        CASE
+            WHEN start_ts::date = now()::date
+            THEN LEAST(session_seconds, EXTRACT(EPOCH FROM (now() - start_ts))::int)
+            ELSE session_seconds
+        END AS session_seconds,
         was_capped
     FROM screen_sessions
 ),
