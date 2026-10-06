@@ -16,7 +16,7 @@ import {
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which view to read, and how to shape it.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages'
+  | 'hourly' | 'daily' | 'hourly_app' | 'daily_app' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages'
 
 interface DatasetDef {
   key: DatasetKey
@@ -26,13 +26,15 @@ interface DatasetDef {
 }
 
 const DATASETS: DatasetDef[] = [
-  { key: 'hourly',        label: 'Hourly Usage',   view: 'hourly_usage',          hasChart: true  },
-  { key: 'daily',         label: 'Daily Usage',    view: 'daily_usage',           hasChart: true  },
-  { key: 'steps',         label: 'Steps',          view: 'daily_steps',           hasChart: true  },
-  { key: 'pickups',       label: 'Pickups',        view: 'daily_pickups',         hasChart: true  },
-  { key: 'first_last',    label: 'First / Last Use', view: 'daily_first_last_use', hasChart: false },
-  { key: 'notifications', label: 'Notifications',  view: 'daily_notifications',    hasChart: true  },
-  { key: 'battery',       label: 'Battery',        view: 'daily_battery_summary',  hasChart: true  },
+  { key: 'hourly',        label: 'Hourly Screen Usage',   view: 'hourly_usage',          hasChart: true  },
+  { key: 'daily',         label: 'Daily Screen Usage',    view: 'daily_usage',           hasChart: true  },
+  { key: 'hourly_app',    label: 'Hourly App Usage',      view: 'hourly_app_usage',      hasChart: true  },
+  { key: 'daily_app',     label: 'Daily App Usage Total', view: 'daily_app_usage_total', hasChart: true  },
+  { key: 'steps',         label: 'Steps',                 view: 'daily_steps',           hasChart: true  },
+  { key: 'pickups',       label: 'Pickups',               view: 'daily_pickups',         hasChart: true  },
+  { key: 'first_last',    label: 'First / Last Use',      view: 'daily_first_last_use',  hasChart: false },
+  { key: 'notifications', label: 'Notifications',         view: 'daily_notifications',    hasChart: true  },
+  { key: 'battery',       label: 'Battery',               view: 'daily_battery_summary',  hasChart: true  },
   { key: 'permission_outages', label: 'Permission Outages', view: 'permission_outages', hasChart: false },
 ]
 

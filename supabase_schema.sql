@@ -454,7 +454,35 @@ SELECT
 FROM data_app_usage
 GROUP BY participant_id, usage_date, package_name;
 
-GRANT SELECT ON screen_sessions, daily_usage, hourly_usage, daily_app_usage TO authenticated;
+CREATE OR REPLACE VIEW hourly_app_usage
+WITH (security_invoker = on) AS
+SELECT
+    participant_id,
+    date_trunc('hour', start_time)::timestamp AS usage_hour,
+    (date_trunc('hour', start_time))::date AS usage_date,
+    EXTRACT(HOUR FROM date_trunc('hour', start_time))::int AS hour_of_day,
+    package_name,
+    MAX(app_name)                          AS app_name,
+    SUM(duration_seconds)                  AS foreground_seconds,
+    ROUND(SUM(duration_seconds) / 60.0, 1) AS foreground_minutes,
+    COUNT(*)                               AS open_count
+FROM data_app_usage
+GROUP BY participant_id, date_trunc('hour', start_time), package_name;
+
+CREATE OR REPLACE VIEW daily_app_usage_total
+WITH (security_invoker = on) AS
+SELECT
+    participant_id,
+    start_time::date AS usage_date,
+    SUM(duration_seconds)                  AS total_foreground_seconds,
+    ROUND(SUM(duration_seconds) / 60.0, 1) AS total_foreground_minutes,
+    ROUND(SUM(duration_seconds) / 3600.0, 2) AS total_foreground_hours,
+    COUNT(DISTINCT package_name)           AS unique_apps,
+    COUNT(*)                               AS total_opens
+FROM data_app_usage
+GROUP BY participant_id, start_time::date;
+
+GRANT SELECT ON screen_sessions, daily_usage, hourly_usage, daily_app_usage, hourly_app_usage, daily_app_usage_total TO authenticated;
 
 -- ─── Additional processed datasets (see migration_2026_10_processed_datasets.sql) ───
 
