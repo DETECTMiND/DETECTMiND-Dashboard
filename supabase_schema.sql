@@ -352,13 +352,8 @@ SELECT
     participant_id,
     start_ts,
     next_ts AS end_ts,
-    LEAST(
-        COALESCE(EXTRACT(EPOCH FROM (next_ts - start_ts)), 7200)::bigint,
-        7200
-    ) AS session_seconds,
-    (next_dir IS DISTINCT FROM 'off'
-     OR EXTRACT(EPOCH FROM (next_ts - start_ts)) > 7200
-     OR next_ts IS NULL) AS was_capped
+    COALESCE(EXTRACT(EPOCH FROM (next_ts - start_ts)), 0)::bigint AS session_seconds,
+    (next_dir IS DISTINCT FROM 'off' OR next_ts IS NULL) AS was_capped
 FROM with_next
 WHERE dir = 'on';
 
