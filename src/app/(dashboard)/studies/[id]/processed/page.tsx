@@ -172,6 +172,51 @@ export default function ProcessedDataPage() {
 
     const div = (pdays: number) => overallMode === 'avg' ? Math.max(pdays, 1) : 1
 
+    // Hourly app usage: per-app by hour
+    if (dataset === 'hourly_app') {
+      const rows = [...scoped]
+        .sort((a, b) => (b.usage_hour || '').localeCompare(a.usage_hour || ''))
+        .map(r => ({
+          time: r.usage_hour ? new Date(r.usage_hour).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '',
+          app: r.app_name || r.package_name || 'Unknown',
+          time_used: fmtHM(r.foreground_minutes), minutes: Math.round(r.foreground_minutes), opens: r.open_count,
+        }))
+      return {
+        headers: ['Time (hour)', 'App', 'Time used', 'Minutes', 'Opens'],
+        rows: rows.map(r => [r.time, r.app, r.time_used, String(r.minutes), String(r.opens)]),
+        csv: rows, chart: rows.slice(0, 10).map(r => ({ date: r.time, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
+      }
+    }
+
+    // Daily app usage total: total app time per day
+    if (dataset === 'daily_app') {
+      if (!isOverall) {
+        const rows = [...scoped].sort((a, b) => a.usage_date.localeCompare(b.usage_date)).map(r => ({
+          date: r.usage_date, total_time: fmtHM(r.total_foreground_minutes), minutes: Math.round(r.total_foreground_minutes),
+          hours: r.total_foreground_hours, apps: r.unique_apps, opens: r.total_opens,
+        }))
+        return {
+          headers: ['Date', 'Total time', 'Minutes', 'Hours', 'Unique apps', 'Opens'],
+          rows: rows.map(r => [r.date, r.total_time, String(r.minutes), String(r.hours), String(r.apps), String(r.opens)]),
+          csv: rows, chart: rows.map(r => ({ date: r.date, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
+        }
+      }
+      const by: Record<string, { minutes: number; hours: number; apps: number; opens: number; pdays: number }> = {}
+      for (const r of scoped) {
+        const d = by[r.usage_date] || (by[r.usage_date] = { minutes: 0, hours: 0, apps: 0, opens: 0, pdays: 0 })
+        d.minutes += r.total_foreground_minutes; d.hours += r.total_foreground_hours; d.apps += r.unique_apps; d.opens += r.total_opens; d.pdays++
+      }
+      const rows = Object.keys(by).sort().map(date => {
+        const d = by[date]; const k = div(d.pdays)
+        return { date, participants: d.pdays, total_time: fmtHM(d.minutes / k), minutes: Math.round(d.minutes / k), hours: +(d.hours / k).toFixed(2), apps: Math.round(d.apps / k), opens: Math.round(d.opens / k) }
+      })
+      return {
+        headers: ['Date', 'Participants', 'Total time', 'Minutes', 'Hours', 'Avg unique apps', 'Avg opens'],
+        rows: rows.map(r => [r.date, String(r.participants), r.total_time, String(r.minutes), String(r.hours), String(r.apps), String(r.opens)]),
+        csv: rows, chart: rows.map(r => ({ date: r.date, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
+      }
+    }
+
     // Build per-date aggregation for overall, or straight rows for single.
     if (dataset === 'daily') {
       if (!isOverall) {
