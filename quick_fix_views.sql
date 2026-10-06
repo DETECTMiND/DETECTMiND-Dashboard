@@ -92,6 +92,10 @@ HAVING SUM(
     ))
 ) > 0;
 
+-- Grant permissions to authenticated users
+GRANT SELECT ON daily_usage TO authenticated;
+GRANT SELECT ON hourly_usage TO authenticated;
+
 -- Verify the fixes
 SELECT 'daily_usage fixed' AS status, COUNT(*) as total_rows FROM daily_usage
 UNION ALL

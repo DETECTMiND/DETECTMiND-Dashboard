@@ -201,6 +201,10 @@ GROUP BY 1, 2;
 
 GRANT SELECT ON daily_steps TO authenticated;
 
+-- Grant all permissions for all views (comprehensive)
+GRANT SELECT ON daily_usage, hourly_usage, daily_app_usage TO authenticated;
+GRANT SELECT ON daily_pickups, daily_first_last_use, daily_notifications, daily_battery_summary, daily_steps TO authenticated;
+
 -- ============================================================
 -- Verification queries (run these to verify the fixes)
 -- ============================================================
