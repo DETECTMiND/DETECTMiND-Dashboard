@@ -5,15 +5,17 @@ import { useEffect, useState, Suspense, useMemo, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import {
-  AlertTriangle, CheckCircle2, Clock, Smartphone, Pencil,
+  AlertTriangle, Clock, Smartphone, Pencil, Check, ChevronDown,
   Database, MessageSquare, Search, X, Activity, RefreshCw,
-  TrendingUp, Zap, AlertCircle, CheckCircle, ShieldCheck,
+  TrendingUp, Zap, AlertCircle, CheckCircle, ShieldCheck, ShieldAlert,
+  ChartColumn, CircleAlert, GitMerge, Hourglass,
 } from 'lucide-react'
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
 import { MergeSuggestions } from '@/components/participant-merge'
 import { PermissionHistoryModal } from '@/components/permission-history-modal'
 import { PinLockouts } from '@/components/pin-lockouts'
 import { MergeAudit } from '@/components/merge-audit'
+import { avatarColor, avatarInitial } from '@/components/participant-ui'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -59,6 +61,28 @@ interface SyncRow {
 }
 
 function pName(p: Participant) { return p.label || p.device_id }
+
+const ACTION_BTN = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:text-blue-700 transition-colors'
+
+const CHIP_TONES = {
+  red:   'bg-red-50 text-red-700 ring-red-200',
+  amber: 'bg-amber-50 text-amber-700 ring-amber-200',
+  green: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  blue:  'bg-blue-50 text-blue-700 ring-blue-200',
+}
+
+function Chip({ tone, icon, title, children }: {
+  tone: keyof typeof CHIP_TONES
+  icon: React.ReactNode
+  title?: string
+  children: React.ReactNode
+}) {
+  return (
+    <span title={title} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ring-1 ring-inset ${CHIP_TONES[tone]}`}>
+      {icon}{children}
+    </span>
+  )
+}
 
 function syncCellColor(rows: SyncRow[]): string {
   if (!rows.length) return '#e5e7eb'
@@ -629,7 +653,7 @@ function ParticipantsContent() {
           <p className="text-gray-400 text-xs mt-1">Try a different search or filter</p>
         </div>
       ) : (
-        <div className="space-y-2.5">
+        <div className="space-y-2">
           {filtered.map(p => {
             const missing = getMissingPermissions(p)
             const isWithdrawn = p.status === 'withdrawn'
@@ -638,144 +662,155 @@ function ParticipantsContent() {
             const hasAlerts = stale || hasPermIssues
             const health = latestSync[p.id]
 
+            const name = pName(p)
+            const meta = [
+              p.device_info?.model ? String(p.device_info.model) : 'Unknown device',
+              p.device_info?.android_version ? `Android ${p.device_info.android_version}` : null,
+              p.device_info?.app_version ? `v${p.device_info.app_version}` : null,
+            ].filter(Boolean) as string[]
+
             return (
-              <div key={p.id} className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-                <div className="px-5 py-5 space-y-4">
-                  {/* Header: Title + Status Dropdown */}
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
+              <div
+                key={p.id}
+                className={`group/card relative bg-white rounded-xl border shadow-sm hover:shadow-md hover:border-gray-300 transition-all ${
+                  isWithdrawn ? 'border-gray-200 opacity-75' : hasAlerts ? 'border-amber-200' : 'border-gray-200'
+                }`}
+              >
+                {/* Health accent */}
+                <span
+                  className={`absolute left-0 top-3 bottom-3 w-1 rounded-r-full ${
+                    isWithdrawn ? 'bg-gray-300' : hasPermIssues || (health && health.status !== 'success') ? 'bg-red-400' : stale ? 'bg-amber-400' : 'bg-emerald-400'
+                  }`}
+                />
+
+                <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-5 pl-5 pr-4 py-3.5">
+                  {/* Identity */}
+                  <div className="flex items-center gap-3 min-w-0 lg:w-64 lg:shrink-0">
+                    <div className="relative shrink-0">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${avatarColor(p.id)}`}>
+                        {avatarInitial(name)}
+                      </div>
+                      <span
+                        className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-white ${isWithdrawn ? 'bg-gray-400' : 'bg-emerald-500'}`}
+                        title={p.status}
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
                       {editingLabel === p.id ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
                           <input
                             value={labelValue}
                             onChange={e => setLabelValue(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter') saveLabel(p.id); if (e.key === 'Escape') setEditingLabel(null) }}
-                            className="px-3 py-2 border border-blue-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 flex-1"
+                            className="min-w-0 flex-1 px-2 py-1 border border-blue-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30"
                             placeholder="Label"
                             autoFocus
                           />
-                          <button onClick={() => saveLabel(p.id)} className="text-blue-600 text-xs font-semibold hover:text-blue-700 whitespace-nowrap">Save</button>
-                          <button onClick={() => setEditingLabel(null)} className="text-gray-400 text-xs hover:text-gray-600 whitespace-nowrap">Cancel</button>
+                          <button onClick={() => saveLabel(p.id)} className="p-1 rounded-md text-blue-600 hover:bg-blue-50" title="Save"><Check size={14} /></button>
+                          <button onClick={() => setEditingLabel(null)} className="p-1 rounded-md text-gray-400 hover:bg-gray-100" title="Cancel"><X size={14} /></button>
                         </div>
                       ) : (
-                        <div>
-                          <button
-                            onClick={() => { setEditingLabel(p.id); setLabelValue(p.label || '') }}
-                            className="flex items-center gap-2 font-bold text-lg text-gray-900 hover:text-blue-600 transition-colors group"
-                          >
-                            {p.label || p.device_id}
-                            <Pencil size={14} className="text-gray-300 group-hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100" />
-                          </button>
-                          {p.label && (
-                            <p className="text-xs text-gray-400 font-mono mt-1">{p.device_id}</p>
-                          )}
-                        </div>
+                        <button
+                          onClick={() => { setEditingLabel(p.id); setLabelValue(p.label || '') }}
+                          className="group/name flex items-center gap-1.5 max-w-full text-[15px] font-semibold text-gray-900 hover:text-blue-600 transition-colors"
+                          title="Rename"
+                        >
+                          <span className="truncate">{name}</span>
+                          <Pencil size={12} className="shrink-0 text-gray-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
+                        </button>
+                      )}
+                      {p.label && editingLabel !== p.id && (
+                        <p className="text-[11px] text-gray-400 font-mono truncate" title={p.device_id}>{p.device_id}</p>
                       )}
                     </div>
-
-                    {/* Status Dropdown */}
-                    <select
-                      value={p.status}
-                      onChange={e => updateStatus(p.id, e.target.value)}
-                      className={`px-4 py-2 rounded-lg text-xs font-bold border-2 cursor-pointer transition-all whitespace-nowrap ${
-                        p.status === 'active'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-300 hover:bg-emerald-100 hover:border-emerald-400'
-                          : 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100 hover:border-red-400'
-                      }`}
-                    >
-                      <option value="active">🟢 Active</option>
-                      <option value="withdrawn">🔴 Withdrawn</option>
-                    </select>
                   </div>
 
-                  {/* Device Info */}
-                  <div className="flex flex-wrap gap-2">
-                    <div className="flex items-center gap-2 bg-gradient-to-r from-gray-50 to-gray-100 px-3 py-2 rounded-lg border border-gray-200">
-                      <Smartphone size={13} className="text-gray-500" />
-                      <span className="text-xs font-semibold text-gray-700">{p.device_info?.model || 'Unknown'}</span>
-                    </div>
-                    {p.device_info?.android_version && (
-                      <div className="bg-blue-50 px-3 py-2 rounded-lg border border-blue-200 text-xs font-semibold text-blue-700">
-                        Android {p.device_info.android_version}
-                      </div>
-                    )}
-                    {p.device_info?.app_version && (
-                      <div className="bg-purple-50 px-3 py-2 rounded-lg border border-purple-200 text-xs font-semibold text-purple-700">
-                        v{p.device_info.app_version}
-                      </div>
-                    )}
-                    {p.device_info?.pending_records && (
-                      <div className="bg-amber-50 px-3 py-2 rounded-lg border border-amber-200 text-xs font-semibold text-amber-700">
-                        ⏳ {p.device_info.pending_records} pending
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Timeline */}
-                  <div className="flex gap-4 text-xs text-gray-600 pb-3 border-b border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle size={13} className="text-gray-400 flex-shrink-0" />
-                      <span>Enrolled <span className="font-semibold">{formatDistanceToNow(new Date(p.enrolled_at), { addSuffix: true })}</span></span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Clock size={13} className={`flex-shrink-0 ${p.last_sync_at ? 'text-gray-400' : 'text-red-500'}`} />
-                      <span className={p.last_sync_at ? '' : 'text-red-600 font-semibold'}>
+                  {/* Device + timeline + health */}
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-gray-500">
+                      <span className="inline-flex items-center gap-1.5 min-w-0">
+                        <Smartphone size={12} className="text-gray-400 shrink-0" />
+                        <span className="truncate">{meta.join(' · ')}</span>
+                      </span>
+                      <span className="hidden sm:inline text-gray-300">|</span>
+                      <span title={format(new Date(p.enrolled_at), 'PPpp')}>
+                        Enrolled {formatDistanceToNow(new Date(p.enrolled_at), { addSuffix: true })}
+                      </span>
+                      <span className="hidden sm:inline text-gray-300">|</span>
+                      <span
+                        className={`inline-flex items-center gap-1 ${!p.last_sync_at ? 'text-red-600 font-semibold' : stale ? 'text-amber-700 font-medium' : ''}`}
+                        title={p.last_sync_at ? format(new Date(p.last_sync_at), 'PPpp') : undefined}
+                      >
+                        <Clock size={12} className="shrink-0" />
                         {p.last_sync_at
                           ? `Synced ${formatDistanceToNow(new Date(p.last_sync_at), { addSuffix: true })}`
                           : 'Never synced'}
                       </span>
                     </div>
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {p.merged_into && !p.merge_adopted_at && (
+                        <Chip tone="blue" icon={<Hourglass size={11} />}>Waiting to adopt</Chip>
+                      )}
+                      {p.merged_into && p.merge_adopted_at && (
+                        <Chip tone="green" icon={<GitMerge size={11} />}>Primary adopted</Chip>
+                      )}
+                      {health && health.status !== 'success' && (
+                        <Chip tone="red" icon={<CircleAlert size={11} />} title={health.error_message || undefined}>
+                          Last sync {health.status}
+                        </Chip>
+                      )}
+                      {stale && (
+                        <Chip tone="amber" icon={<AlertTriangle size={11} />}>Sync stale</Chip>
+                      )}
+                      {p.device_info?.pending_records ? (
+                        <Chip tone="amber" icon={<Database size={11} />}>
+                          {Number(p.device_info.pending_records).toLocaleString()} pending
+                        </Chip>
+                      ) : null}
+                      {hasPermIssues ? (
+                        <Chip tone="red" icon={<ShieldAlert size={11} />} title={missing.join(', ')}>
+                          {missing.length === 1 ? missing[0] : `${missing.length} permissions missing`}
+                        </Chip>
+                      ) : p.permissions && !isWithdrawn ? (
+                        <Chip tone="green" icon={<ShieldCheck size={11} />}>All permissions</Chip>
+                      ) : null}
+                    </div>
                   </div>
 
-                  {/* Health & Alerts */}
-                  <div className="flex flex-wrap gap-2">
-                    {p.merged_into && !p.merge_adopted_at && (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-lg">
-                        ⏳ Waiting to adopt
-                      </span>
-                    )}
-                    {p.merged_into && p.merge_adopted_at && (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-                        ✅ Primary adopted
-                      </span>
-                    )}
-                    {health && health.status !== 'success' && (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-3 py-1.5 rounded-lg">
-                        ⚠️ Sync {health.status}
-                      </span>
-                    )}
-                    {stale && (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
-                        ⏰ Sync stale
-                      </span>
-                    )}
-                    {hasPermIssues ? (
-                      missing.map(m => (
-                        <span key={m} className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 px-3 py-1.5 rounded-lg">
-                          🔒 {m}
-                        </span>
-                      ))
-                    ) : p.permissions ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
-                        ✓ All permissions
-                      </span>
-                    ) : null}
-                  </div>
+                  {/* Status + actions */}
+                  <div className="flex items-center gap-2 lg:shrink-0 pt-2.5 lg:pt-0 border-t lg:border-t-0 border-gray-100">
+                    <div className="relative">
+                      <select
+                        value={p.status}
+                        onChange={e => updateStatus(p.id, e.target.value)}
+                        aria-label="Participant status"
+                        className={`appearance-none pl-6 pr-7 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                          p.status === 'active'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                            : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
+                        }`}
+                      >
+                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+                      </select>
+                      <span className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${p.status === 'active' ? 'bg-emerald-500' : 'bg-gray-400'}`} />
+                      <ChevronDown size={12} className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 ${p.status === 'active' ? 'text-emerald-600' : 'text-gray-500'}`} />
+                    </div>
 
-                  {/* Action Buttons */}
-                  <div className="grid grid-cols-4 gap-2 pt-2">
-                    <Link href={`/studies/${studyId}/data?participant=${p.id}`} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold text-center transition-all shadow-sm hover:shadow">
-                      📊 Data
-                    </Link>
-                    <Link href={`/studies/${studyId}/esm-responses?participant=${p.id}`} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold text-center transition-all shadow-sm hover:shadow">
-                      💬 Survey
-                    </Link>
-                    <button onClick={() => setSyncModalParticipant(p)} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold transition-all shadow-sm hover:shadow">
-                      🔄 Sync
-                    </button>
-                    <button onClick={() => setPermModalParticipant(p)} className="px-3 py-2.5 text-xs bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-semibold transition-all shadow-sm hover:shadow">
-                      🔐 Perms
-                    </button>
+                    <div className="ml-auto lg:ml-0 flex items-center rounded-lg border border-gray-200 bg-white divide-x divide-gray-200 overflow-hidden">
+                      <Link href={`/studies/${studyId}/data?participant=${p.id}`} className={ACTION_BTN} title="View sensor data">
+                        <ChartColumn size={14} /><span className="hidden xl:inline">Data</span>
+                      </Link>
+                      <Link href={`/studies/${studyId}/esm-responses?participant=${p.id}`} className={ACTION_BTN} title="View survey responses">
+                        <MessageSquare size={14} /><span className="hidden xl:inline">Surveys</span>
+                      </Link>
+                      <button onClick={() => setSyncModalParticipant(p)} className={ACTION_BTN} title="Sync history">
+                        <Activity size={14} /><span className="hidden xl:inline">Sync</span>
+                      </button>
+                      <button onClick={() => setPermModalParticipant(p)} className={ACTION_BTN} title="Permission history">
+                        <ShieldCheck size={14} /><span className="hidden xl:inline">Permissions</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
