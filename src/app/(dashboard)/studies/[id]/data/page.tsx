@@ -365,7 +365,7 @@ function SensorDataInner() {
           .from(selectedTable.key)
           .select('*')
           .in('participant_id', pIds)
-          .order(effectiveSortCol, { ascending: sortDir === 'asc' })
+          .order(effectiveSortCol, { ascending: sortDir === 'asc', nullsFirst: false })
           .range(from, to),
         supabase
           .from(selectedTable.key)
@@ -396,7 +396,7 @@ function SensorDataInner() {
         .from(selectedTable.key)
         .select('*')
         .in('participant_id', pIds)
-        .order(selectedTable.timeCol, { ascending: true })
+        .order(selectedTable.timeCol, { ascending: true, nullsFirst: false })
         .limit(CHART_FETCH_LIMIT)
       if (since) q = q.gte(selectedTable.timeCol, since)
 
@@ -451,7 +451,7 @@ function SensorDataInner() {
       .from(selectedTable.key)
       .select('*')
       .in('participant_id', pIds)
-      .order(effectiveSortCol, { ascending: sortDir === 'asc' })
+      .order(effectiveSortCol, { ascending: sortDir === 'asc', nullsFirst: false })
     const csv = buildCSV(allRows || [])
     if (csv) downloadCSV(csv, `${selectedTable.key}_full_export.csv`)
     setExporting(false)
