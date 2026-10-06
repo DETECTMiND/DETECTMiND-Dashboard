@@ -413,12 +413,14 @@ hour_buckets AS (
         start_ts,
         end_ts,
         -- Generate hour boundaries in database's local time (Europe/London)
+        -- Cap at current hour to avoid showing incomplete/future data
         generate_series(
             date_trunc('hour', start_ts),
-            date_trunc('hour', end_ts),
+            LEAST(date_trunc('hour', end_ts), date_trunc('hour', now())),
             interval '1 hour'
         ) AS hour_start
     FROM bounded
+    WHERE start_ts <= now()  -- Only include past sessions
 )
 SELECT
     participant_id,
