@@ -367,7 +367,7 @@ WITH (security_invoker = on) AS
 WITH sessions AS (
     SELECT
         participant_id,
-        (start_ts AT TIME ZONE 'Europe/London')::date AS usage_date,
+        start_ts::date AS usage_date,
         session_seconds,
         was_capped
     FROM screen_sessions
@@ -375,7 +375,7 @@ WITH sessions AS (
 unlocks AS (
     SELECT
         participant_id,
-        (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
+        recorded_at::date AS usage_date,
         COUNT(*) AS unlock_count
     FROM data_screen_state
     WHERE state = 'unlocked'
@@ -412,10 +412,10 @@ hour_buckets AS (
         participant_id,
         start_ts,
         end_ts,
-        -- hour marks aligned to Europe/London local time, returned as timestamptz
+        -- Generate hour boundaries in database's local time (Europe/London)
         generate_series(
-            date_trunc('hour', start_ts AT TIME ZONE 'Europe/London'),
-            date_trunc('hour', end_ts   AT TIME ZONE 'Europe/London'),
+            date_trunc('hour', start_ts),
+            date_trunc('hour', end_ts),
             interval '1 hour'
         ) AS hour_start
     FROM bounded
@@ -424,7 +424,7 @@ SELECT
     participant_id,
     hour_start AS usage_hour,
     hour_start::date AS usage_date,
-    EXTRACT(HOUR FROM hour_start AT TIME ZONE 'Europe/London')::int AS hour_of_day,
+    EXTRACT(HOUR FROM hour_start)::int AS hour_of_day,
     SUM(
         EXTRACT(EPOCH FROM (
             LEAST(end_ts, hour_start + interval '1 hour')
@@ -444,7 +444,7 @@ CREATE OR REPLACE VIEW daily_app_usage
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (start_time::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
+    start_time::date AS usage_date,
     package_name,
     MAX(app_name)                          AS app_name,
     SUM(duration_seconds)                  AS foreground_seconds,
@@ -463,8 +463,8 @@ CREATE OR REPLACE VIEW daily_pickups
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
-    EXTRACT(HOUR FROM recorded_at::timestamptz AT TIME ZONE 'Europe/London')::int AS hour_of_day,
+    recorded_at::date AS usage_date,
+    EXTRACT(HOUR FROM recorded_at)::int AS hour_of_day,
     COUNT(*) AS pickups
 FROM data_screen_state
 WHERE state = 'unlocked'
@@ -476,8 +476,8 @@ WITH (security_invoker = on) AS
 WITH uses AS (
     SELECT
         participant_id,
-        (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
-        recorded_at::timestamptz AS ts,
+        recorded_at::date AS usage_date,
+        recorded_at AS ts,
         state
     FROM data_screen_state
     WHERE state IN ('on', 'unlocked', 'off', 'locked')
@@ -487,8 +487,8 @@ SELECT
     usage_date,
     MIN(ts) FILTER (WHERE state IN ('on', 'unlocked'))  AS first_use,
     MAX(ts) FILTER (WHERE state IN ('off', 'locked'))   AS last_use,
-    to_char(MIN(ts) FILTER (WHERE state IN ('on', 'unlocked')) AT TIME ZONE 'Europe/London', 'HH24:MI') AS first_use_local,
-    to_char(MAX(ts) FILTER (WHERE state IN ('off', 'locked'))  AT TIME ZONE 'Europe/London', 'HH24:MI') AS last_use_local
+    to_char(MIN(ts) FILTER (WHERE state IN ('on', 'unlocked')), 'HH24:MI') AS first_use_local,
+    to_char(MAX(ts) FILTER (WHERE state IN ('off', 'locked')), 'HH24:MI') AS last_use_local
 FROM uses
 GROUP BY participant_id, usage_date;
 
@@ -497,7 +497,7 @@ CREATE OR REPLACE VIEW daily_notifications
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (posted_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
+    posted_at::date AS usage_date,
     COUNT(*)                                               AS notifications,
     COUNT(DISTINCT package_name)                           AS distinct_apps,
     COUNT(*) FILTER (WHERE removal_reason = 'clicked')     AS opened
@@ -509,7 +509,7 @@ CREATE OR REPLACE VIEW daily_battery_summary
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
+    recorded_at::date AS usage_date,
     ROUND(AVG(level))::int                                        AS avg_level,
     MIN(level)                                                    AS min_level,
     MAX(level)                                                    AS max_level,
@@ -557,7 +557,7 @@ CREATE OR REPLACE VIEW daily_steps
 WITH (security_invoker = on) AS
 SELECT
     participant_id,
-    (recorded_at::timestamptz AT TIME ZONE 'Europe/London')::date AS usage_date,
+    recorded_at::date AS usage_date,
     SUM(steps)  AS steps,
     COUNT(*)    AS samples
 FROM data_steps
