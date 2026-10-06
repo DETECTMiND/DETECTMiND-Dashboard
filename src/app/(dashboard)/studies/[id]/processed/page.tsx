@@ -147,12 +147,12 @@ export default function ProcessedDataPage() {
 
   const hourlyOverall = useMemo(() => {
     const sum: Record<number, number> = {}
-    const pdays = new Set<string>()
+    const participants = new Set<string>()
     for (const r of scoped) {
       sum[r.hour_of_day] = (sum[r.hour_of_day] || 0) + r.screen_on_seconds / 60
-      pdays.add(`${r.participant_id}|${r.usage_date}`)
+      participants.add(r.participant_id)
     }
-    const denom = overallMode === 'avg' ? Math.max(pdays.size, 1) : 1
+    const denom = overallMode === 'avg' ? Math.max(participants.size, 1) : 1
     return HOURS.map(h => ({ hour: `${String(h).padStart(2, '0')}:00`, minutes: Math.round((sum[h] || 0) / denom) }))
   }, [scoped, overallMode])
 
@@ -200,14 +200,14 @@ export default function ProcessedDataPage() {
     }
 
     if (dataset === 'steps') {
-      const by: Record<string, { steps: number; pdays: number }> = {}
+      const by: Record<string, { steps: number; pdays: Set<string> }> = {}
       for (const r of scoped) {
-        const d = by[r.usage_date] || (by[r.usage_date] = { steps: 0, pdays: 0 })
-        d.steps += r.steps; d.pdays++
+        const d = by[r.usage_date] || (by[r.usage_date] = { steps: 0, pdays: new Set() })
+        d.steps += r.steps; d.pdays.add(r.participant_id)
       }
       const rows = Object.keys(by).sort().map(date => {
-        const d = by[date]; const k = isOverall ? div(d.pdays) : 1
-        return { date, steps: Math.round(d.steps / k), ...(isOverall ? { participants: d.pdays } : {}) }
+        const d = by[date]; const k = isOverall ? div(d.pdays.size) : 1
+        return { date, steps: Math.round(d.steps / k), ...(isOverall ? { participants: d.pdays.size } : {}) }
       })
       return {
         headers: isOverall ? ['Date', 'Participants', 'Steps'] : ['Date', 'Steps'],
@@ -235,14 +235,14 @@ export default function ProcessedDataPage() {
     }
 
     if (dataset === 'notifications') {
-      const by: Record<string, { notifications: number; opened: number; pdays: number }> = {}
+      const by: Record<string, { notifications: number; opened: number; pdays: Set<string> }> = {}
       for (const r of scoped) {
-        const d = by[r.usage_date] || (by[r.usage_date] = { notifications: 0, opened: 0, pdays: 0 })
-        d.notifications += r.notifications; d.opened += (r.opened || 0); d.pdays++
+        const d = by[r.usage_date] || (by[r.usage_date] = { notifications: 0, opened: 0, pdays: new Set() })
+        d.notifications += r.notifications; d.opened += (r.opened || 0); d.pdays.add(r.participant_id)
       }
       const rows = Object.keys(by).sort().map(date => {
-        const d = by[date]; const k = isOverall ? div(d.pdays) : 1
-        return { date, notifications: Math.round(d.notifications / k), opened: Math.round(d.opened / k), ...(isOverall ? { participants: d.pdays } : {}) }
+        const d = by[date]; const k = isOverall ? div(d.pdays.size) : 1
+        return { date, notifications: Math.round(d.notifications / k), opened: Math.round(d.opened / k), ...(isOverall ? { participants: d.pdays.size } : {}) }
       })
       return {
         headers: isOverall ? ['Date', 'Participants', 'Notifications', 'Opened'] : ['Date', 'Notifications', 'Opened'],
