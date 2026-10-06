@@ -734,9 +734,20 @@ function ParticipantsContent() {
                         )}
                       </div>
 
-                      {/* Actions */}
-                      <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                        <button onClick={() => setDetailParticipant(p)} className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">View details</button>
+                      {/* Action buttons */}
+                      <div className="flex gap-2 flex-wrap pt-2">
+                        <Link href={`/studies/${studyId}/data?participant=${p.id}`} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium text-center transition-colors">
+                          📊 Sensor data
+                        </Link>
+                        <Link href={`/studies/${studyId}/esm-responses?participant=${p.id}`} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium text-center transition-colors">
+                          💬 Surveys
+                        </Link>
+                        <button onClick={() => setSyncModalParticipant(p)} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium transition-colors">
+                          🔄 Sync
+                        </button>
+                        <button onClick={() => setPermModalParticipant(p)} className="flex-1 min-w-28 px-3 py-2 text-xs bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 font-medium transition-colors">
+                          🔐 Perms
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -773,12 +784,6 @@ function ParticipantsContent() {
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
               <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Status</p><p className="mt-1 text-sm font-semibold capitalize text-gray-900">{detailParticipant.status}</p></div><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Last sync</p><p className="mt-1 text-sm font-semibold text-gray-900">{detailParticipant.last_sync_at ? formatDistanceToNow(new Date(detailParticipant.last_sync_at), { addSuffix: true }) : 'Never'}</p></div></div>
               <div><h3 className="text-sm font-semibold text-gray-900">Health</h3><div className="mt-2 flex flex-wrap gap-2">{isSyncStale(detailParticipant) && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Sync overdue</span>}{hasPermIssue(detailParticipant) && <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">Permission issue</span>}{!isSyncStale(detailParticipant) && !hasPermIssue(detailParticipant) && <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Healthy</span>}</div></div>
-              <div className="grid gap-2">
-                <Link href={`/studies/${studyId}/data?participant=${detailParticipant.id}`} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-sm font-semibold text-gray-700 hover:bg-gray-50"><Database size={16} />Sensor data</Link>
-                <Link href={`/studies/${studyId}/esm-responses?participant=${detailParticipant.id}`} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-sm font-semibold text-gray-700 hover:bg-gray-50"><MessageSquare size={16} />Survey responses</Link>
-                <button onClick={() => { setDetailParticipant(null); setSyncModalParticipant(detailParticipant) }} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"><Activity size={16} />Sync history</button>
-                <button onClick={() => { setDetailParticipant(null); setPermModalParticipant(detailParticipant) }} className="flex items-center gap-2 rounded-xl border border-gray-200 p-3 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"><ShieldCheck size={16} />Permission history</button>
-              </div>
               <div className="border-t border-gray-200 pt-5"><label className="text-sm font-semibold text-gray-900">Participant status<select value={detailParticipant.status} onChange={e => updateStatus(detailParticipant.id, e.target.value)} className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700">{STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}</select></label></div>
             </div>
           </aside>
