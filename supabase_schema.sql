@@ -413,14 +413,13 @@ hour_buckets AS (
         start_ts,
         end_ts,
         -- Generate hour boundaries in database's local time (Europe/London)
-        -- Cap at start of current hour to exclude incomplete current hour
+        -- Include current hour but cap end_ts to now() to show partial hour data
         generate_series(
             date_trunc('hour', start_ts),
-            LEAST(date_trunc('hour', end_ts), date_trunc('hour', now()) - interval '1 hour'),
+            LEAST(date_trunc('hour', end_ts), date_trunc('hour', now())),
             interval '1 hour'
         ) AS hour_start
     FROM bounded
-    WHERE start_ts < date_trunc('hour', now())  -- Only include sessions that started before current hour
 )
 SELECT
     participant_id,
@@ -429,7 +428,7 @@ SELECT
     EXTRACT(HOUR FROM hour_start)::int AS hour_of_day,
     SUM(
         EXTRACT(EPOCH FROM (
-            LEAST(end_ts, hour_start + interval '1 hour')
+            LEAST(end_ts, hour_start + interval '1 hour', now())
             - GREATEST(start_ts, hour_start)
         ))
     )::bigint AS screen_on_seconds
@@ -437,7 +436,7 @@ FROM hour_buckets
 GROUP BY participant_id, hour_start
 HAVING SUM(
     EXTRACT(EPOCH FROM (
-        LEAST(end_ts, hour_start + interval '1 hour')
+        LEAST(end_ts, hour_start + interval '1 hour', now())
         - GREATEST(start_ts, hour_start)
     ))
 ) > 0;
