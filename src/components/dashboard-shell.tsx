@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import {
   BarChart3, Check, ChevronDown, Database, FlaskConical, LayoutDashboard,
-  LogOut, Menu, MessageSquare, Settings, SlidersHorizontal, TableProperties, Users, X,
+  LogOut, Menu, MessageSquare, Settings, ShieldAlert, SlidersHorizontal, TableProperties, Users, X,
 } from 'lucide-react'
 
 interface Study { id: string; name: string; status: string }
@@ -39,6 +39,20 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const [mobileOpen, setMobileOpen] = useState(false)
   const [studyOpen, setStudyOpen] = useState(false)
   const switcherRef = useRef<HTMLDivElement>(null)
+  // null = still checking. Row-level security only returns study data to users
+  // listed in public.researchers, so a signed-in non-researcher would otherwise
+  // see an empty dashboard with no explanation.
+  const [researcher, setResearcher] = useState<{ ok: boolean; email: string | null } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) { if (!cancelled) setResearcher({ ok: false, email: null }); return }
+      const { data } = await supabase.from('researchers').select('user_id').eq('user_id', user.id).maybeSingle()
+      if (!cancelled) setResearcher({ ok: !!data, email: user.email ?? null })
+    })
+    return () => { cancelled = true }
+  }, [supabase])
 
   const routeStudy = pathname.match(/^\/studies\/([^/]+)/)?.[1]
   const queryStudy = searchParams.get('study')
@@ -89,6 +103,21 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     await supabase.auth.signOut()
     router.push('/login')
     router.refresh()
+  }
+
+  if (researcher && !researcher.ok) {
+    return <div className="flex min-h-dvh items-center justify-center bg-slate-50 px-4">
+      <title>Not authorised | DETECTMiND</title>
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600"><ShieldAlert size={22} /></span>
+        <h1 className="text-lg font-bold text-slate-900">Your account is not authorised as a researcher</h1>
+        <p className="mt-2 text-sm text-slate-500">
+          {researcher.email ? <>You are signed in as <span className="font-medium text-slate-700">{researcher.email}</span>, but </> : 'This account is signed in, but '}
+          it has not been granted researcher access, so no study data is visible. Ask the study administrator to add your account to the researchers list.
+        </p>
+        <button onClick={logout} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"><LogOut size={16} />Sign out</button>
+      </div>
+    </div>
   }
 
   const sidebar = (

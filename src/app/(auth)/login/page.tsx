@@ -17,14 +17,23 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     setError('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
       setError(error.message)
       setLoading(false)
-    } else {
-      router.push('/')
-      router.refresh()
+      return
     }
+    // Only accounts listed in public.researchers can read study data (RLS).
+    const { data: researcher } = await supabase
+      .from('researchers').select('user_id').eq('user_id', data.user.id).maybeSingle()
+    if (!researcher) {
+      await supabase.auth.signOut()
+      setError('Your account is not authorised as a researcher. Ask the study administrator to grant access.')
+      setLoading(false)
+      return
+    }
+    router.push('/')
+    router.refresh()
   }
 
   return (

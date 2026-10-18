@@ -62,6 +62,11 @@ interface SyncRow {
 
 function pName(p: Participant) { return p.label || p.device_id }
 
+function formatSilence(hours: number): string {
+  if (hours < 48) return `${Math.floor(hours)}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
 const ACTION_BTN = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:text-blue-700 transition-colors'
 
 const CHIP_TONES = {
@@ -486,14 +491,20 @@ function ParticipantsContent() {
   const [detailParticipant, setDetailParticipant] = useState<Participant | null>(null)
   const [latestSync, setLatestSync] = useState<Record<string, SyncRow>>({})
   const [renderedAt] = useState(() => Date.now())
+  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(30)
   const [activeFilter, setActiveFilter] = useState<FilterKey>(() => {
     const f = searchParams.get('filter')
     return (f && ['all', 'issues', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
   })
 
   async function load() {
-    const { data } = await supabase.from('participants').select('*')
-      .eq('study_id', studyId).order('enrolled_at', { ascending: false })
+    const [{ data }, { data: study }] = await Promise.all([
+      supabase.from('participants').select('*')
+        .eq('study_id', studyId).order('enrolled_at', { ascending: false }),
+      supabase.from('studies').select('sync_interval_minutes').eq('id', studyId).maybeSingle(),
+    ])
+    const interval = Number(study?.sync_interval_minutes)
+    if (Number.isFinite(interval) && interval > 0) setSyncIntervalMinutes(interval)
     const rows = (data || []) as Participant[]
     setParticipants(rows)
     const requestedParticipant = searchParams.get('participant')
@@ -532,6 +543,21 @@ function ParticipantsContent() {
   function isSyncStale(p: Participant): boolean {
     if (!p.last_sync_at) return true
     return renderedAt - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
+  }
+
+  // An active participant that has gone quiet for well beyond its sync cadence
+  // (3x the study interval; the app enforces a 15 min minimum) or that never
+  // synced within 24 h of enrolling has probably uninstalled or force-stopped
+  // the app. Returns the silent duration in hours, or null when not silent.
+  function silentHours(p: Participant): number | null {
+    if (p.status !== 'active') return null
+    if (p.last_sync_at) {
+      const since = renderedAt - new Date(p.last_sync_at).getTime()
+      const threshold = 3 * Math.max(syncIntervalMinutes, 15) * 60 * 1000
+      return since > threshold ? since / 3_600_000 : null
+    }
+    const sinceEnrol = renderedAt - new Date(p.enrolled_at).getTime()
+    return sinceEnrol > 24 * 3_600_000 ? sinceEnrol / 3_600_000 : null
   }
 
   function hasPermIssue(p: Participant): boolean {
@@ -659,6 +685,7 @@ function ParticipantsContent() {
             const isWithdrawn = p.status === 'withdrawn'
             const hasPermIssues = !isWithdrawn && hasPermIssue(p)
             const stale = !isWithdrawn && isSyncStale(p)
+            const silentFor = silentHours(p)
             const hasAlerts = stale || hasPermIssues
             const health = latestSync[p.id]
 
@@ -760,7 +787,17 @@ function ParticipantsContent() {
                           Last sync {health.status}
                         </Chip>
                       )}
-                      {stale && (
+                      {silentFor !== null ? (
+                        <Chip
+                          tone="red"
+                          icon={<AlertTriangle size={11} />}
+                          title={p.last_sync_at
+                            ? `Expected a sync every ${syncIntervalMinutes} min; last sync ${format(new Date(p.last_sync_at), 'PPpp')}`
+                            : 'Enrolled more than 24 h ago and has never synced'}
+                        >
+                          {p.last_sync_at ? `No sync for ${formatSilence(silentFor)}` : 'Never synced'} — app may be uninstalled
+                        </Chip>
+                      ) : stale && (
                         <Chip tone="amber" icon={<AlertTriangle size={11} />}>Sync stale</Chip>
                       )}
                       {p.device_info?.pending_records ? (

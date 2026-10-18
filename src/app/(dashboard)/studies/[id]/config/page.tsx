@@ -35,6 +35,40 @@ const SCREEN_INTERACTION_DEFAULTS = {
   },
 }
 
+// Feed-scroll / reel-swipe tracking for the gestures sensor. When the
+// scroll_tracking key is absent the app uses enabled + this list; "*" in apps
+// means every app.
+const DEFAULT_SCROLL_APPS = [
+  'com.instagram.android',
+  'com.instagram.barcelona',
+  'com.facebook.katana',
+  'com.facebook.lite',
+  'com.google.android.youtube',
+  'com.zhiliaoapp.musically',
+  'com.ss.android.ugc.trill',
+  'com.snapchat.android',
+  'com.twitter.android',
+  'com.reddit.frontpage',
+  'com.pinterest',
+  'com.linkedin.android',
+  'com.whatsapp',
+]
+
+interface ScrollTracking { enabled: boolean; apps: string[] }
+
+function effectiveScrollTracking(config: Record<string, unknown> | undefined): ScrollTracking {
+  const st = config?.scroll_tracking as Partial<ScrollTracking> | undefined
+  return {
+    enabled: typeof st?.enabled === 'boolean' ? st.enabled : true,
+    apps: Array.isArray(st?.apps) ? st.apps.map(String) : DEFAULT_SCROLL_APPS,
+  }
+}
+
+// Trim, drop blank lines and de-duplicate the app list before saving.
+function cleanScrollApps(apps: string[]): string[] {
+  return [...new Set(apps.map(a => a.trim()).filter(Boolean))]
+}
+
 interface SensorConfig {
   id?: string
   sensor_type: string
@@ -120,6 +154,21 @@ export default function SensorConfigPage() {
     setDirty(true)
   }
 
+  function updateScrollTracking(patch: Partial<ScrollTracking>) {
+    setConfigs(prev => {
+      const cfg = prev['gestures']
+      return {
+        ...prev,
+        gestures: {
+          ...cfg,
+          config: { ...cfg.config, scroll_tracking: { ...effectiveScrollTracking(cfg.config), ...patch } },
+        },
+      }
+    })
+    setSaved(false)
+    setDirty(true)
+  }
+
   async function saveAll() {
     setSaving(true)
     setSaved(false)
@@ -130,7 +179,9 @@ export default function SensorConfigPage() {
       sensor_type: key,
       enabled: cfg.enabled,
       interval_seconds: cfg.interval_seconds,
-      config: cfg.config,
+      config: key === 'gestures' && cfg.config?.scroll_tracking
+        ? { ...cfg.config, scroll_tracking: { ...cfg.config.scroll_tracking, apps: cleanScrollApps(cfg.config.scroll_tracking.apps ?? []) } }
+        : cfg.config,
     }))
 
     const { data, error } = await supabase
@@ -272,6 +323,9 @@ export default function SensorConfigPage() {
 
               {cfg.enabled && sensor.key === 'gestures' && (() => {
                 const siCfg = cfg.config as typeof SCREEN_INTERACTION_DEFAULTS
+                const scroll = effectiveScrollTracking(cfg.config)
+                const appCount = cleanScrollApps(scroll.apps).length
+                const allApps = scroll.apps.some(a => a.trim() === '*')
                 return (
                   <div className="px-5 pb-5 border-t border-gray-50 pt-4 grid grid-cols-1 sm:grid-cols-2 gap-5">
                     <div>
@@ -318,6 +372,46 @@ export default function SensorConfigPage() {
                           </label>
                         ))}
                       </div>
+                    </div>
+
+                    <div className="sm:col-span-2 border-t border-gray-50 pt-4">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Feed Scroll &amp; Reel Swipe Tracking</p>
+                      <label className="flex items-center gap-2.5 cursor-pointer group mb-3">
+                        <input
+                          type="checkbox"
+                          checked={scroll.enabled}
+                          onChange={e => updateScrollTracking({ enabled: e.target.checked })}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer"
+                        />
+                        <span className="text-xs text-gray-700 group-hover:text-gray-900">
+                          Record feed scroll bursts and full-screen pager swipes (reels, Shorts, stories)
+                        </span>
+                      </label>
+                      {scroll.enabled && (
+                        <div>
+                          <label htmlFor="scroll-apps" className="block text-xs text-gray-400 mb-1.5">
+                            Apps to track: one package name per line. Use <span className="font-mono">*</span> for all apps.
+                          </label>
+                          <textarea
+                            id="scroll-apps"
+                            rows={8}
+                            value={scroll.apps.join('\n')}
+                            onChange={e => updateScrollTracking({ apps: e.target.value.split('\n') })}
+                            spellCheck={false}
+                            className="w-full max-w-lg border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                          />
+                          <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                            <span>{allApps ? 'All apps' : `${appCount} app${appCount === 1 ? '' : 's'}`}</span>
+                            <button
+                              type="button"
+                              onClick={() => updateScrollTracking({ apps: DEFAULT_SCROLL_APPS })}
+                              className="text-blue-600 hover:text-blue-700 font-medium"
+                            >
+                              Reset to default list
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )

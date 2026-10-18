@@ -1,9 +1,39 @@
 -- ============================================================
--- Seed: Digital Habits & Focus Study + Sleep & Wellbeing Study
--- Run against your Supabase project (as an authenticated user or
--- via the SQL editor). UUIDs are generated inline so the script
--- is idempotent when run once; re-running will create duplicates.
+-- Seed: researcher access + Digital Habits & Focus Study + Sleep & Wellbeing Study
+-- Run in the Supabase SQL editor (as postgres, which bypasses RLS) after
+-- clear_database.sql and supabase_schema.sql. UUIDs are generated inline;
+-- re-running will create duplicate studies.
 -- ============================================================
+
+-- ------------------------------------------------------------
+-- 0. RESEARCHER ACCESS
+-- ------------------------------------------------------------
+-- Dashboard access requires a row in public.researchers. Every Supabase Auth
+-- account that exists right now is granted researcher access (the emails are
+-- printed as NOTICEs). To add a researcher later, create the user in
+-- Authentication -> Users, then run:
+--   INSERT INTO researchers(user_id) SELECT id FROM auth.users WHERE email = 'name@example.org';
+-- To revoke:
+--   DELETE FROM researchers WHERE user_id = (SELECT id FROM auth.users WHERE email = 'name@example.org');
+DO $$
+DECLARE
+  r RECORD;
+  n INT := 0;
+BEGIN
+  FOR r IN
+    INSERT INTO public.researchers (user_id)
+    SELECT u.id FROM auth.users u
+    ON CONFLICT (user_id) DO NOTHING
+    RETURNING user_id
+  LOOP
+    n := n + 1;
+    RAISE NOTICE 'Granted researcher access: %',
+      (SELECT COALESCE(u.email, u.id::text) FROM auth.users u WHERE u.id = r.user_id);
+  END LOOP;
+  IF n = 0 THEN
+    RAISE NOTICE 'No auth.users accounts found: no researchers granted. Create a user, then INSERT INTO researchers(user_id) SELECT id FROM auth.users WHERE email = ''...'';';
+  END IF;
+END $$;
 
 DO $$
 DECLARE
@@ -14,6 +44,27 @@ DECLARE
   v_digital_sched_id   UUID := gen_random_uuid();
   v_sleep_evening_id   UUID := gen_random_uuid();
   v_sleep_morning_id   UUID := gen_random_uuid();
+
+  -- Gestures: feed-scroll / reel-swipe tracking. "*" in apps means all apps.
+  -- If the key is absent the app defaults to enabled with this same list.
+  v_scroll_tracking    JSONB := jsonb_build_object(
+    'enabled', true,
+    'apps', jsonb_build_array(
+      'com.instagram.android',
+      'com.instagram.barcelona',
+      'com.facebook.katana',
+      'com.facebook.lite',
+      'com.google.android.youtube',
+      'com.zhiliaoapp.musically',
+      'com.ss.android.ugc.trill',
+      'com.snapchat.android',
+      'com.twitter.android',
+      'com.reddit.frontpage',
+      'com.pinterest',
+      'com.linkedin.android',
+      'com.whatsapp'
+    )
+  );
 BEGIN
 
 -- ============================================================
@@ -48,7 +99,11 @@ VALUES (
 
 -- Production-test PIN for this seeded study: 1234.
 -- Change it from the dashboard before any real participant recruitment.
-PERFORM set_study_pin(v_digital_study_id, '1234');
+-- (Written directly: set_study_pin() only accepts dashboard researchers, and
+-- the SQL editor has no signed-in user.)
+INSERT INTO study_pins (study_id, pin_hash)
+VALUES (v_digital_study_id, extensions.crypt('1234', extensions.gen_salt('bf')));
+UPDATE studies SET pin_required = true WHERE id = v_digital_study_id;
 
 -- Sensor configs for Digital Habits & Focus Study
 INSERT INTO sensor_configs (study_id, sensor_type, enabled, interval_seconds, config)
@@ -70,7 +125,8 @@ VALUES
       'skip_launchers',       true,
       'skip_keyboards',       true,
       'skip_system_settings', true
-    )
+    ),
+    'scroll_tracking', v_scroll_tracking
   )),
   (v_digital_study_id, 'battery',        true,  600,  '{}'),
   (v_digital_study_id, 'light',          true,  600,  '{}'),
@@ -178,7 +234,8 @@ VALUES
       'skip_launchers',       true,
       'skip_keyboards',       true,
       'skip_system_settings', true
-    )
+    ),
+    'scroll_tracking', v_scroll_tracking
   )),
   (v_sleep_study_id, 'battery',       true,  600,  '{}'),
   (v_sleep_study_id, 'light',         true,  600,  '{}'),

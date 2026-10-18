@@ -16,7 +16,7 @@ import {
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which view to read, and how to shape it.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'hourly_app' | 'daily_app' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages'
+  | 'hourly' | 'daily' | 'hourly_app' | 'daily_app' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages' | 'scroll'
 
 interface DatasetDef {
   key: DatasetKey
@@ -36,6 +36,7 @@ const DATASETS: DatasetDef[] = [
   { key: 'notifications', label: 'Notifications',         view: 'daily_notifications',    hasChart: true  },
   { key: 'battery',       label: 'Battery',               view: 'daily_battery_summary',  hasChart: true  },
   { key: 'permission_outages', label: 'Permission Outages', view: 'permission_outages', hasChart: false },
+  { key: 'scroll',        label: 'Scrolling & Reels',     view: 'daily_scroll_activity',  hasChart: true  },
 ]
 
 type ViewMode = 'table' | 'chart'
@@ -334,6 +335,48 @@ export default function ProcessedDataPage() {
         headers: isOverall ? ['Participant', 'Permission', 'Turned off', 'Turned back on', 'Duration'] : ['Permission', 'Turned off', 'Turned back on', 'Duration'],
         rows: rows.map(r => isOverall ? [r.participant, r.permission, r.revoked_at, r.restored_at, r.outage] : [r.permission, r.revoked_at, r.restored_at, r.outage]),
         csv: rows, chart: [], chartLabel: '', unit: '',
+      }
+    }
+
+    if (dataset === 'scroll') {
+      // View grain is participant x date x app; one table row per grain.
+      const num = (v: unknown) => (v == null ? null : Number(v))
+      const fmtSec = (v: unknown) => (v == null ? '—' : `${Number(v).toFixed(1)}s`)
+      const rows = [...scoped]
+        .sort((a, b) => String(b.usage_date).localeCompare(String(a.usage_date))
+          || String(a.app_name ?? '').localeCompare(String(b.app_name ?? '')))
+        .map(r => ({
+          date: r.usage_date as string,
+          participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }),
+          app: (r.app_name as string | null) || '—',
+          reel_swipes: Number(r.reel_swipes) || 0,
+          median_dwell_seconds: num(r.median_dwell_seconds),
+          avg_dwell_seconds: num(r.avg_dwell_seconds),
+          feed_scroll_bursts: Number(r.feed_scroll_bursts) || 0,
+          feed_distance_dp: Number(r.feed_distance_dp) || 0,
+          feed_items_passed: Number(r.feed_items_passed) || 0,
+          feed_scroll_seconds: Number(r.feed_scroll_seconds) || 0,
+        }))
+      // Chart: reel swipes per day (overall: average per participant active that day).
+      const byDate: Record<string, { swipes: number; pids: Set<string> }> = {}
+      for (const r of scoped) {
+        const d = byDate[r.usage_date] || (byDate[r.usage_date] = { swipes: 0, pids: new Set() })
+        d.swipes += Number(r.reel_swipes) || 0; d.pids.add(r.participant_id)
+      }
+      const chart = Object.keys(byDate).sort().map(date => {
+        const d = byDate[date]; const k = isOverall ? div(d.pids.size) : 1
+        return { date, value: Math.round(d.swipes / k) }
+      })
+      const cells = (r: typeof rows[number]) => [
+        r.app, r.reel_swipes.toLocaleString(), fmtSec(r.median_dwell_seconds), fmtSec(r.avg_dwell_seconds),
+        r.feed_scroll_bursts.toLocaleString(), r.feed_distance_dp.toLocaleString(), r.feed_items_passed.toLocaleString(),
+        `${r.feed_scroll_seconds.toFixed(1)}s`,
+      ]
+      const tail = ['App', 'Reel swipes', 'Median dwell', 'Avg dwell', 'Feed scroll bursts', 'Feed distance (dp)', 'Items passed', 'Feed scroll time']
+      return {
+        headers: isOverall ? ['Date', 'Participant', ...tail] : ['Date', ...tail],
+        rows: rows.map(r => isOverall ? [r.date, r.participant, ...cells(r)] : [r.date, ...cells(r)]),
+        csv: rows, chart, chartLabel: isOverall && overallMode === 'avg' ? 'Reel swipes (avg per participant)' : 'Reel swipes', unit: '',
       }
     }
 

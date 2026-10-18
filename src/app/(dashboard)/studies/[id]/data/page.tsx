@@ -68,11 +68,22 @@ function participantName(p: Participant) {
 }
 
 function formatColHeader(col: string) {
+  if (col === 'voltage') return 'Voltage (V)'
+  if (col === 'temperature') return 'Temperature (°C)'
   return col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+}
+
+// The app stores battery voltage in millivolts (e.g. 4371). Display volts; the
+// stored value (and CSV export) is unchanged. Values that already look like
+// volts (< 100) are shown as-is.
+function formatVoltage(value: number): string {
+  const volts = value >= 100 ? value / 1000 : value
+  return volts.toFixed(2)
 }
 
 function formatCellValue(col: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
+  if (col === 'voltage' && typeof value === 'number') return formatVoltage(value)
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   if (typeof value === 'object') return JSON.stringify(value)
   if (typeof value === 'string') {
@@ -84,6 +95,42 @@ function formatCellValue(col: string, value: unknown): string {
     }
   }
   return String(value)
+}
+
+// ─── Gesture summaries ────────────────────────────────────────────────────────
+// data_gestures keeps details in interaction_data JSON. For the feed-scroll
+// ('scroll') and pager ('page_swipe', reels/Shorts/stories) types, surface the
+// useful fields as two readable, display-only columns.
+const GESTURE_DERIVED_COLS = ['_direction', '_detail'] as const
+const DERIVED_HEADERS: Record<string, string> = { _direction: 'Direction', _detail: 'Details' }
+
+function containerShort(id: unknown): string | null {
+  if (typeof id !== 'string' || !id) return null
+  const i = id.indexOf(':id/')
+  return i >= 0 ? id.slice(i + 4) : id
+}
+
+function gestureDerived(col: string, row: Record<string, unknown>): string {
+  const d = (row.interaction_data && typeof row.interaction_data === 'object'
+    ? row.interaction_data : {}) as Record<string, unknown>
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  if (col === '_direction') return typeof d.direction === 'string' ? d.direction : '—'
+  const parts: string[] = []
+  if (row.interaction_type === 'page_swipe') {
+    const from = n(d.index_from), to = n(d.index_to), dwell = n(d.dwell_ms)
+    if (from !== null && to !== null) parts.push(`item ${from} → ${to}`)
+    if (dwell !== null) parts.push(`dwell ${(dwell / 1000).toFixed(1)}s`)
+  } else if (row.interaction_type === 'scroll') {
+    const dist = n(d.distance_dp), net = n(d.net_dp), items = n(d.items_passed), dur = n(d.duration_ms)
+    if (dist !== null) parts.push(`${Math.round(dist)} dp${net !== null && net !== dist ? ` (net ${Math.round(net)})` : ''}`)
+    if (items !== null) parts.push(`${items} item${items === 1 ? '' : 's'}`)
+    if (dur !== null) parts.push(`${(dur / 1000).toFixed(1)}s`)
+  } else {
+    return '—'
+  }
+  const c = containerShort(d.container_id)
+  if (c) parts.push(c)
+  return parts.length ? parts.join(' · ') : '—'
 }
 
 function avatarInitial(name: string) { return name.charAt(0).toUpperCase() }
@@ -459,9 +506,13 @@ function SensorDataInner() {
 
   const pMap = Object.fromEntries(participants.map(p => [p.id, p]))
   const showParticipantCol = selectedParticipant === 'all'
-  const cols = data.length > 0
-    ? Object.keys(data[0]).filter(k => k !== 'id' && k !== 'participant_id')
+  const baseCols = data.length > 0
+    ? Object.keys(data[0]).filter(k => k !== 'id' && k !== 'participant_id' && k !== 'client_uuid')
     : []
+  // Gestures: put the readable summary columns just before the raw JSON.
+  const cols: string[] = selectedTable.key === 'data_gestures' && baseCols.includes('interaction_data')
+    ? [...baseCols.filter(k => k !== 'interaction_data'), ...GESTURE_DERIVED_COLS, 'interaction_data']
+    : baseCols
   const isFiltered = selectedParticipant !== 'all'
   const canChart = selectedTable.hasChart
 
@@ -688,7 +739,11 @@ function SensorDataInner() {
                           Participant
                         </th>
                       )}
-                      {cols.map(col => (
+                      {cols.map(col => DERIVED_HEADERS[col] ? (
+                        <th key={col} className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
+                          {DERIVED_HEADERS[col]}
+                        </th>
+                      ) : (
                         <th
                           key={col}
                           onClick={() => handleColSort(col)}
@@ -719,13 +774,12 @@ function SensorDataInner() {
                             </td>
                           )}
                           {cols.map(k => {
-                            const raw = row[k]
-                            const display = formatCellValue(k, raw)
+                            const display = DERIVED_HEADERS[k] ? gestureDerived(k, row) : formatCellValue(k, row[k])
                             const isEmpty = display === '—'
                             return (
                               <td
                                 key={k}
-                                className={`px-4 py-2.5 whitespace-nowrap max-w-52 truncate ${isEmpty ? 'text-gray-300' : 'text-gray-600'}`}
+                                className={`px-4 py-2.5 whitespace-nowrap ${k === '_detail' ? 'max-w-80' : 'max-w-52'} truncate ${isEmpty ? 'text-gray-300' : 'text-gray-600'}`}
                                 title={isEmpty ? undefined : display}
                               >
                                 {display}
