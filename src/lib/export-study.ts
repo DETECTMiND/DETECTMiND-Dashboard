@@ -1,12 +1,12 @@
 'use client'
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { chunks, fetchAll, safeFileName as safeName, toCsv, type Row } from './csv'
 
 // "Export all study data": one CSV per table, zipped in the browser. Every
 // query runs with the signed-in researcher's session, so RLS decides what is
 // included, exactly as on screen. Libraries are loaded on demand.
 
-const PAGE = 1000
 const ID_CHUNK = 100
 
 const DATA_TABLES = [
@@ -23,47 +23,7 @@ const PARTICIPANT_COLUMNS = [
   'merged_into', 'merged_at', 'merge_adopted_at', 'created_at', 'updated_at',
 ].join(',')
 
-type Row = Record<string, unknown>
 export type ExportProgress = (message: string) => void
-
-async function fetchAll(
-  build: (from: number, to: number) => PromiseLike<{ data: Row[] | null; error: { message: string } | null }>,
-): Promise<Row[]> {
-  const out: Row[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await build(from, from + PAGE - 1)
-    if (error) throw new Error(error.message)
-    out.push(...(data || []))
-    if (!data || data.length < PAGE) return out
-  }
-}
-
-function chunks<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
-
-function csvCell(v: unknown): string {
-  if (v === null || v === undefined) return ''
-  const s = typeof v === 'object' ? JSON.stringify(v) : String(v)
-  return /[",\r\n]/.test(s) || /^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-
-/** RFC 4180 CSV; JSON columns are written as JSON strings. */
-function toCsv(rows: Row[]): string {
-  if (!rows.length) return ''
-  const columns: string[] = []
-  const seen = new Set<string>()
-  for (const r of rows) for (const k of Object.keys(r)) if (!seen.has(k)) { seen.add(k); columns.push(k) }
-  const lines = [columns.map(csvCell).join(',')]
-  for (const r of rows) lines.push(columns.map(c => csvCell(r[c])).join(','))
-  return lines.join('\r\n') + '\r\n'
-}
-
-function safeName(name: string) {
-  return name.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'study'
-}
 
 export async function exportStudyZip(
   supabase: SupabaseClient,

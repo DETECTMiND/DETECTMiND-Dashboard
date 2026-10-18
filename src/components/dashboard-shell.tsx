@@ -6,48 +6,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { MeProvider, type Me } from '@/lib/access'
 import { fetchPendingStudyCount, PENDING_STUDIES_CHANGED_EVENT } from '@/lib/pending-studies'
-import {
-  BarChart3, Check, ChevronDown, ClipboardCheck, Database, FlaskConical, Gauge, LayoutDashboard, Loader2,
-  LogOut, Menu, MessageSquare, ScrollText, Settings, ShieldAlert, SlidersHorizontal, TableProperties,
-  UserCog, UserRound, Users, UsersRound, X,
-} from 'lucide-react'
+import { ADMIN_NAV, studyNav, type NavItem } from '@/lib/nav'
+import { studyStatusInfo } from '@/lib/status'
+import { useDialogFocus } from '@/components/ui/modal'
+import { ThemeToggle } from '@/components/ui/theme-toggle'
+import { Button } from '@/components/ui/button'
+import { Check, ChevronsUpDown, FlaskConical, LayoutGrid, Loader2, LogOut, Menu, Plus, ShieldAlert, UserRound, X } from 'lucide-react'
 
-interface Study { id: string; name: string; status: string }
-
-const STATUS_DOT: Record<string, string> = {
-  draft: 'bg-gray-400', active: 'bg-emerald-500', paused: 'bg-amber-400', completed: 'bg-blue-500',
-}
-
-function navFor(studyId: string | null): NavItem[] {
-  if (!studyId) return []
-  return [
-    { label: 'Overview', href: `/?study=${studyId}`, icon: LayoutDashboard, group: 'Workspace', match: (p: string) => p === '/' },
-    { label: 'Participants', href: `/studies/${studyId}/participants`, icon: Users, group: 'Workspace', match: (p: string) => p === `/studies/${studyId}/participants` },
-    { label: 'Raw Data', href: `/studies/${studyId}/data`, icon: Database, group: 'Data', match: (p: string) => p === `/studies/${studyId}/data` },
-    { label: 'Processed Data', href: `/studies/${studyId}/processed`, icon: TableProperties, group: 'Data', match: (p: string) => p === `/studies/${studyId}/processed` },
-    { label: 'Responses', href: `/studies/${studyId}/esm-responses`, icon: MessageSquare, group: 'Surveys', match: (p: string) => p === `/studies/${studyId}/esm-responses` },
-    { label: 'Survey Setup', href: `/studies/${studyId}/esm`, icon: SlidersHorizontal, group: 'Surveys', match: (p: string) => p === `/studies/${studyId}/esm` },
-    { label: 'General', href: `/studies/${studyId}`, icon: Settings, group: 'Settings', match: (p: string) => p === `/studies/${studyId}` },
-    { label: 'Sensors', href: `/studies/${studyId}/config`, icon: SlidersHorizontal, group: 'Settings', match: (p: string) => p === `/studies/${studyId}/config` },
-    { label: 'Team', href: `/studies/${studyId}/team`, icon: UsersRound, group: 'Settings', match: (p: string) => p === `/studies/${studyId}/team` },
-  ]
-}
-
-type NavItem = {
-  label: string
-  href: string
-  icon: typeof Users
-  group: string
-  match: (p: string) => boolean
-  badge?: number
-}
-
-const ADMIN_NAV: NavItem[] = [
-  { label: 'Overview', href: '/admin', icon: Gauge, group: 'Admin', match: (p: string) => p === '/admin' },
-  { label: 'Studies', href: '/admin/studies', icon: ClipboardCheck, group: 'Admin', match: (p: string) => p === '/admin/studies' },
-  { label: 'Researchers', href: '/admin/researchers', icon: UserCog, group: 'Admin', match: (p: string) => p === '/admin/researchers' },
-  { label: 'Audit log', href: '/admin/audit', icon: ScrollText, group: 'Admin', match: (p: string) => p === '/admin/audit' },
-]
+interface Study { id: string; name: string; status: string; approved_at: string | null }
 
 type ResearcherCheck =
   | { status: 'ok'; me: Me }
@@ -58,11 +24,9 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const searchParams = useSearchParams()
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
-  const [studies, setStudies] = useState<Study[]>([])
+  const [studies, setStudies] = useState<Study[] | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [studyOpen, setStudyOpen] = useState(false)
-  const switcherRef = useRef<HTMLDivElement>(null)
   // null = still checking. Row-level security only returns study data to
   // active researchers, so a signed-in user without (or with a deactivated)
   // researchers row would otherwise see an empty dashboard with no explanation.
@@ -89,8 +53,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const isAdmin = researcher?.status === 'ok' && researcher.me.role === 'admin'
   const [pendingCount, setPendingCount] = useState(0)
 
-  // Pending-approval badge for admins; refreshed on navigation so it drops
-  // right after an approval.
+  // Pending-approval badge for admins; refreshed on navigation and whenever a page reports a change.
   useEffect(() => {
     if (!isAdmin) return
     let cancelled = false
@@ -104,46 +67,49 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const queryStudy = searchParams.get('study')
 
   useEffect(() => {
-    const saved = localStorage.getItem('pinnedStudyId')
-    supabase.from('studies').select('id, name, status').order('created_at', { ascending: false })
+    let saved: string | null = null
+    try { saved = localStorage.getItem('pinnedStudyId') } catch { /* private mode */ }
+    const load = () => supabase.from('studies').select('id, name, status, approved_at').order('created_at', { ascending: false })
       .then(({ data }) => {
         const list = (data || []) as Study[]
         setStudies(list)
         const requested = routeStudy && routeStudy !== 'new' ? routeStudy : queryStudy
         const next = [requested, saved, list[0]?.id].find(id => id && list.some(s => s.id === id)) || null
         setSelectedId(next)
-        if (next) localStorage.setItem('pinnedStudyId', next)
+        try { if (next) localStorage.setItem('pinnedStudyId', next) } catch { /* ignore */ }
       })
+    load()
+    // Study names and statuses change on approval / edit / delete
+    window.addEventListener(PENDING_STUDIES_CHANGED_EVENT, load)
+    return () => window.removeEventListener(PENDING_STUDIES_CHANGED_EVENT, load)
   }, [queryStudy, routeStudy, supabase])
 
+  // The drawer closes when a link inside it navigates
   useEffect(() => {
-    const close = (event: MouseEvent) => {
-      if (switcherRef.current && !switcherRef.current.contains(event.target as Node)) setStudyOpen(false)
-    }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
-  }, [])
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMobileOpen(false)
+  }, [pathname, queryStudy])
 
   const routeSelectedId = routeStudy && routeStudy !== 'new' ? routeStudy : queryStudy
-  const effectiveId = routeSelectedId && studies.some(s => s.id === routeSelectedId) ? routeSelectedId : selectedId
-  const selected = studies.find(s => s.id === effectiveId)
-  const adminNav = ADMIN_NAV.map(item => item.href === '/admin/studies' ? { ...item, badge: pendingCount } : item)
-  const navigation: NavItem[] = [...navFor(effectiveId), ...(isAdmin ? adminNav : [])]
+  const list = studies ?? []
+  const effectiveId = routeSelectedId && list.some(s => s.id === routeSelectedId) ? routeSelectedId : selectedId
+  const selected = list.find(s => s.id === effectiveId)
+  const adminNav = ADMIN_NAV.map(item => item.href === '/admin/approvals' ? { ...item, badge: pendingCount } : item)
+  const navigation: NavItem[] = [...studyNav(effectiveId), ...(isAdmin ? adminNav : [])]
   const activeNavigation = navigation.find(item => item.match(pathname))
 
-  const section = pathname === '/studies' ? 'All Studies' : pathname === '/admin' ? 'Admin overview' : pathname === '/settings/account' ? 'Account' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
-  const pageTitle = `${section.replace(/\b\w/g, c => c.toUpperCase())}${selected ? ` · ${selected.name}` : ''} | DETECTMiND`
+  const section = pathname === '/studies' ? 'All studies'
+    : pathname === '/studies/new' ? 'New study'
+    : pathname === '/settings/account' ? 'Account'
+    : activeNavigation?.label || 'Dashboard'
+  const pageTitle = `${section}${selected && activeNavigation?.group === 'Study' ? ` · ${selected.name}` : ''} | DETECTMiND`
 
   function switchStudy(id: string) {
     setSelectedId(id)
-    setStudyOpen(false)
-    localStorage.setItem('pinnedStudyId', id)
+    try { localStorage.setItem('pinnedStudyId', id) } catch { /* ignore */ }
     const current = navigation.find(item => item.match(pathname))
-    if (!current || current.label === 'Overview' || current.group === 'Admin') router.push(`/?study=${id}`)
-    else {
-      const suffix = pathname.replace(/^\/studies\/[^/]+/, '')
-      router.push(`/studies/${id}${suffix}`)
-    }
+    if (!current || current.label === 'Overview' || current.group === 'Admin' || !pathname.startsWith('/studies/')) router.push(`/?study=${id}`)
+    else router.push(`/studies/${id}${pathname.replace(/^\/studies\/[^/]+/, '')}`)
   }
 
   async function logout() {
@@ -153,90 +119,214 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   }
 
   if (!researcher) {
-    return <div className="flex min-h-dvh items-center justify-center bg-slate-50 text-sm text-slate-500">
-      <Loader2 size={18} className="mr-2 animate-spin" /> Checking your access…
+    return <div role="status" className="flex min-h-dvh items-center justify-center bg-page text-sm text-subtle">
+      <Loader2 size={18} className="mr-2 animate-spin" aria-hidden="true" /> Checking your access…
     </div>
   }
 
   if (researcher.status !== 'ok') {
     const who = researcher.email
-      ? <>You are signed in as <span className="font-medium text-slate-700">{researcher.email}</span>, but </>
+      ? <>You are signed in as <span className="font-medium text-fg">{researcher.email}</span>, but </>
       : 'This account is signed in, but '
-    return <div className="flex min-h-dvh items-center justify-center bg-slate-50 px-4">
+    return <div className="flex min-h-dvh items-center justify-center bg-page px-4">
       <title>Not authorised | DETECTMiND</title>
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
-        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600"><ShieldAlert size={22} /></span>
-        <h1 className="text-lg font-bold text-slate-900">
+      <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-7 text-center shadow-card">
+        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-danger-soft text-danger"><ShieldAlert size={22} /></span>
+        <h1 className="text-lg font-bold text-fg">
           {researcher.status === 'inactive' ? 'Your researcher account has been deactivated'
             : researcher.status === 'error' ? 'Could not check your access'
             : 'Your account is not authorised as a researcher'}
         </h1>
-        <p className="mt-2 text-sm text-slate-500">
+        <p className="mt-2 text-sm text-subtle">
           {researcher.status === 'error'
             ? <>Please try again in a moment. ({researcher.message})</>
             : researcher.status === 'inactive'
               ? <>{who}an administrator has deactivated this account, so no study data is visible. Contact them if you need access again.</>
-              : <>{who}it has not been granted researcher access, so no study data is visible. Ask an administrator to invite you from Admin → Researchers.</>}
+              : <>{who}it has not been given researcher access, so no study data is visible. Ask an administrator to invite you.</>}
         </p>
-        <button onClick={logout} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"><LogOut size={16} />Sign out</button>
+        <Button onClick={logout} className="mt-6"><LogOut size={16} />Sign out</Button>
       </div>
     </div>
   }
 
-  const sidebar = (
-    <aside className="flex h-full w-64 flex-col border-r border-slate-200 bg-white text-slate-700">
-      <div className="flex h-16 items-center justify-between border-b border-slate-200 px-5">
-        <Link href="/" className="flex items-center gap-2.5" aria-label="DETECTMiND home">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white"><FlaskConical size={16} /></span>
-          <span className="text-sm font-bold tracking-wide text-slate-900">DETECTMiND</span>
+  const me = researcher.me
+
+  return <div className="flex min-h-dvh bg-page">
+    <title>{pageTitle}</title>
+    <a href="#main-content" className="sr-only z-[80] rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-accent-fg focus:not-sr-only focus:fixed focus:left-3 focus:top-3">Skip to content</a>
+    <div className="fixed inset-y-0 left-0 z-40 hidden lg:block">
+      <Sidebar navigation={navigation} pathname={pathname} me={me} isAdmin={isAdmin} studies={studies} selected={selected} onSwitch={switchStudy} onLogout={logout} />
+    </div>
+    {mobileOpen && <MobileDrawer onClose={() => setMobileOpen(false)}>
+      <Sidebar navigation={navigation} pathname={pathname} me={me} isAdmin={isAdmin} studies={studies} selected={selected} onSwitch={switchStudy} onLogout={logout} onClose={() => setMobileOpen(false)} />
+    </MobileDrawer>}
+    <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
+      <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line bg-surface/95 px-4 backdrop-blur lg:hidden">
+        <Button variant="secondary" iconOnly size="sm" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={16} /></Button>
+        <Link href="/" className="flex min-w-0 items-center gap-2 font-semibold text-fg">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-fg"><FlaskConical size={14} /></span>
+          <span className="truncate text-sm">{selected?.name ?? 'DETECTMiND'}</span>
         </Link>
-        <button onClick={() => setMobileOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 lg:hidden" aria-label="Close navigation"><X size={18} /></button>
+      </header>
+      <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 focus:outline-none">
+        <div className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-10 lg:py-8"><MeProvider me={me}>{children}</MeProvider></div>
+      </main>
+    </div>
+  </div>
+}
+
+function Sidebar({ navigation, pathname, me, isAdmin, studies, selected, onSwitch, onLogout, onClose }: {
+  navigation: NavItem[]
+  pathname: string
+  me: Me
+  isAdmin: boolean
+  studies: Study[] | null
+  selected: Study | undefined
+  onSwitch: (id: string) => void
+  onLogout: () => void
+  onClose?: () => void
+}) {
+  const groups = (['Study', 'Admin'] as const).map(g => ({ group: g, items: navigation.filter(n => n.group === g) })).filter(g => g.items.length)
+  const footerLink = (href: string, label: string, icon: React.ReactNode, extra?: React.ReactNode) => {
+    const active = pathname === href
+    return <Link href={href} aria-current={active ? 'page' : undefined}
+      className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${active ? 'bg-accent-soft font-medium text-accent' : 'text-muted hover:bg-sunken hover:text-fg'}`}>
+      {icon}<span className="min-w-0 flex-1 truncate">{label}</span>{extra}
+    </Link>
+  }
+  return (
+    <aside className="flex h-full w-64 flex-col border-r border-line bg-surface">
+      <div className="flex h-14 items-center justify-between px-4">
+        <Link href="/" className="flex items-center gap-2.5" aria-label="DETECTMiND home">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-fg"><FlaskConical size={16} /></span>
+          <span className="text-sm font-bold tracking-wide text-fg">DETECTMiND</span>
+        </Link>
+        {onClose && <Button variant="ghost" iconOnly size="sm" onClick={onClose} aria-label="Close menu"><X size={16} /></Button>}
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-3" aria-label="Study navigation">
-        <div className="space-y-1">
-          {navigation.map((item, index) => {
-            const active = item.match(pathname)
-            const showGroup = index === 0 || navigation[index - 1].group !== item.group
-            return <div key={item.href}>
-              {showGroup && <p className={`${index === 0 ? 'mb-2' : 'mb-2 mt-5'} px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400`}>{item.group}</p>}
-              <Link href={item.href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
-                <item.icon size={17} /><span className="min-w-0 flex-1">{item.label}</span>
-                {!!item.badge && <span className="rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white" title={`${item.badge} pending approval`}>{item.badge}</span>}
-              </Link>
-            </div>
-          })}
-        </div>
+      <div className="px-3 pb-2">
+        <StudySwitcher studies={studies} selected={selected} onSwitch={onSwitch} />
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 py-2" aria-label="Main">
+        {groups.map(({ group, items }, gi) => (
+          <div key={group} className={gi > 0 ? 'mt-6' : ''}>
+            <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-subtle">{group === 'Study' ? 'Study' : 'Admin'}</p>
+            <ul className="space-y-0.5">
+              {items.map(item => {
+                const active = item.match(pathname)
+                return <li key={item.href}>
+                  <Link href={item.href} aria-current={active ? 'page' : undefined}
+                    className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${active ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-sunken hover:text-fg'}`}>
+                    <item.icon size={17} aria-hidden="true" /><span className="min-w-0 flex-1">{item.label}</span>
+                    {!!item.badge && <span className="rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white" aria-label={`${item.badge} pending`}>{item.badge}</span>}
+                  </Link>
+                </li>
+              })}
+            </ul>
+          </div>
+        ))}
+        {studies !== null && studies.length === 0 && (
+          <div className="rounded-lg border border-dashed border-line px-3 py-4 text-center text-xs text-subtle">
+            No studies yet.
+            <Link href="/studies/new" className="mt-2 flex items-center justify-center gap-1 font-medium text-accent hover:underline"><Plus size={13} />Create a study</Link>
+          </div>
+        )}
       </nav>
 
-      <div className="border-t border-slate-200 p-3">
-        <Link href="/studies" aria-current={pathname === '/studies' ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${pathname === '/studies' ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}><BarChart3 size={17} />All studies</Link>
-        <Link href="/settings/account" aria-current={pathname === '/settings/account' ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${pathname === '/settings/account' ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}><UserRound size={17} /><span className="min-w-0 flex-1 truncate">Account</span>{isAdmin && <span className="rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">Admin</span>}</Link>
-        <button onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900"><LogOut size={17} />Sign out</button>
+      <div className="space-y-0.5 border-t border-line p-3">
+        {footerLink('/studies', 'All studies', <LayoutGrid size={17} aria-hidden="true" />)}
+        {footerLink('/settings/account', me.displayName || me.email || 'Account', <UserRound size={17} aria-hidden="true" />,
+          isAdmin ? <span className="rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">Admin</span> : undefined)}
+        <div className="flex items-center justify-between gap-2 px-1 pt-1">
+          <ThemeToggle />
+          <Button variant="ghost" size="sm" onClick={onLogout}><LogOut size={15} aria-hidden="true" />Sign out</Button>
+        </div>
       </div>
     </aside>
   )
+}
 
-  return <div className="flex min-h-dvh bg-slate-50">
-    <title>{pageTitle}</title>
-    <div className="fixed inset-y-0 left-0 z-40 hidden lg:block">{sidebar}</div>
-    {mobileOpen && <div className="fixed inset-0 z-50 lg:hidden"><button className="absolute inset-0 bg-slate-950/55" onClick={() => setMobileOpen(false)} aria-label="Close navigation overlay" /><div className="absolute inset-y-0 left-0">{sidebar}</div></div>}
-    <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
-      <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-8">
-        <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden" aria-label="Open navigation"><Menu size={18} /></button>
-        <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-500">{section}</p></div>
-        {studies.length > 0 && <div className="relative" ref={switcherRef}>
-          <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} aria-haspopup="listbox" className="flex max-w-[11rem] sm:max-w-[15rem] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-slate-50">
-            <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[selected?.status || 'draft']}`} />
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{selected?.name || 'Select study'}</span>
-            <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform ${studyOpen ? 'rotate-180' : ''}`} />
-          </button>
-          {studyOpen && <div className="absolute right-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl" role="listbox" aria-label="Select study">
-            {studies.map(study => <button role="option" aria-selected={study.id === effectiveId} key={study.id} onClick={() => switchStudy(study.id)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"><span className={`h-2 w-2 rounded-full ${STATUS_DOT[study.status] || STATUS_DOT.draft}`} /><span className="min-w-0 flex-1 truncate font-medium">{study.name}</span>{study.id === effectiveId && <Check size={14} className="text-blue-600" />}</button>)}
-          </div>}
-        </div>}
-      </header>
-      <main id="main-content" className="min-w-0 flex-1"><div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8"><MeProvider me={researcher.me}>{children}</MeProvider></div></main>
+/** Study picker at the top of the sidebar: a listbox with arrow keys, Enter and Escape. */
+function StudySwitcher({ studies, selected, onSwitch }: { studies: Study[] | null; selected: Study | undefined; onSwitch: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [focusIndex, setFocusIndex] = useState(0)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const list = studies ?? []
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: MouseEvent) => { if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+
+  useEffect(() => { if (open) optionRefs.current[focusIndex]?.focus() }, [open, focusIndex])
+
+  function openList() {
+    const i = Math.max(0, list.findIndex(s => s.id === selected?.id))
+    setFocusIndex(i)
+    setOpen(true)
+  }
+  function onListKey(e: React.KeyboardEvent) {
+    if (e.key === 'Escape') { e.preventDefault(); setOpen(false); buttonRef.current?.focus() }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setFocusIndex(i => Math.min(list.length - 1, i + 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setFocusIndex(i => Math.max(0, i - 1)) }
+    else if (e.key === 'Home') { e.preventDefault(); setFocusIndex(0) }
+    else if (e.key === 'End') { e.preventDefault(); setFocusIndex(list.length - 1) }
+    else if (e.key === 'Tab') setOpen(false)
+  }
+
+  if (studies === null) return <div className="h-12 animate-pulse rounded-lg bg-sunken" />
+  if (list.length === 0) return null
+  const info = selected ? studyStatusInfo(selected) : null
+  return (
+    <div className="relative" ref={rootRef}>
+      <button ref={buttonRef} type="button" onClick={() => (open ? setOpen(false) : openList())}
+        onKeyDown={e => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); openList() } }}
+        aria-haspopup="listbox" aria-expanded={open} aria-label={`Study: ${selected?.name ?? 'none selected'}. Change study`}
+        className="flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-2 text-left shadow-card hover:bg-sunken">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-fg">{selected?.name ?? 'Select a study'}</span>
+          {info && <span className="flex items-center gap-1.5 text-xs text-subtle"><span className={`h-1.5 w-1.5 rounded-full ${info.dot}`} aria-hidden="true" />{info.label}</span>}
+        </span>
+        <ChevronsUpDown size={14} className="shrink-0 text-subtle" aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="listbox" aria-label="Studies" onKeyDown={onListKey}
+          className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-lg border border-line bg-surface p-1 shadow-xl">
+          {list.map((study, i) => {
+            const s = studyStatusInfo(study)
+            const current = study.id === selected?.id
+            return (
+              <button key={study.id} ref={el => { optionRefs.current[i] = el }} type="button" role="option" aria-selected={current}
+                tabIndex={i === focusIndex ? 0 : -1}
+                onClick={() => { setOpen(false); onSwitch(study.id) }}
+                className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-fg hover:bg-sunken focus:bg-sunken focus:outline-none">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${s.dot}`} title={s.label} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">{study.name}</span>
+                {current && <Check size={14} className="text-accent" aria-hidden="true" />}
+              </button>
+            )
+          })}
+          <Link href="/studies/new" onClick={() => setOpen(false)} className="mt-1 flex items-center gap-2 border-t border-line px-2.5 pb-1 pt-2 text-sm font-medium text-accent hover:underline">
+            <Plus size={14} aria-hidden="true" />New study
+          </Link>
+        </div>
+      )}
     </div>
-  </div>
+  )
+}
+
+function MobileDrawer({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useDialogFocus(ref, onClose)
+  return (
+    <div className="fixed inset-0 z-50 lg:hidden">
+      <div className="absolute inset-0 bg-[var(--overlay)]" onClick={onClose} aria-hidden="true" />
+      <div ref={ref} role="dialog" aria-modal="true" aria-label="Menu" className="absolute inset-y-0 left-0 shadow-2xl">{children}</div>
+    </div>
+  )
 }

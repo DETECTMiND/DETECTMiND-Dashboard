@@ -1,15 +1,123 @@
 @import "tailwindcss";
+@import "./theme-dark.css";
 
+/* Dark mode follows data-theme on <html> (set before paint in layout.tsx from the saved choice or the system). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * Semantic tokens. New UI (src/components/ui) uses these through the Tailwind
+ * colours below: bg-page, bg-surface, bg-sunken, text-fg, text-muted,
+ * text-subtle, border-line, bg-accent, text-accent... Older palette classes
+ * (bg-white, text-gray-700, bg-blue-50...) are mapped for dark mode in
+ * theme-dark.css.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+  --page: #f8fafc;
+  --surface: #ffffff;
+  --surface-sunken: #f1f5f9;
+  --surface-raised: #e2e8f0;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --fg: #0f172a;
+  --fg-muted: #475569;
+  --fg-subtle: #64748b;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --accent-fg: #ffffff;
+  --danger: #dc2626;
+  --danger-hover: #b91c1c;
+  --danger-soft: #fef2f2;
+  --success: #059669;
+  --success-soft: #ecfdf5;
+  --warning: #d97706;
+  --warning-soft: #fffbeb;
+  --focus: #2563eb;
+  --overlay: rgb(2 6 23 / 0.5);
+  --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 1px 3px rgb(15 23 42 / 0.04);
+  /* Chart palette: categorical series, then neutrals for grid and axes */
+  --chart-1: #2563eb;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #8b5cf6;
+  --chart-5: #ef4444;
+  --chart-6: #06b6d4;
+  --chart-7: #ec4899;
+  --chart-8: #84cc16;
+  --chart-grid: #e2e8f0;
+  --chart-axis: #64748b;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-border: #e2e8f0;
+  --background: var(--page);
+  --foreground: var(--fg);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0b1220;
+  --surface: #111a2b;
+  --surface-sunken: #172134;
+  --surface-raised: #1f2b40;
+  --border: #263349;
+  --border-strong: #34445e;
+  --fg: #f1f5f9;
+  --fg-muted: #b4c0d0;
+  --fg-subtle: #8797ad;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --accent-soft: color-mix(in oklab, #3b82f6 16%, #111a2b);
+  --accent-fg: #ffffff;
+  --danger: #ef4444;
+  --danger-hover: #f87171;
+  --danger-soft: color-mix(in oklab, #ef4444 14%, #111a2b);
+  --success: #34d399;
+  --success-soft: color-mix(in oklab, #10b981 14%, #111a2b);
+  --warning: #fbbf24;
+  --warning-soft: color-mix(in oklab, #f59e0b 14%, #111a2b);
+  --focus: #60a5fa;
+  --overlay: rgb(2 6 23 / 0.7);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --chart-1: #60a5fa;
+  --chart-2: #34d399;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #f87171;
+  --chart-6: #22d3ee;
+  --chart-7: #f472b6;
+  --chart-8: #a3e635;
+  --chart-grid: #263349;
+  --chart-axis: #8797ad;
+  --chart-tooltip-bg: #172134;
+  --chart-tooltip-border: #34445e;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-sunken: var(--surface-sunken);
+  --color-raised: var(--surface-raised);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --shadow-card: var(--shadow);
 }
 
 body {
@@ -23,11 +131,16 @@ button, a, input, select, textarea {
 }
 
 :focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--focus);
 }
 
 button:not(:disabled), select:not(:disabled) {
   cursor: pointer;
+}
+
+/* Native form controls follow the theme */
+:root[data-theme="dark"] input, :root[data-theme="dark"] select, :root[data-theme="dark"] textarea {
+  color: var(--fg);
 }
 
 @media (prefers-reduced-motion: reduce) {
