@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import { createClient } from '@supabase/supabase-js'
 import { ACCOUNTS, OTHER_STUDY, TEAM_STUDY, TEST_PASSWORD } from './support/accounts'
 import { q, sql, studyId } from './support/data'
-import { openStudy, signIn } from './support/helpers'
+import { addToTeam, openStudy, signIn, teamUrl } from './support/helpers'
 import { localSupabaseEnv } from './support/local-supabase'
 
 // Permission table from the plan, checked through the real UI and the database.
@@ -28,14 +28,16 @@ test.describe('study approval', () => {
     // The owner cannot activate it
     await expect(page.getByRole('button', { name: /^approve$/i })).toHaveCount(0)
 
-    // Admin approves from Admin → Studies
+    // Admin approves from Admin → Approvals
     const adminCtx = await browser.newContext()
     const admin = await adminCtx.newPage()
     await signIn(admin, 'admin')
-    await admin.goto('/admin/studies?filter=pending')
-    const row = admin.getByTestId('study-row').filter({ hasText: name })
-    await row.getByRole('button', { name: /^approve$/i }).click()
-    await admin.getByRole('dialog').getByRole('button', { name: /approve|confirm/i }).click()
+    await admin.goto('/admin/approvals')
+    const card = admin.getByTestId('approval-card').filter({ hasText: name })
+    await expect(card).toContainText(/pending approval/i)
+    await card.getByRole('button', { name: /^approve$/i }).click()
+    await admin.getByRole('dialog').getByRole('button', { name: /^approve$/i }).click()
+    await expect(admin.getByTestId('approval-card').filter({ hasText: name })).toHaveCount(0)
     await expect.poll(() => sql(`SELECT status FROM studies WHERE name = ${q(name)}`)).toBe('active')
     expect(sql(`SELECT count(*) FROM audit_log WHERE action = 'study_approved' AND details->>'study_name' = ${q(name)}`)).toBe('1')
     await adminCtx.close()
@@ -50,29 +52,28 @@ test.describe('owner powers', () => {
     // No study delete for owners
     await expect(page.getByRole('button', { name: /delete study/i })).toHaveCount(0)
 
-    await page.goto(`/studies/${id}/team`)
-    // Owner rows are read-only for owners, and "Owner" is never offered
-    const roleSelects = page.getByLabel(/^role/i)
-    for (const select of await roleSelects.all()) {
+    await page.goto(teamUrl(id))
+    await expect(page.getByTestId('member-row').first()).toBeVisible()
+    // Owner rows are read-only for owners, and "Owner" is never offered (add control or member rows)
+    const ownerRow = page.getByTestId('member-row').filter({ hasText: ACCOUNTS.owner })
+    await expect(ownerRow.getByRole('combobox')).toHaveCount(0)
+    for (const select of await page.getByRole('combobox', { name: /role/i }).all()) {
       await expect(select.locator('option', { hasText: /^owner$/i })).toHaveCount(0)
     }
 
     // Owner adds the no-access researcher as editor, then changes them to viewer, then removes them
-    await page.getByLabel(/search researchers/i).fill(ACCOUNTS.researcher)
-    await page.getByRole('option', { name: new RegExp(ACCOUNTS.researcher) }).click()
-    await page.getByLabel('Role for new member', { exact: true }).selectOption('editor')
-    await page.getByRole('button', { name: /add to study/i }).click()
+    await addToTeam(page, ACCOUNTS.researcher, 'editor')
     await expect.poll(() => sql(`SELECT role FROM study_members WHERE study_id = ${q(id)}
       AND user_id = (SELECT id FROM auth.users WHERE email = ${q(ACCOUNTS.researcher)})`)).toBe('editor')
 
     const member = page.getByTestId('member-row').filter({ hasText: ACCOUNTS.researcher })
-    await member.getByLabel('Role', { exact: true }).selectOption('viewer')
-    await page.getByRole('dialog').getByRole('button', { name: /confirm|change role/i }).click()
+    await member.getByRole('combobox', { name: /^role for/i }).selectOption('viewer')
+    await page.getByRole('dialog').getByRole('button', { name: /change role/i }).click()
     await expect.poll(() => sql(`SELECT role FROM study_members WHERE study_id = ${q(id)}
       AND user_id = (SELECT id FROM auth.users WHERE email = ${q(ACCOUNTS.researcher)})`)).toBe('viewer')
 
-    await member.getByRole('button', { name: /remove/i }).click()
-    await page.getByRole('dialog').getByRole('button', { name: /remove|confirm/i }).click()
+    await member.getByRole('button', { name: /^remove/i }).click()
+    await page.getByRole('dialog').getByRole('button', { name: /^remove$/i }).click()
     await expect.poll(() => sql(`SELECT count(*) FROM study_members WHERE study_id = ${q(id)}
       AND user_id = (SELECT id FROM auth.users WHERE email = ${q(ACCOUNTS.researcher)})`)).toBe('0')
   })
@@ -98,8 +99,10 @@ test.describe('editor and viewer', () => {
     await signIn(page, 'editor')
     const id = await openStudy(page, TEAM_STUDY)
     await expect(page.getByRole('button', { name: /delete study/i })).toHaveCount(0)
-    await page.goto(`/studies/${id}/team`)
+    await page.goto(teamUrl(id))
+    await expect(page.getByTestId('member-row').first()).toBeVisible()
     await expect(page.getByRole('button', { name: /add to study|invite/i })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /^remove/i })).toHaveCount(0)
   })
 
   test('viewer is read-only', async ({ page }) => {
@@ -121,47 +124,82 @@ test.describe('editor and viewer', () => {
     await signIn(page, 'researcher')
     await page.goto('/studies')
     await expect(page.getByText(TEAM_STUDY)).toHaveCount(0)
-    await page.goto('/admin/researchers')
-    await expect(page.getByText(/admins only|not authori[sz]ed|only admins/i).first()).toBeVisible()
+    for (const path of ['/admin/approvals', '/admin/people']) {
+      await page.goto(path)
+      await expect(page.getByText(/admins only|not authori[sz]ed|only admins/i).first()).toBeVisible()
+    }
   })
 })
 
 test.describe('admin', () => {
-  test('admin assigns a new owner and deletes a study with a reason', async ({ page }) => {
+  test('admin assigns a new owner on the Team tab and deletes the study with a reason', async ({ page }) => {
     const name = `E2E deletable ${Date.now()}`
     sql(`INSERT INTO studies (name, status) VALUES (${q(name)}, 'active')`)
+    const id = studyId(name)
 
     await signIn(page, 'admin')
+    // Admin → Studies links to the study's team; owners are managed only there
     await page.goto('/admin/studies')
     const row = page.getByTestId('study-row').filter({ hasText: name })
+    await expect(row.getByRole('button', { name: /assign owner|delete/i })).toHaveCount(0)
+    await row.getByRole('link', { name: /manage team/i }).click()
+    await expect(page).toHaveURL(new RegExp(teamUrl(id)))
 
-    await row.getByRole('button', { name: /assign owner/i }).click()
-    const dialog = page.getByRole('dialog')
-    await dialog.getByLabel(/search researchers/i).fill(ACCOUNTS.editor)
-    await page.getByRole('option', { name: new RegExp(ACCOUNTS.editor) }).click()
-    await dialog.getByRole('button', { name: /assign|confirm/i }).click()
+    await addToTeam(page, ACCOUNTS.editor, 'owner')
+    await page.getByRole('dialog').getByRole('button', { name: /add as owner/i }).click()
     await expect.poll(() => sql(`SELECT m.role FROM study_members m JOIN studies s ON s.id = m.study_id
       JOIN auth.users u ON u.id = m.user_id WHERE s.name = ${q(name)} AND u.email = ${q(ACCOUNTS.editor)}`)).toBe('owner')
+    await expect(page.getByTestId('member-row').filter({ hasText: ACCOUNTS.editor })).toBeVisible()
 
-    await row.getByRole('button', { name: /delete/i }).click()
+    // Deleting lives in Settings → General (danger zone)
+    await page.goto(`/studies/${id}/settings`)
+    await page.getByRole('button', { name: /delete study/i }).click()
     const del = page.getByRole('dialog')
     await del.getByLabel(/reason/i).fill('e2e cleanup')
-    const typed = del.getByRole('textbox').last()
-    await typed.fill(name)
-    await del.getByRole('button', { name: /delete/i }).click()
+    await del.getByRole('textbox').last().fill(name)
+    await del.getByRole('button', { name: /delete study/i }).click()
+    await page.waitForURL(/\/studies\/?$/)
     await expect.poll(() => sql(`SELECT count(*) FROM studies WHERE name = ${q(name)}`)).toBe('0')
     expect(sql(`SELECT details->>'reason' FROM audit_log WHERE action = 'study_deleted' AND details->>'study_name' = ${q(name)}`)).toBe('e2e cleanup')
   })
 
+  test('an admin rejects a pending study with a required reason', async ({ page }) => {
+    const name = `E2E reject ${Date.now()}`
+    sql(`INSERT INTO studies (name, status) VALUES (${q(name)}, 'draft')`)
+
+    await signIn(page, 'admin')
+    await page.goto('/admin/approvals')
+    const card = page.getByTestId('approval-card').filter({ hasText: name })
+    await card.getByRole('button', { name: /^reject$/i }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByRole('button', { name: /reject study/i }).click()
+    await expect(dialog.getByText(/enter a reason/i)).toBeVisible()
+    await dialog.getByLabel(/reason/i).fill('duplicate')
+    await dialog.getByRole('button', { name: /reject study/i }).click()
+    await expect.poll(() => sql(`SELECT count(*) FROM studies WHERE name = ${q(name)}`)).toBe('0')
+    expect(sql(`SELECT details->>'reason' FROM audit_log WHERE action = 'study_deleted' AND details->>'study_name' = ${q(name)}`)).toBe('Rejected: duplicate')
+  })
+
   test('promoting someone to admin asks for confirmation', async ({ page }) => {
     await signIn(page, 'admin')
-    await page.goto('/admin/researchers')
-    await page.getByRole('searchbox', { name: 'Search' }).fill(ACCOUNTS.viewer)
+    await page.goto('/admin/people')
+    await page.getByRole('searchbox', { name: /search people/i }).fill(ACCOUNTS.viewer)
     const row = page.getByTestId('researcher-row').filter({ hasText: ACCOUNTS.viewer }).first()
-    await row.getByLabel(/role/i).first().selectOption('admin')
+    await row.getByRole('combobox', { name: /account type/i }).selectOption('admin')
     const dialog = page.getByRole('dialog')
     await expect(dialog).toContainText(/admin/i)
     await dialog.getByRole('button', { name: /cancel/i }).click()
     expect(sql(`SELECT r.role FROM researchers r JOIN auth.users u ON u.id = r.user_id WHERE u.email = ${q(ACCOUNTS.viewer)}`)).toBe('researcher')
+  })
+
+  test('people list: one-word status and separate invite / password-reset actions', async ({ page }) => {
+    await signIn(page, 'admin')
+    await page.goto('/admin/people')
+    // The owner account: no other test reads its mailbox
+    const row = page.getByTestId('researcher-row').filter({ hasText: ACCOUNTS.owner }).first()
+    await expect(row).toContainText('Active')
+    await expect(row.getByRole('button', { name: /resend invite/i })).toHaveCount(0)
+    await row.getByRole('button', { name: /send password reset/i }).click()
+    await expect(page.getByText(/password reset link sent/i)).toBeVisible()
   })
 })

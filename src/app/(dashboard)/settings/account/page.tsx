@@ -1,10 +1,11 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { KeyRound, UserRound } from 'lucide-react'
+import { KeyRound, Palette, UserRound } from 'lucide-react'
 import { createClient } from '@/lib/supabase-browser'
 import { useMe, useMyStudyRoles, STUDY_ROLE_LABEL } from '@/lib/access'
-import { Notice, type NoticeState } from '@/components/feedback'
+import { Button, Card, CardHeader, DescriptionList, Notice, PageHeader, Skeleton, ThemeToggle, type NoticeState } from '@/components/ui'
+import { RoleBadge } from '@/components/role-badge'
 import { MIN_PASSWORD_LENGTH, PasswordInput, passwordProblem } from '@/components/password-fields'
 
 export default function AccountPage() {
@@ -42,48 +43,53 @@ export default function AccountPage() {
     setNotice({ tone: 'success', text: 'Password changed.' })
   }
 
+  const isAdmin = me?.role === 'admin'
+  const roleCounts = Object.values(roles).reduce<Record<string, number>>((acc, r) => { acc[r] = (acc[r] ?? 0) + 1; return acc }, {})
   const studyCount = Object.keys(roles).length
 
+  const access = isAdmin
+    ? 'Every study (admin)'
+    : rolesLoading
+      ? <Skeleton className="h-4 w-40" />
+      : studyCount === 0
+        ? 'No studies yet. A study owner or an admin can add you.'
+        : `${studyCount} ${studyCount === 1 ? 'study' : 'studies'} (${Object.entries(roleCounts)
+            .map(([r, n]) => `${n} as ${(STUDY_ROLE_LABEL[r as keyof typeof STUDY_ROLE_LABEL] ?? r).toLowerCase()}`).join(', ')})`
+
   return (
-    <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Account</h1>
-        <p className="mt-0.5 text-sm text-gray-500">Your sign-in details and password</p>
+    <div className="max-w-2xl">
+      <PageHeader title="Account" description="Your profile, password and how the dashboard looks." />
+
+      <div className="space-y-5">
+        <Card>
+          <CardHeader icon={<UserRound size={16} />} title="Profile" description="Ask an admin if any of this needs changing." />
+          <DescriptionList items={[
+            { label: 'Name', value: me?.displayName || <span className="text-subtle">Not set</span> },
+            { label: 'Email', value: me?.email ?? '—' },
+            { label: 'Account type', value: me ? <RoleBadge role={isAdmin ? 'admin' : 'researcher'} /> : <Skeleton className="h-4 w-20" /> },
+            { label: 'Study access', value: access },
+          ]} />
+        </Card>
+
+        <Card>
+          <CardHeader icon={<KeyRound size={16} />} title="Change password" description="You will need your current password." />
+          <form onSubmit={changePassword} className="max-w-sm space-y-4">
+            <Notice notice={notice} onClose={() => setNotice(null)} />
+            <PasswordInput id="current-password" label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
+            <PasswordInput id="new-password" label="New password" value={password} onChange={setPassword}
+              autoComplete="new-password" hint={`At least ${MIN_PASSWORD_LENGTH} characters.`} />
+            <PasswordInput id="confirm-password" label="Confirm new password" value={confirm} onChange={setConfirm} autoComplete="new-password" />
+            <Button type="submit" loading={saving} disabled={!me?.email}>
+              {saving ? 'Saving…' : 'Change password'}
+            </Button>
+          </form>
+        </Card>
+
+        <Card>
+          <CardHeader icon={<Palette size={16} />} title="Appearance" description="Light, dark, or follow your device setting." />
+          <ThemeToggle />
+        </Card>
       </div>
-
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-50 text-blue-600"><UserRound size={18} /></span>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-gray-900">{me?.email ?? '—'}</p>
-            <p className="text-xs text-gray-500">
-              {me?.role === 'admin' ? 'Administrator — full access to every study, researcher and the audit log' : 'Researcher'}
-            </p>
-          </div>
-        </div>
-        {me?.role !== 'admin' && (
-          <p className="mt-4 border-t border-gray-100 pt-4 text-xs text-gray-500">
-            {rolesLoading ? 'Loading study access…'
-              : studyCount === 0 ? 'You are not a member of any study yet. A study owner or an admin can add you.'
-              : `Member of ${studyCount} ${studyCount === 1 ? 'study' : 'studies'}: ${Object.values(roles).map(r => STUDY_ROLE_LABEL[r]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}.`}
-          </p>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="flex items-center gap-2 text-base font-semibold text-gray-800"><KeyRound size={16} /> Change password</h2>
-        <form onSubmit={changePassword} className="mt-4 max-w-sm space-y-4">
-          <Notice notice={notice} onClose={() => setNotice(null)} />
-          <PasswordInput id="current-password" label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
-          <PasswordInput id="new-password" label="New password" value={password} onChange={setPassword}
-            autoComplete="new-password" hint={`At least ${MIN_PASSWORD_LENGTH} characters.`} />
-          <PasswordInput id="confirm-password" label="Confirm new password" value={confirm} onChange={setConfirm} autoComplete="new-password" />
-          <button type="submit" disabled={saving || !me?.email}
-            className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50">
-            {saving ? 'Saving…' : 'Change password'}
-          </button>
-        </form>
-      </section>
     </div>
   )
 }

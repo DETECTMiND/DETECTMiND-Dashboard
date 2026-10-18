@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { ACCOUNTS, OTHER_STUDY, TEAM_STUDY, TEST_PASSWORD } from './support/accounts'
 import { enrollTestParticipant, q, sql, studyId } from './support/data'
-import { latestEmailLink, openStudy, signIn, signOut } from './support/helpers'
+import { addToTeam, latestEmailLink, openStudy, signIn, signOut, teamUrl } from './support/helpers'
 
 const NEW_PASSWORD = 'local-e2e-Changed1!'
 
@@ -9,11 +9,12 @@ test('owner invites a new person as viewer; they set a password and see only tha
   const invitee = `invitee-${Date.now()}@detectmind.test`
   await signIn(page, 'owner')
   const id = await openStudy(page, TEAM_STUDY)
-  await page.goto(`/studies/${id}/team`)
-  await page.getByLabel(/^email$/i).fill(invitee)
-  await page.getByLabel(/invite role/i).selectOption('viewer')
-  await page.getByRole('button', { name: /^invite$/i }).click()
-  await expect(page.getByText(/invite sent|invited/i).first()).toBeVisible()
+  await page.goto(teamUrl(id))
+  // One "Add people" control: a typed email that is not on the dashboard becomes an invite
+  await addToTeam(page, invitee, 'viewer')
+  await expect(page.getByText(/invite sent/i).first()).toBeVisible()
+  // Owners see who has not accepted yet
+  await expect(page.getByTestId('member-row').filter({ hasText: invitee })).toContainText('Invited')
 
   expect(sql(`SELECT r.role FROM researchers r WHERE r.email = ${q(invitee)}`)).toBe('researcher')
   expect(sql(`SELECT m.role FROM study_members m JOIN researchers r ON r.user_id = m.user_id
@@ -25,6 +26,8 @@ test('owner invites a new person as viewer; they set a password and see only tha
   const guest = await ctx.newPage()
   await guest.goto(link)
   await expect(guest).toHaveURL(/reset-password/)
+  await expect(guest.getByRole('heading', { name: /welcome to detectmind/i })).toBeVisible()
+  await expect(guest.getByText(/set a password to finish setting up your account/i)).toBeVisible()
   await guest.getByLabel(/^new password/i).fill(NEW_PASSWORD)
   await guest.getByLabel(/confirm/i).fill(NEW_PASSWORD)
   await guest.getByRole('button', { name: /set password|save|update/i }).click()
@@ -80,6 +83,7 @@ test('forgot password: email link lets the user set a new password', async ({ pa
   const link = await latestEmailLink(ACCOUNTS.viewer)
   await page.goto(link)
   await expect(page).toHaveURL(/reset-password/)
+  await expect(page.getByRole('heading', { name: /choose a new password/i })).toBeVisible()
   await page.getByLabel(/^new password/i).fill(NEW_PASSWORD)
   await page.getByLabel(/confirm/i).fill(NEW_PASSWORD)
   await page.getByRole('button', { name: /set password|save|update/i }).click()
@@ -125,7 +129,7 @@ test('a deactivated researcher is locked out; the last admin cannot be deactivat
 
 test('admin pages fit a phone screen @mobile', async ({ page }) => {
   await signIn(page, 'admin')
-  for (const path of ['/admin', '/admin/studies', '/admin/researchers', '/admin/audit']) {
+  for (const path of ['/admin/approvals', '/admin/studies', '/admin/people', '/admin/activity']) {
     await page.goto(path)
     await page.waitForLoadState('networkidle')
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)

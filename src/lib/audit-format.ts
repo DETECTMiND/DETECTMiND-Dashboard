@@ -1,6 +1,6 @@
 // Turns audit_log rows into readable sentences, e.g.
 // "Anoop invited x@y.com as viewer to Sleep study". Shared by the audit log
-// page and the admin overview.
+// page (Admin → Activity log) and its CSV export.
 
 export type AuditRow = {
   id: number
@@ -17,7 +17,7 @@ export const AUDIT_ACTIONS: { value: string; label: string }[] = [
   { value: 'study_approved', label: 'Study approved' },
   { value: 'study_status_changed', label: 'Study status changed' },
   { value: 'study_deleted', label: 'Study deleted' },
-  { value: 'study_pin_changed', label: 'Study PIN changed' },
+  { value: 'study_pin_changed', label: 'Enrolment PIN changed' },
   { value: 'study_owner_assigned', label: 'Owner assigned' },
   { value: 'study_owner_removed', label: 'Owner removed' },
   { value: 'study_member_invited', label: 'Invited to study' },
@@ -26,10 +26,10 @@ export const AUDIT_ACTIONS: { value: string; label: string }[] = [
   { value: 'study_member_removed', label: 'Team member removed' },
   { value: 'participant_deleted', label: 'Participant deleted' },
   { value: 'participant_merged', label: 'Participants merged' },
-  { value: 'researcher_invited', label: 'Researcher invited' },
-  { value: 'researcher_role_changed', label: 'Researcher role changed' },
-  { value: 'researcher_deactivated', label: 'Researcher deactivated' },
-  { value: 'researcher_reactivated', label: 'Researcher reactivated' },
+  { value: 'researcher_invited', label: 'Dashboard invite sent' },
+  { value: 'researcher_role_changed', label: 'Account type changed' },
+  { value: 'researcher_deactivated', label: 'Account deactivated' },
+  { value: 'researcher_reactivated', label: 'Account reactivated' },
 ]
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = Object.fromEntries(AUDIT_ACTIONS.map(a => [a.value, a.label]))
@@ -145,7 +145,7 @@ export function describeAudit(row: AuditRow, ctx: AuditContext): AuditDescriptio
       if (d.resend) {
         sentence = d.kind === 'password_reset'
           ? `${actor} sent a password reset link to ${who}`
-          : `${actor} re-sent the dashboard invite to ${who}`
+          : `${actor} sent the dashboard invite to ${who} again`
       } else if (str('study_name') || str('study_id')) {
         sentence = `${actor} invited ${who} to the dashboard (as ${article(str('study_role') || 'member')} of ${study})`
       } else {
@@ -153,7 +153,7 @@ export function describeAudit(row: AuditRow, ctx: AuditContext): AuditDescriptio
       }
       break
     case 'researcher_role_changed':
-      sentence = `${actor} changed ${who}'s dashboard role from ${role('from')} to ${role('to')}`
+      sentence = `${actor} changed ${who}'s account type from ${role('from')} to ${role('to')}`
       break
     case 'researcher_deactivated':
       sentence = `${actor} deactivated ${who}`

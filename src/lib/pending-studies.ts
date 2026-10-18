@@ -38,8 +38,8 @@ export function statusOptionsFor(
       return {
         options: ['draft'], editable: false,
         reason: study.approved_at
-          ? 'An admin moved this study back to draft. Only an admin can reactivate it.'
-          : 'This study is waiting for admin approval. Only an admin can activate it.',
+          ? 'An admin moved this study back to draft. Only an admin can make it active again.'
+          : 'This study is waiting for an admin to approve it.',
       }
     }
     return { options: ['active', 'paused', 'completed'], editable: true, reason: null }

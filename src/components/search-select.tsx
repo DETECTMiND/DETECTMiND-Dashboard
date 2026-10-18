@@ -16,7 +16,7 @@ export interface SearchSelectProps {
   label: string
   options: SearchOption[]
   value: string | null
-  onChange: (value: string | null) => void
+  onChange: (value: string | null, option: SearchOption | null) => void
   placeholder?: string
   emptyText?: string
   disabled?: boolean
@@ -24,34 +24,48 @@ export interface SearchSelectProps {
   hideLabel?: boolean
   className?: string
   maxResults?: number
+  /**
+   * Turns what was typed into an extra option when nothing in `options` is an
+   * exact match (e.g. "Invite new@person.org"). Return null to offer nothing.
+   */
+  customOption?: (query: string) => SearchOption | null
+  /** Hint under the field. */
+  hint?: React.ReactNode
 }
 
 /** Searchable combobox (ARIA 1.2 pattern) for picking one item, e.g. a researcher by email or name. */
 export function SearchSelect({
   label, options, value, onChange, placeholder = 'Type to search…', emptyText = 'No matches',
-  disabled, hideLabel, className = '', maxResults = 50,
+  disabled, hideLabel, className = '', maxResults = 50, customOption, hint,
 }: SearchSelectProps) {
   const inputId = useId()
   const listId = useId()
+  const hintId = useId()
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
+  // A picked custom option is not in `options`, so remember it for display.
+  const [picked, setPicked] = useState<SearchOption | null>(null)
   const listRef = useRef<HTMLUListElement>(null)
-  const selected = options.find(o => o.value === value) ?? null
+  const selected = options.find(o => o.value === value) ?? (picked && picked.value === value ? picked : null)
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const list = needle
       ? options.filter(o => o.label.toLowerCase().includes(needle) || (o.hint ?? '').toLowerCase().includes(needle))
       : options
-    return list.slice(0, maxResults)
-  }, [options, query, maxResults])
+    const shown = list.slice(0, maxResults)
+    const exact = options.some(o => o.label.toLowerCase() === needle)
+    const custom = needle && !exact && customOption ? customOption(query.trim()) : null
+    return custom ? [...shown, custom] : shown
+  }, [options, query, maxResults, customOption])
 
   const shownText = open ? query : selected ? selected.label : query
   const activeIndex = Math.min(active, Math.max(0, matches.length - 1))
 
   function pick(option: SearchOption) {
-    onChange(option.value)
+    setPicked(option)
+    onChange(option.value, option)
     setQuery('')
     setOpen(false)
   }
@@ -80,9 +94,9 @@ export function SearchSelect({
 
   return (
     <div className={`relative ${className}`}>
-      <label htmlFor={inputId} className={hideLabel ? 'sr-only' : 'block text-sm font-medium text-gray-700'}>{label}</label>
-      <div className={`relative ${hideLabel ? '' : 'mt-1.5'}`}>
-        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+      <label htmlFor={inputId} className={hideLabel ? 'sr-only' : 'mb-1.5 block text-sm font-medium text-fg'}>{label}</label>
+      <div className="relative">
+        <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle" aria-hidden="true" />
         <input
           id={inputId}
           type="text"
@@ -90,30 +104,32 @@ export function SearchSelect({
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
+          aria-describedby={hint ? hintId : undefined}
           aria-activedescendant={open && matches[activeIndex] ? `${listId}-${activeIndex}` : undefined}
           autoComplete="off"
           disabled={disabled}
           value={shownText}
           placeholder={selected && open ? selected.label : placeholder}
-          onChange={e => { setQuery(e.target.value); setOpen(true); setActive(0); if (value) onChange(null) }}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setActive(0); if (value) onChange(null, null) }}
           onFocus={() => setOpen(true)}
           onClick={() => setOpen(true)}
           onBlur={() => setOpen(false)}
           onKeyDown={onKeyDown}
-          className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-8 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 disabled:opacity-60"
+          className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-8 text-sm text-fg shadow-card placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-subtle"
         />
         {(value || query) && !disabled && (
-          <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => { onChange(null); setQuery('') }}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label={`Clear ${label}`}>
+          <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => { onChange(null, null); setQuery('') }}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-subtle hover:bg-sunken hover:text-fg" aria-label={`Clear ${label}`}>
             <X size={14} />
           </button>
         )}
       </div>
+      {hint && <p id={hintId} className="mt-1.5 text-xs text-subtle">{hint}</p>}
       {open && (
         <ul ref={listRef} id={listId} role="listbox" aria-label={label}
-          className="absolute left-0 right-0 top-full z-40 mt-1 max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white p-1 shadow-xl">
+          className="absolute left-0 right-0 z-40 mt-1 max-h-64 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-xl">
           {matches.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-gray-500" role="presentation">{emptyText}</li>
+            <li className="px-3 py-2 text-sm text-subtle" role="presentation">{emptyText}</li>
           ) : matches.map((o, i) => (
             <li
               key={o.value}
@@ -123,13 +139,13 @@ export function SearchSelect({
               onMouseDown={e => e.preventDefault()}
               onMouseEnter={() => setActive(i)}
               onClick={() => pick(o)}
-              className={`flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm ${i === activeIndex ? 'bg-blue-50 text-blue-800' : 'text-gray-700'}`}
+              className={`flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm ${i === activeIndex ? 'bg-accent-soft text-accent' : 'text-fg'}`}
             >
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{o.label}</span>
-                {o.hint && <span className="block truncate text-xs text-gray-500">{o.hint}</span>}
+                {o.hint && <span className="block truncate text-xs text-subtle">{o.hint}</span>}
               </span>
-              {o.value === value && <Check size={14} className="shrink-0 text-blue-600" />}
+              {o.value === value && <Check size={14} className="shrink-0 text-accent" aria-hidden="true" />}
             </li>
           ))}
         </ul>

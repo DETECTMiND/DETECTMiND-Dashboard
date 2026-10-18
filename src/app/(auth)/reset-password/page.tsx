@@ -1,22 +1,26 @@
 'use client'
 
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { FlaskConical, KeyRound, Loader2 } from 'lucide-react'
+import { CheckCircle2, KeyRound, Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase-browser'
+import { Button, ButtonLink, Notice } from '@/components/ui'
 import { MIN_PASSWORD_LENGTH, PasswordInput, passwordProblem } from '@/components/password-fields'
+import { AuthCard } from '../auth-card'
 
 // Reached from an invite or password-reset email (via /auth/callback, which
-// exchanges the link for a session). Also accepts the older implicit-flow
-// links that carry the session in the URL fragment.
+// exchanges the link for a session and adds ?mode=invite|recovery). Also
+// accepts the implicit-flow links that carry the session (and its type) in
+// the URL fragment.
 
 type Phase = 'checking' | 'no-session' | 'ready' | 'done'
+type Mode = 'invite' | 'recovery'
 
 export default function ResetPasswordPage() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
   const [phase, setPhase] = useState<Phase>('checking')
+  const [mode, setMode] = useState<Mode>('recovery')
   const [email, setEmail] = useState<string | null>(null)
   const [linkError, setLinkError] = useState<string | null>(null)
   const [password, setPassword] = useState('')
@@ -27,16 +31,24 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     let cancelled = false
     async function init() {
+      const search = new URLSearchParams(window.location.search)
       const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      const rawMode = search.get('mode') ?? hash.get('type')
+      const nextMode: Mode = rawMode === 'invite' ? 'invite' : 'recovery'
       const accessToken = hash.get('access_token')
       const refreshToken = hash.get('refresh_token')
       const hashError = hash.get('error_description')
-      if (accessToken && refreshToken) {
+      const failedLink = search.get('error') === 'link' || !!hashError
+      if (accessToken && refreshToken && !failedLink) {
         await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
       }
-      if (window.location.hash) history.replaceState(null, '', window.location.pathname)
-      const { data: { user } } = await supabase.auth.getUser()
+      // Keep the mode in the address (for a reload) but drop tokens and errors.
+      if (window.location.hash || search.has('error')) {
+        history.replaceState(null, '', `${window.location.pathname}?mode=${nextMode}`)
+      }
+      const { data: { user } } = failedLink ? { data: { user: null } } : await supabase.auth.getUser()
       if (cancelled) return
+      setMode(nextMode)
       if (hashError) setLinkError(hashError.replace(/\+/g, ' '))
       setEmail(user?.email ?? null)
       setPhase(user ? 'ready' : 'no-session')
@@ -63,56 +75,56 @@ export default function ResetPasswordPage() {
     setTimeout(() => { router.push('/'); router.refresh() }, 1200)
   }
 
+  const invite = mode === 'invite'
+  const title = phase === 'checking' ? 'Checking your link'
+    : phase === 'no-session' ? (invite ? 'This invite link has expired' : 'This reset link has expired')
+    : invite ? 'Welcome to DETECTMiND' : 'Choose a new password'
+  const description = phase === 'ready' || phase === 'done'
+    ? (invite ? 'Set a password to finish setting up your account.' : email ? `For ${email}.` : undefined)
+    : undefined
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
-      <title>Set password | DETECTMiND</title>
-      <div className="w-full max-w-sm px-4">
-        <div className="mb-8 text-center">
-          <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 shadow-sm">
-            <FlaskConical size={22} className="text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">Set your password</h1>
-          {email && <p className="mt-1 text-sm text-gray-500">for {email}</p>}
+    <AuthCard title={title} description={description}>
+      <title>{invite ? 'Set up your account | DETECTMiND' : 'Choose a new password | DETECTMiND'}</title>
+
+      {phase === 'checking' && (
+        <p role="status" className="flex items-center justify-center gap-2 text-sm text-subtle">
+          <Loader2 size={16} className="animate-spin" aria-hidden="true" /> Checking your link…
+        </p>
+      )}
+
+      {phase === 'no-session' && (
+        <div className="space-y-4 text-center">
+          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-warning-soft text-warning"><KeyRound size={20} aria-hidden="true" /></span>
+          <p className="text-sm text-muted">
+            {invite
+              ? 'Invite links work once and expire after a while. Ask the person who invited you to send a new invite.'
+              : 'Reset links work once and expire after a while. Request a new one from the sign-in page.'}
+          </p>
+          {linkError && <p className="text-xs text-subtle">Details: {linkError}</p>}
+          <ButtonLink href="/login" variant={invite ? 'secondary' : 'primary'}>{invite ? 'Go to sign in' : 'Request a new link'}</ButtonLink>
         </div>
+      )}
 
-        <div className="rounded-2xl border border-gray-200 bg-white p-7 shadow-sm">
-          {phase === 'checking' && (
-            <p className="flex items-center justify-center gap-2 text-sm text-gray-500">
-              <Loader2 size={16} className="animate-spin" /> Checking your link…
-            </p>
-          )}
+      {phase === 'ready' && (
+        <form onSubmit={submit} className="space-y-4">
+          {invite && email && <p className="text-sm text-muted">Your account: <span className="font-medium text-fg">{email}</span></p>}
+          <Notice notice={error ? { tone: 'error', text: error } : null} />
+          <PasswordInput id="new-password" label="New password" value={password} onChange={setPassword}
+            autoComplete="new-password" hint={`At least ${MIN_PASSWORD_LENGTH} characters.`} />
+          <PasswordInput id="confirm-password" label="Confirm new password" value={confirm} onChange={setConfirm}
+            autoComplete="new-password" />
+          <Button type="submit" loading={saving} className="w-full">
+            {saving ? 'Saving…' : invite ? 'Set password' : 'Save password'}
+          </Button>
+        </form>
+      )}
 
-          {phase === 'no-session' && (
-            <div className="space-y-4 text-center">
-              <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600"><KeyRound size={20} /></span>
-              <p className="text-sm text-gray-600">
-                {linkError ?? 'This link is invalid or has expired.'} Request a new password reset link from the sign-in page.
-              </p>
-              <Link href="/login" className="inline-flex rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
-                Go to sign in
-              </Link>
-            </div>
-          )}
-
-          {phase === 'ready' && (
-            <form onSubmit={submit} className="space-y-4">
-              {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>}
-              <PasswordInput id="new-password" label="New password" value={password} onChange={setPassword}
-                autoComplete="new-password" hint={`At least ${MIN_PASSWORD_LENGTH} characters.`} />
-              <PasswordInput id="confirm-password" label="Confirm new password" value={confirm} onChange={setConfirm}
-                autoComplete="new-password" />
-              <button type="submit" disabled={saving}
-                className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
-                {saving ? 'Saving…' : 'Save password'}
-              </button>
-            </form>
-          )}
-
-          {phase === 'done' && (
-            <p role="status" className="text-center text-sm text-emerald-700">Password saved. Taking you to the dashboard…</p>
-          )}
-        </div>
-      </div>
-    </div>
+      {phase === 'done' && (
+        <p role="status" className="flex items-center justify-center gap-2 text-center text-sm text-success">
+          <CheckCircle2 size={16} aria-hidden="true" /> Password saved. Taking you to the dashboard…
+        </p>
+      )}
+    </AuthCard>
   )
 }

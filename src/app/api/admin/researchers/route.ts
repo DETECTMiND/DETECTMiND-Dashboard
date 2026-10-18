@@ -72,11 +72,11 @@ export async function POST(req: NextRequest) {
 
   const existing = await findResearcherByEmail(admin, email)
   if (!existing.ok) return jsonError(existing.status, existing.error)
-  if (existing.row) return jsonError(409, 'This email is already a researcher. Use "Resend invite" instead.')
+  if (existing.row) return jsonError(409, 'This person already has an account. Find them in the list below to resend their invite or change their access.')
 
   // Sends the invite, or finds the auth account that already exists (e.g.
   // created by hand) so it can be granted access.
-  const invite = await inviteOrFindAuthUser(admin, email, passwordRedirect(req))
+  const invite = await inviteOrFindAuthUser(admin, email, passwordRedirect(req, 'invite'))
   if (!invite.ok) return jsonError(invite.status, invite.error)
   const { userId, existingAccount } = invite
 

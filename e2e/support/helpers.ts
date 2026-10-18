@@ -36,9 +36,24 @@ export async function latestEmailLink(to: string, timeoutMs = 20_000): Promise<s
 }
 
 export async function openStudy(page: Page, name: string) {
-  // Navigate by id: the study name also appears in the sidebar switcher
+  // Navigate by id: the study name also appears in the sidebar switcher.
+  // A study's overview lives at /?study=<id> (/studies/<id> redirects there).
   const id = studyId(name)
-  await page.goto(`/studies/${id}`)
-  await expect(page).toHaveURL(new RegExp(`/studies/${id}`))
+  await page.goto(`/?study=${id}`)
+  await expect(page).toHaveURL(new RegExp(`study=${id}`))
   return id
+}
+
+/** Address of a study's Team tab (Settings → Team). */
+export const teamUrl = (id: string) => `/studies/${id}/settings/team`
+
+/**
+ * Adds someone on the Team tab through the one "Add people" control: search
+ * (or type a new email), pick the match, choose the study role, submit.
+ */
+export async function addToTeam(page: Page, email: string, role: 'owner' | 'editor' | 'viewer') {
+  await page.getByRole('combobox', { name: /name or email/i }).fill(email)
+  await page.getByRole('option', { name: new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).click()
+  await page.getByLabel('Study role', { exact: true }).selectOption(role)
+  await page.getByRole('button', { name: /add to study/i }).click()
 }

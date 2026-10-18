@@ -80,7 +80,7 @@ export async function requireStudyOwner(req: NextRequest, studyId: string): Prom
   if (manageError) return jsonError(500, `Could not check your access: ${manageError.message}`)
   if (studyError) return jsonError(500, studyError.message)
   if (!study) return jsonError(404, 'Study not found')
-  if (canManage !== true) return jsonError(403, 'Only a study owner or an admin can invite people to this study')
+  if (canManage !== true) return jsonError(403, 'Only a study owner or an admin can manage this study team')
 
   let admin: SupabaseClient
   try {
@@ -119,7 +119,11 @@ export async function readJson<T>(req: NextRequest): Promise<T | null> {
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Where invite and password-reset links land (must be in Supabase's Redirect URLs). */
-export function passwordRedirect(req: NextRequest) {
-  return `${req.nextUrl.origin}/auth/callback?next=/reset-password`
+/**
+ * Where invite and password-reset links land (must be in Supabase's Redirect
+ * URLs; `/auth/callback**` covers the query). `mode` lets the set-password
+ * page greet a new invitee differently from someone resetting a password.
+ */
+export function passwordRedirect(req: NextRequest, mode: 'invite' | 'recovery' = 'invite') {
+  return `${req.nextUrl.origin}/auth/callback?next=/reset-password&mode=${mode}`
 }
