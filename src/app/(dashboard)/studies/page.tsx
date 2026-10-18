@@ -1,121 +1,145 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { FlaskConical, Users, ChevronRight, Plus } from 'lucide-react'
+import { ChevronRight, FlaskConical, Plus, Search, Users } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { STUDY_ROLE_LABEL, useMyStudyRoles } from '@/lib/access'
+import { studyPaths } from '@/lib/nav'
+import {
+  Badge, ButtonLink, EmptyState, ErrorState, Input, PageHeader, Skeleton, StatusPill, errorText,
+} from '@/components/ui'
 
 interface Study {
   id: string
   name: string
   description: string | null
   status: string
+  approved_at: string | null
   created_at: string
-  participant_count?: number
 }
 
-const STATUS_STYLES: Record<string, { pill: string; border: string; dot: string }> = {
-  draft:     { pill: 'bg-gray-100 text-gray-600 border-gray-200',        border: 'border-l-gray-300',    dot: 'bg-gray-400' },
-  active:    { pill: 'bg-emerald-50 text-emerald-700 border-emerald-200', border: 'border-l-emerald-500', dot: 'bg-emerald-500' },
-  paused:    { pill: 'bg-amber-50 text-amber-700 border-amber-200',       border: 'border-l-amber-400',   dot: 'bg-amber-400' },
-  completed: { pill: 'bg-blue-50 text-blue-700 border-blue-200',          border: 'border-l-blue-400',    dot: 'bg-blue-400' },
-  archived:  { pill: 'bg-gray-100 text-gray-400 border-gray-200',         border: 'border-l-gray-200',    dot: 'bg-gray-300' },
-}
+/** Show the search box once the list is longer than this. */
+const SEARCH_AFTER = 6
 
 export default function StudiesPage() {
   const supabase = useMemo(() => createClient(), [])
-  const [studies, setStudies] = useState<Study[]>([])
+  const { roles, isAdmin } = useMyStudyRoles()
+  const [studies, setStudies] = useState<Study[] | null>(null)
+  const [counts, setCounts] = useState<Record<string, number | null>>({})
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
 
-  useEffect(() => {
-    async function load() {
-      const { data, error } = await supabase.from('studies').select('*').order('created_at', { ascending: false })
-      if (error) {
-        console.error(error)
-        setLoadError(error.message)
-        setLoading(false)
-        return
-      }
-      const { data: counts, error: countsError } = await supabase.from('participants').select('study_id')
-      if (countsError) console.error(countsError)
-      const countMap: Record<string, number> = {}
-      ;(counts || []).forEach(p => { countMap[p.study_id] = (countMap[p.study_id] || 0) + 1 })
-      setStudies((data || []).map(s => ({ ...s, participant_count: countMap[s.id] || 0 })))
-      setLoading(false)
-    }
-    load()
+  const fetchStudies = useCallback(async () => {
+    const { data, error } = await supabase.from('studies')
+      .select('id, name, description, status, approved_at, created_at')
+      .order('created_at', { ascending: false })
+    if (error) return { error: errorText(error), list: [] as Study[], counts: {} }
+    const list = (data || []) as Study[]
+    // One head count per study, in parallel: exact however many participants there are.
+    const results = await Promise.all(list.map(s =>
+      supabase.from('participants').select('id', { count: 'exact', head: true }).eq('study_id', s.id)))
+    const map: Record<string, number | null> = {}
+    list.forEach((s, i) => { map[s.id] = results[i].error ? null : (results[i].count ?? 0) })
+    return { error: null, list, counts: map }
   }, [supabase])
 
+  const apply = useCallback((res: Awaited<ReturnType<typeof fetchStudies>>) => {
+    setLoadError(res.error)
+    setStudies(res.error ? null : res.list)
+    setCounts(res.counts)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchStudies().then(res => { if (!cancelled) apply(res) })
+    return () => { cancelled = true }
+  }, [fetchStudies, apply])
+
+  async function retry() {
+    setLoadError(null)
+    apply(await fetchStudies())
+  }
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!studies || !q) return studies ?? []
+    return studies.filter(s => s.name.toLowerCase().includes(q) || (s.description ?? '').toLowerCase().includes(q))
+  }, [studies, query])
+
+  const roleLabel = (id: string) => {
+    if (isAdmin) return STUDY_ROLE_LABEL.admin
+    const r = roles[id]
+    return r ? STUDY_ROLE_LABEL[r] : null
+  }
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Studies</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{studies.length} {studies.length === 1 ? 'study' : 'studies'}</p>
-        </div>
-        <Link
-          href="/studies/new"
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-3.5 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
-        >
-          <Plus size={14} /> New Study
-        </Link>
-      </div>
+    <div>
+      <PageHeader title="Studies"
+        description={studies ? `${studies.length} ${studies.length === 1 ? 'study' : 'studies'} you can open.` : 'Every study you can open.'}
+        actions={<ButtonLink href="/studies/new"><Plus size={15} aria-hidden="true" /> New study</ButtonLink>} />
 
       {loadError ? (
-        <div role="alert" className="bg-red-50 rounded-xl border border-red-200 px-5 py-4">
-          <p className="font-semibold text-red-800 text-sm">Could not load studies</p>
-          <p className="text-red-700 text-sm mt-1">{loadError}</p>
-        </div>
-      ) : loading ? (
-        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
-          <p className="text-gray-500 text-sm">Loading studies…</p>
+        <ErrorState title="Could not load studies" message={loadError} onRetry={retry} />
+      ) : studies === null ? (
+        <div role="status" aria-label="Loading studies" className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="rounded-xl border border-line bg-surface p-5 shadow-card">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="mt-3 h-3 w-full" />
+              <Skeleton className="mt-2 h-3 w-1/2" />
+            </div>
+          ))}
         </div>
       ) : studies.length === 0 ? (
-        <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center">
-          <FlaskConical size={40} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-500 font-medium">No studies yet</p>
-          <p className="text-gray-400 text-sm mt-1">Create your first study to get started</p>
-          <Link
-            href="/studies/new"
-            className="mt-4 inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-          >
-            <Plus size={14} /> Create Study
-          </Link>
-        </div>
+        <EmptyState icon={<FlaskConical size={36} aria-hidden="true" />} title="No studies yet"
+          hint="Create a study to choose what the phones collect and to invite participants.">
+          <ButtonLink href="/studies/new"><Plus size={15} aria-hidden="true" /> Create your first study</ButtonLink>
+        </EmptyState>
       ) : (
-        <div className="space-y-2">
-          {studies.map(study => {
-            const style = STATUS_STYLES[study.status] || STATUS_STYLES.draft
-            return (
-              <Link
-                key={study.id}
-                href={`/studies/${study.id}`}
-                className={`bg-white rounded-xl border border-gray-200 border-l-4 ${style.border} hover:shadow-sm hover:border-gray-300 transition-all flex items-center px-5 py-4 gap-4 group`}
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-gray-900 text-sm">{study.name}</p>
-                  {study.description && (
-                    <p className="text-gray-400 text-xs mt-0.5 truncate">{study.description}</p>
-                  )}
-                  <p className="text-gray-400 text-xs mt-1">
-                    Created {formatDistanceToNow(new Date(study.created_at), { addSuffix: true })}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span className="flex items-center gap-1.5 text-xs text-gray-400">
-                    <Users size={13} /> {study.participant_count}
-                  </span>
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${style.pill}`}>
-                    {study.status}
-                  </span>
-                  <ChevronRight size={15} className="text-gray-300 group-hover:text-gray-400 transition-colors" />
-                </div>
-              </Link>
-            )
-          })}
-        </div>
+        <>
+          {studies.length > SEARCH_AFTER && (
+            <div className="relative mb-4 max-w-sm">
+              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle" aria-hidden="true" />
+              <Input type="search" aria-label="Search studies" placeholder="Search studies" value={query}
+                onChange={e => setQuery(e.target.value)} className="pl-9" />
+            </div>
+          )}
+          {filtered.length === 0 ? (
+            <EmptyState title="No studies match your search" hint={`Nothing found for “${query.trim()}”.`} />
+          ) : (
+            <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {filtered.map(study => {
+                const role = roleLabel(study.id)
+                const count = counts[study.id]
+                return (
+                  <li key={study.id}>
+                    <Link href={studyPaths(study.id).overview}
+                      className="group flex h-full flex-col rounded-xl border border-line bg-surface p-5 shadow-card transition-colors hover:border-line-strong hover:bg-sunken/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                      <div className="flex items-start justify-between gap-3">
+                        <h2 className="min-w-0 break-words text-sm font-semibold text-fg">{study.name}</h2>
+                        <StatusPill study={study} />
+                      </div>
+                      <p className={`mt-1.5 line-clamp-2 break-words text-sm ${study.description ? 'text-muted' : 'italic text-subtle'}`}>
+                        {study.description || 'No description'}
+                      </p>
+                      <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2 pt-4 text-xs text-subtle">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Users size={13} aria-hidden="true" />
+                          {count == null ? '—' : count.toLocaleString()} participant{count === 1 ? '' : 's'}
+                        </span>
+                        {role && <Badge tone={role === 'Viewer' ? 'neutral' : 'blue'}>Your role: {role}</Badge>}
+                        <span>Created {formatDistanceToNow(new Date(study.created_at), { addSuffix: true })}</span>
+                        <ChevronRight size={15} className="ml-auto text-subtle transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                      </div>
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </>
       )}
     </div>
   )

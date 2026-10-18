@@ -1,28 +1,22 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import Link from 'next/link'
-import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock, Lock, Download, UsersRound } from 'lucide-react'
-import { useStudyAccess, STUDY_ROLE_LABEL } from '@/lib/access'
-import { Notice, errorText, type NoticeState } from '@/components/feedback'
-import { ConfirmDialog } from '@/components/confirm-dialog'
-import { isPendingApproval, statusOptionsFor } from '@/lib/pending-studies'
+import { CheckCircle2, Clock, CreditCard, Download, FileText, KeyRound, ShieldAlert, Trash2, UserPlus } from 'lucide-react'
+import { useStudyAccess } from '@/lib/access'
+import { isPendingApproval, notifyPendingStudiesChanged, statusOptionsFor } from '@/lib/pending-studies'
+import { studyStatusInfo } from '@/lib/status'
+import { DEFAULT_BANKING_APPS } from '@/lib/sensors'
 import { downloadBlob, exportStudyZip } from '@/lib/export-study'
-
-interface Study {
-  id: string
-  name: string
-  description: string | null
-  app_description: string | null
-  status: string
-  sync_interval_minutes: number
-  config: StudyConfig | null
-  pin_required?: boolean
-  approved_at?: string | null
-  created_at: string
-}
+import { PinLockouts } from '@/components/pin-lockouts'
+import { AppListEditor } from '@/components/study/app-list-editor'
+import { NumberInput } from '@/components/study/number-input'
+import {
+  Badge, Button, Card, CardHeader, ConfirmDialog, DescriptionList, ErrorState, Field, Input, Notice, ReadOnlyBanner,
+  SaveBar, Skeleton, StatusPill, TextField, Textarea, Toggle, errorText, useConfirm, useUnsavedChangesGuard,
+  type NoticeState,
+} from '@/components/ui'
 
 interface BankingPause {
   enabled: boolean
@@ -38,160 +32,243 @@ interface StudyConfig {
   [key: string]: unknown
 }
 
-const DEFAULT_BANKING_APPS = [
-  'uk.co.hsbc.hsbcukmobilebanking',
-  'com.barclays.android.barclaysmobilebanking',
-  'com.htsu.hsbcpersonalbanking',
-  'com.monzo.android',
-  'com.starlingbank.android',
-  'com.revolut.app',
-]
-
-const STATUS_STYLES: Record<string, string> = {
-  draft:     'bg-gray-100 text-gray-600 border border-gray-200',
-  active:    'bg-emerald-50 text-emerald-700 border border-emerald-200',
-  paused:    'bg-amber-50 text-amber-700 border border-amber-200',
-  completed: 'bg-blue-50 text-blue-700 border border-blue-200',
+interface Study {
+  id: string
+  name: string
+  description: string | null
+  app_description: string | null
+  status: string
+  sync_interval_minutes: number
+  config: StudyConfig | null
+  pin_required?: boolean
+  approved_at?: string | null
+  created_at: string
 }
 
-export default function StudyDetailPage() {
+/** The fields saved together by the save bar. */
+interface StudyForm {
+  name: string
+  description: string
+  app_description: string
+  /** Text so a value under the minimum can be shown with an error instead of being dropped */
+  sync_interval: string
+  guided_permissions: boolean
+  auto_participant_id: boolean
+  banking: BankingPause
+}
+
+const MIN_SYNC_MINUTES = 15
+const MAX_SYNC_MINUTES = 1440
+
+function formFromStudy(s: Study): StudyForm {
+  const bp = s.config?.banking_pause
+  return {
+    name: s.name,
+    description: s.description ?? '',
+    app_description: s.app_description ?? '',
+    sync_interval: String(s.sync_interval_minutes ?? 30),
+    guided_permissions: !!s.config?.guided_permissions,
+    auto_participant_id: !!s.config?.auto_participant_id,
+    // No banking_pause key means the phones do not pause at all.
+    banking: {
+      enabled: bp?.enabled ?? false,
+      apps: Array.isArray(bp?.apps) ? bp.apps.map(String) : [...DEFAULT_BANKING_APPS],
+      reminder_minutes: bp?.reminder_minutes ?? 30,
+      escalation_minutes: bp?.escalation_minutes ?? 120,
+    },
+  }
+}
+
+function syncError(text: string): string | null {
+  const n = Number(text)
+  if (!text.trim() || !Number.isInteger(n)) return 'Enter a whole number of minutes.'
+  if (n < MIN_SYNC_MINUTES) return `At least ${MIN_SYNC_MINUTES} minutes: Android does not run background uploads more often.`
+  if (n > MAX_SYNC_MINUTES) return 'At most 1,440 minutes (once a day).'
+  return null
+}
+
+/** What each status button is called and what it does to the phones. */
+const STATUS_ACTIONS: Record<string, { label: (from: string) => string; title: string; effect: string; tone?: 'danger' }> = {
+  active: {
+    label: from => from === 'paused' ? 'Resume' : from === 'completed' ? 'Reopen' : 'Activate',
+    title: 'Make this study active?',
+    effect: 'Participants can join, and phones start collecting and uploading again at their next sync.',
+  },
+  paused: {
+    label: () => 'Pause',
+    title: 'Pause this study?',
+    effect: 'Phones stop collecting sensor data and surveys at their next sync. They keep what they already have, and you can resume at any time.',
+  },
+  completed: {
+    label: () => 'Mark completed',
+    title: 'Mark this study completed?',
+    effect: 'Phones stop collecting at their next sync and new participants cannot join. All data stays available to export.',
+  },
+  draft: {
+    label: () => 'Move back to draft',
+    title: 'Move this study back to draft?',
+    effect: 'Participants cannot join and phones stop collecting. Only an admin can make it active again.',
+    tone: 'danger',
+  },
+}
+
+export default function StudySettingsPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const access = useStudyAccess(id)
-  const [notice, setNotice] = useState<NoticeState>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [exportStatus, setExportStatus] = useState<string | null>(null)
+  const canEdit = access.canEdit
+  const { ask, dialog: confirmDialog } = useConfirm()
+
   const [study, setStudy] = useState<Study | null>(null)
-  const [editing, setEditing] = useState(false)
-  const [form, setForm] = useState<Partial<Study>>({})
-  const [guidedPermissions, setGuidedPermissions] = useState(false)
-  const [autoParticipantId, setAutoParticipantId] = useState(false)
-  const [participantCount, setParticipantCount] = useState(0)
-  // PIN: pinRequired reflects whether the study currently has one; pinInput is
-  // the new value being set (empty = leave unchanged / cleared via the toggle).
-  const [pinRequired, setPinRequired] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [participantCount, setParticipantCount] = useState<number | null>(null)
+  const [form, setForm] = useState<StudyForm | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState<NoticeState>(null)
+  const [showErrors, setShowErrors] = useState(false)
+
   const [pinInput, setPinInput] = useState('')
   const [pinError, setPinError] = useState<string | null>(null)
-  const [bankingPause, setBankingPause] = useState<BankingPause>({
-    enabled: true,
-    apps: [
-      'uk.co.hsbc.hsbcukmobilebanking',
-      'com.barclays.android.barclaysmobilebanking',
-      'com.htsu.hsbcpersonalbanking',
-      'com.monzo.android',
-      'com.starlingbank.android',
-      'com.revolut.app',
-    ],
-    reminder_minutes: 30,
-    escalation_minutes: 120,
-  })
-  const [newAppId, setNewAppId] = useState('')
-  // Admin-only: delete (typed name) or reject a pending study (reason), both via delete_study().
-  const [deleteMode, setDeleteMode] = useState<'delete' | 'reject' | null>(null)
-  const [deleteReason, setDeleteReason] = useState('')
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
+  const [pinBusy, setPinBusy] = useState(false)
+
+  const [exportStatus, setExportStatus] = useState<string | null>(null)
   const [approving, setApproving] = useState(false)
-  const isAdmin = access.role === 'admin'
 
-  useEffect(() => {
-    if (!editing) return
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [editing])
+  // Reject (pending) and delete both go through delete_study() with a reason.
+  const [removal, setRemoval] = useState<'reject' | 'delete' | null>(null)
+  const [reason, setReason] = useState('')
+  const [removalError, setRemovalError] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
+  const reasonId = useId()
 
-  useEffect(() => {
-    async function load() {
-      const { data, error } = await supabase.from('studies').select('*').eq('id', id).maybeSingle()
-      if (error || !data) {
-        setLoadError(error ? errorText(error) : 'This study does not exist or you do not have access to it.')
-        return
-      }
-      if (data) {
-        setStudy(data)
-        setForm(data)
-        setGuidedPermissions(!!(data.config?.guided_permissions))
-        setPinRequired(!!data.pin_required)
-        setAutoParticipantId(!!(data.config?.auto_participant_id))
-        if (data.config?.banking_pause) {
-          setBankingPause({
-            enabled: data.config.banking_pause.enabled ?? true,
-            apps: data.config.banking_pause.apps ?? DEFAULT_BANKING_APPS,
-            reminder_minutes: data.config.banking_pause.reminder_minutes ?? 30,
-            escalation_minutes: data.config.banking_pause.escalation_minutes ?? 120,
-          })
-        }
-      }
-      const { count } = await supabase.from('participants').select('*', { count: 'exact', head: true }).eq('study_id', id)
-      setParticipantCount(count || 0)
-    }
-    void load()
-  }, [id, supabase])
+  const fetchStudy = useCallback(async () => {
+    const [studyRes, countRes] = await Promise.all([
+      supabase.from('studies').select('*').eq('id', id).maybeSingle(),
+      supabase.from('participants').select('id', { count: 'exact', head: true }).eq('study_id', id),
+    ])
+    return { studyRes, count: countRes.error ? null : (countRes.count ?? 0) }
+  }, [supabase, id])
 
-  async function handleSave() {
-    if (!study) return
-    const updatedConfig = { ...(study.config ?? {}) }
-    if (guidedPermissions) updatedConfig.guided_permissions = true
-    else delete updatedConfig.guided_permissions
-    if (autoParticipantId) updatedConfig.auto_participant_id = true
-    else delete updatedConfig.auto_participant_id
-    updatedConfig.banking_pause = { ...bankingPause }
-    // Validate a new PIN if one was entered.
-    if (pinInput && !/^\d{4}$/.test(pinInput)) {
-      setPinError('PIN must be exactly 4 digits')
+  const applyStudy = useCallback((res: Awaited<ReturnType<typeof fetchStudy>>, resetForm: boolean) => {
+    const { data, error } = res.studyRes
+    if (error || !data) {
+      setLoadError(error ? errorText(error) : 'This study does not exist or you do not have access to it.')
       return
     }
-    setPinError(null)
+    setLoadError(null)
+    setStudy(data as Study)
+    setParticipantCount(res.count)
+    if (resetForm) setForm(formFromStudy(data as Study))
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchStudy().then(res => { if (!cancelled) applyStudy(res, true) })
+    return () => { cancelled = true }
+  }, [fetchStudy, applyStudy])
+
+  /** Re-reads the study after a status change; keeps unsaved form edits. */
+  async function reloadStudy() {
+    applyStudy(await fetchStudy(), false)
+  }
+
+  const initial = useMemo(() => study ? formFromStudy(study) : null, [study])
+  const dirty = !!form && !!initial && JSON.stringify(form) !== JSON.stringify(initial)
+  const { dialog: guardDialog } = useUnsavedChangesGuard(dirty || pinInput !== '')
+
+  const nameError = form && !form.name.trim() ? 'Enter a study name.' : null
+  const syncProblem = form ? syncError(form.sync_interval) : null
+  const bankingProblem = form && form.banking.enabled && form.banking.escalation_minutes <= form.banking.reminder_minutes
+    ? 'The second reminder must come after the first.' : null
+
+  function patch(p: Partial<StudyForm>) {
+    setForm(f => f ? { ...f, ...p } : f)
+  }
+  function patchBanking(p: Partial<BankingPause>) {
+    setForm(f => f ? { ...f, banking: { ...f.banking, ...p } } : f)
+  }
+
+  async function save() {
+    if (!study || !form) return
+    if (nameError || syncProblem || bankingProblem) { setShowErrors(true); return }
     setSaving(true)
     setNotice(null)
-    // Only send status when it changed: the DB decides who may change it.
-    const nextStatus = form.status || study.status
-    const { data: saved, error } = await supabase.from('studies').update({
-      name: form.name || study.name,
-      description: form.description ?? study.description,
-      app_description: form.app_description ?? study.app_description,
-      ...(nextStatus !== study.status ? { status: nextStatus } : {}),
-      sync_interval_minutes: form.sync_interval_minutes ?? study.sync_interval_minutes,
-      config: updatedConfig,
-    }).eq('id', id).select('id')
-    if (error || !saved?.length) {
-      setSaving(false)
+    const config: StudyConfig = { ...(study.config ?? {}) }
+    if (form.guided_permissions) config.guided_permissions = true
+    else delete config.guided_permissions
+    if (form.auto_participant_id) config.auto_participant_id = true
+    else delete config.auto_participant_id
+    config.banking_pause = { ...form.banking }
+    const update = {
+      name: form.name.trim(),
+      description: form.description.trim() || null,
+      app_description: form.app_description.trim() || null,
+      sync_interval_minutes: Number(form.sync_interval),
+      config,
+    }
+    const { data, error } = await supabase.from('studies').update(update).eq('id', id).select('id')
+    setSaving(false)
+    if (error || !data?.length) {
       setNotice({ tone: 'error', text: `Could not save the study: ${error ? errorText(error) : 'you do not have permission to edit it.'}` })
       return
     }
-    // Apply PIN changes via the server function (hashes it; never stored in plain text).
-    // - pinRequired off  -> clear any PIN
-    // - pinInput set      -> set/replace the PIN
-    // - pinRequired on but no new input -> leave the existing PIN unchanged
-    if (!pinRequired && study.pin_required) {
-      const { error: pinErr } = await supabase.rpc('set_study_pin', { p_study: id, p_pin: null })
-      if (pinErr) { setSaving(false); setPinError(errorText(pinErr)); return }
-    } else if (pinRequired && pinInput) {
-      const { error: pinErr } = await supabase.rpc('set_study_pin', { p_study: id, p_pin: pinInput })
-      if (pinErr) { setSaving(false); setPinError(errorText(pinErr)); return }
-    } else if (pinRequired && !study.pin_required) {
-      setSaving(false)
-      setPinError('Enter a 4-digit PIN to turn the PIN on')
-      return
-    }
-    setSaving(false)
+    const next = { ...study, ...update }
+    setStudy(next)
+    setForm(formFromStudy(next))
+    setShowErrors(false)
+    setNotice({ tone: 'success', text: 'Settings saved. Phones pick them up at their next sync.' })
+    if (update.name !== study.name) notifyPendingStudiesChanged()
+  }
+
+  async function applyPin(pin: string | null) {
+    setPinBusy(true)
+    setPinError(null)
+    const { error } = await supabase.rpc('set_study_pin', { p_study: id, p_pin: pin })
+    setPinBusy(false)
+    if (error) return errorText(error)
+    setStudy(s => s ? { ...s, pin_required: pin !== null } : s)
     setPinInput('')
-    setStudy({ ...study, ...form, config: updatedConfig, pin_required: pinRequired } as Study)
-    setEditing(false)
-    setNotice({ tone: 'success', text: 'Study saved.' })
-    if (nextStatus !== study.status) await reloadStudy()
+    setNotice({ tone: 'success', text: pin ? 'PIN saved. Share it only with participants who should join.' : 'PIN removed. Anyone with the app can join this study.' })
+    return null
   }
 
-  /** Re-reads the study (status / approval are set by the database). */
-  async function reloadStudy() {
-    const { data } = await supabase.from('studies').select('*').eq('id', id).maybeSingle()
-    if (data) { setStudy(data); setForm(data) }
+  async function submitPin(e: React.FormEvent) {
+    e.preventDefault()
+    if (!/^\d{4}$/.test(pinInput)) { setPinError('Enter exactly 4 digits.'); return }
+    const problem = await applyPin(pinInput)
+    if (problem) setPinError(problem)
   }
 
-  async function handleApprove() {
+  function removePin() {
+    ask({
+      title: 'Remove the study PIN?',
+      body: <p>Anyone who installs the app can then join this study without a PIN. People already enrolled are not affected.</p>,
+      confirmLabel: 'Remove PIN',
+      tone: 'danger',
+      run: () => applyPin(null),
+    })
+  }
+
+  function changeStatus(next: string) {
+    if (!study) return
+    const action = STATUS_ACTIONS[next]
+    ask({
+      title: action?.title ?? `Change status to ${next}?`,
+      body: <p>{action?.effect}</p>,
+      confirmLabel: action ? action.label(study.status) : 'Change status',
+      tone: action?.tone,
+      run: async () => {
+        const { data, error } = await supabase.from('studies').update({ status: next }).eq('id', id).select('id')
+        if (error || !data?.length) return `Could not change the status: ${error ? errorText(error) : 'you do not have permission.'}`
+        await reloadStudy()
+        notifyPendingStudiesChanged()
+        setNotice({ tone: 'success', text: `Study is now ${studyStatusInfo({ ...study, status: next }).label.toLowerCase()}.` })
+      },
+    })
+  }
+
+  async function approve() {
     if (!study) return
     setApproving(true)
     setNotice(null)
@@ -202,13 +279,33 @@ export default function StudyDetailPage() {
       return
     }
     await reloadStudy()
+    notifyPendingStudiesChanged()
     setNotice({ tone: 'success', text: `${study.name} is approved and active. Participants can now join.` })
   }
 
-  function openDelete(mode: 'delete' | 'reject') {
-    setDeleteReason('')
-    setDeleteError(null)
-    setDeleteMode(mode)
+  function openRemoval(kind: 'reject' | 'delete') {
+    setReason('')
+    setRemovalError(null)
+    setRemoval(kind)
+  }
+
+  async function confirmRemoval() {
+    if (!removal) return
+    const text = reason.trim()
+    if (!text) { setRemovalError(removal === 'reject' ? 'Enter a reason for rejecting this study.' : 'Enter a reason for deleting this study.'); return }
+    setRemoving(true)
+    setRemovalError(null)
+    const { error } = await supabase.rpc('delete_study', {
+      p_study: id,
+      p_reason: removal === 'reject' ? `Rejected: ${text}` : text,
+    })
+    if (error) {
+      setRemoving(false)
+      setRemovalError(errorText(error))
+      return
+    }
+    notifyPendingStudiesChanged()
+    router.push('/studies')
   }
 
   async function handleExport() {
@@ -227,463 +324,250 @@ export default function StudyDetailPage() {
     }
   }
 
-  async function handleDelete() {
-    if (!study || !deleteMode) return
-    const reason = deleteReason.trim()
-    if (deleteMode === 'reject' && !reason) { setDeleteError('Enter a reason for rejecting this study.'); return }
-    setDeleting(true)
-    setDeleteError(null)
-    const { error } = await supabase.rpc('delete_study', {
-      p_study: id,
-      p_reason: reason ? (deleteMode === 'reject' ? `Rejected: ${reason}` : reason) : null,
-    })
-    if (error) {
-      setDeleteError(errorText(error))
-      setDeleting(false)
-      return
-    }
-    router.push('/studies')
+  if (loadError && !study) {
+    return <ErrorState title="Could not load this study" message={loadError} onRetry={() => { setLoadError(null); void reloadStudy() }} />
   }
 
-  if (loadError) {
-    return <div className="space-y-4">
-      <Link href="/studies" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors"><ArrowLeft size={15} /> Back to Studies</Link>
-      <Notice notice={{ tone: 'error', text: loadError }} />
-    </div>
-  }
-
-  if (!study) {
+  if (!study || !form) {
     return (
-      <div className="space-y-6 animate-pulse">
-        <div className="h-4 bg-gray-200 rounded w-24" />
-        <div className="h-36 bg-gray-200 rounded-xl" />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-20 bg-gray-200 rounded-xl" />)}
-        </div>
+      <div role="status" aria-label="Loading settings" className="space-y-4">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="rounded-xl border border-line bg-surface p-5 shadow-card">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="mt-4 h-9 w-full" />
+            <Skeleton className="mt-3 h-9 w-2/3" />
+          </div>
+        ))}
       </div>
     )
   }
 
   const pending = isPendingApproval(study)
+  const statusInfo = studyStatusInfo(study)
   const statusRule = statusOptionsFor(access.role, study)
-  const statusChoices = statusRule.options.includes(form.status ?? study.status)
-    ? statusRule.options
-    : [form.status ?? study.status, ...statusRule.options]
-
-  const tabs = [
-    { href: `/studies/${id}/participants`,  label: 'Participants',    icon: Users,         description: `${participantCount} enrolled` },
-    { href: `/studies/${id}/data`,          label: 'Sensor Data',     icon: Database,      description: 'Browse & export' },
-    { href: `/studies/${id}/processed`,     label: 'Processed Data',  icon: Clock,         description: 'Hourly usage & more' },
-    { href: `/studies/${id}/esm-responses`, label: 'ESM Responses',    icon: MessageSquare, description: 'Survey responses' },
-    { href: `/studies/${id}/esm`,           label: 'ESM / EMA Config', icon: ClipboardList, description: 'Survey schedules' },
-    { href: `/studies/${id}/config`,        label: 'Sensor Config',   icon: Settings,      description: 'Collection settings' },
-    { href: `/studies/${id}/team`,          label: 'Team',            icon: UsersRound,    description: access.role ? `You: ${STUDY_ROLE_LABEL[access.role]}` : 'Members & roles' },
-  ]
+  const statusButtons = pending ? [] : statusRule.options.filter(s => s !== study.status)
+  const readOnly = !access.loading && !canEdit
 
   return (
-    <div className="space-y-6">
-      <Link href="/studies" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors">
-        <ArrowLeft size={15} /> Back to Studies
-      </Link>
+    <div className="space-y-5">
+      {guardDialog}
+      {confirmDialog}
 
+      {readOnly && <ReadOnlyBanner />}
       <Notice notice={notice} onClose={() => setNotice(null)} />
 
       {pending && (
-        <div role="status" aria-label="Pending approval" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center">
-          <Clock size={18} className="hidden shrink-0 text-amber-600 sm:block" aria-hidden="true" />
-          <div className="min-w-0 flex-1 text-sm text-amber-900">
-            <p className="font-semibold">Pending approval</p>
-            <p className="mt-0.5 text-amber-800">
-              {isAdmin
-                ? 'This study is waiting for an admin to review it. Participants cannot join until it is approved.'
-                : 'An admin will review this study before participants can join. You can set it up in the meantime.'}
+        <div role="status" aria-label="Pending approval"
+          className="flex flex-col gap-3 rounded-xl border border-line bg-warning-soft px-4 py-3 sm:flex-row sm:items-center">
+          <Clock size={18} className="hidden shrink-0 text-warning sm:block" aria-hidden="true" />
+          <div className="min-w-0 flex-1 text-sm">
+            <p className="font-semibold text-fg">Pending approval</p>
+            <p className="mt-0.5 text-muted">
+              {access.isAdmin
+                ? 'Participants cannot join until an admin approves this study. Approving makes it active straight away.'
+                : 'Waiting for an admin to approve. You can finish setting up sensors and surveys in the meantime.'}
             </p>
           </div>
-          {isAdmin && (
-            <div className="flex shrink-0 gap-2">
-              <button type="button" onClick={handleApprove} disabled={approving}
-                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
-                {approving ? 'Approving…' : 'Approve'}
-              </button>
-              <button type="button" onClick={() => openDelete('reject')} disabled={approving}
-                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
-                Reject
-              </button>
+          {access.isAdmin && (
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <Button onClick={approve} loading={approving}><CheckCircle2 size={14} aria-hidden="true" /> Approve</Button>
+              <Button variant="secondary" onClick={() => openRemoval('reject')} disabled={approving}>Reject</Button>
             </div>
           )}
         </div>
       )}
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {editing ? (
-          <div className="px-6 py-5 space-y-4">
-            <h2 className="font-semibold text-gray-800 mb-4">Edit Study</h2>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Name</label>
-              <input
-                value={form.name || ''}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Description <span className="text-gray-400 font-normal">(internal)</span></label>
-              <textarea
-                value={form.description || ''}
-                onChange={e => setForm({ ...form, description: e.target.value })}
-                rows={2}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all resize-none"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">App Description <span className="text-gray-400 font-normal">(shown to participants)</span></label>
-              <textarea
-                value={form.app_description || ''}
-                onChange={e => setForm({ ...form, app_description: e.target.value })}
-                rows={2}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all resize-none"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Status</label>
-                <select
-                  aria-label="Status"
-                  value={form.status}
-                  disabled={!statusRule.editable}
-                  onChange={e => setForm({ ...form, status: e.target.value })}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all disabled:bg-gray-50 disabled:text-gray-500"
-                >
-                  {statusChoices.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-                {statusRule.reason && <p className="mt-1 text-xs text-gray-400">{statusRule.reason}</p>}
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Sync Interval (minutes)</label>
-                <input
-                  type="number"
-                  value={form.sync_interval_minutes || 30}
-                  onChange={e => setForm({ ...form, sync_interval_minutes: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">App Permissions</label>
-              <div className="grid grid-cols-2 gap-2">
-                {/* Guided Permissions */}
-                <div
-                  className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
-                    guidedPermissions ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
-                  }`}
-                  onClick={() => setGuidedPermissions(v => !v)}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                      guidedPermissions ? 'bg-blue-100' : 'bg-gray-100'
-                    }`}>
-                      <ShieldCheck size={17} className={guidedPermissions ? 'text-blue-600' : 'text-gray-400'} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className={`font-semibold text-sm ${guidedPermissions ? 'text-gray-900' : 'text-gray-600'}`}>
-                        Guided Permissions
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
-                        Walk participants through granting permissions on first launch
-                      </p>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={guidedPermissions} onChange={e => setGuidedPermissions(e.target.checked)} className="sr-only peer" />
-                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
-                  </label>
+      {/* Study details */}
+      <Card>
+        <CardHeader icon={<FileText size={16} />} title="Study details"
+          description="The name and descriptions, and how often phones upload." />
+        {canEdit ? (
+          <div className="space-y-4">
+            <TextField label="Study name" required value={form.name} onChange={e => patch({ name: e.target.value })}
+              error={showErrors ? nameError : null} maxLength={200} />
+            <Field label="Description for your team" hint="Only researchers see this.">
+              {(fid, d) => <Textarea id={fid} aria-describedby={d} rows={2} value={form.description} onChange={e => patch({ description: e.target.value })} />}
+            </Field>
+            <Field label="Description for participants" hint="Shown in the app when someone joins. Keep it short and plain.">
+              {(fid, d) => <Textarea id={fid} aria-describedby={d} rows={3} value={form.app_description} onChange={e => patch({ app_description: e.target.value })} />}
+            </Field>
+            <Field label="Upload every" hint={`Minutes. ${MIN_SYNC_MINUTES} minutes is the shortest Android allows.`} error={syncProblem}>
+              {(fid, d) => (
+                <div className="flex items-center gap-2">
+                  <Input id={fid} aria-describedby={d} aria-invalid={syncProblem ? true : undefined} type="number" inputMode="numeric"
+                    min={MIN_SYNC_MINUTES} max={MAX_SYNC_MINUTES} step={1} value={form.sync_interval}
+                    onChange={e => patch({ sync_interval: e.target.value })} className="w-28" />
+                  <span className="text-sm text-subtle">min</span>
                 </div>
-
-                {/* Auto Participant ID */}
-                <div
-                  className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
-                    autoParticipantId ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
-                  }`}
-                  onClick={() => setAutoParticipantId(v => !v)}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                      autoParticipantId ? 'bg-blue-100' : 'bg-gray-100'
-                    }`}>
-                      <BadgeCheck size={17} className={autoParticipantId ? 'text-blue-600' : 'text-gray-400'} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className={`font-semibold text-sm ${autoParticipantId ? 'text-gray-900' : 'text-gray-600'}`}>
-                        Auto Participant ID
-                      </p>
-                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
-                        Automatically assign a unique ID to each participant on enrollment
-                      </p>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={autoParticipantId} onChange={e => setAutoParticipantId(e.target.checked)} className="sr-only peer" />
-                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* Study PIN */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Study PIN</label>
-              <div className={`rounded-xl border-2 transition-all ${pinRequired ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white'}`}>
-                <div className="flex items-center justify-between px-4 py-3.5">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${pinRequired ? 'bg-blue-100' : 'bg-gray-100'}`}>
-                      <Lock size={17} className={pinRequired ? 'text-blue-600' : 'text-gray-400'} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className={`font-semibold text-sm ${pinRequired ? 'text-gray-900' : 'text-gray-600'}`}>Require a 4-digit PIN to join</p>
-                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">Only participants given the PIN can enrol in this study</p>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
-                    <input type="checkbox" checked={pinRequired} onChange={e => { setPinRequired(e.target.checked); if (!e.target.checked) setPinInput('') }} className="sr-only peer" />
-                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
-                  </label>
-                </div>
-                {pinRequired && (
-                  <div className="px-4 pb-4 pt-1 border-t border-blue-100/70">
-                    <div className="flex items-center gap-3 mt-3">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={4}
-                        value={pinInput}
-                        onChange={e => { setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4)); setPinError(null) }}
-                        placeholder="••••"
-                        className={`w-28 px-3 py-2.5 border rounded-lg text-lg font-mono text-center tracking-[0.5em] pl-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${pinError ? 'border-red-300' : 'border-gray-200 focus:border-blue-400'}`}
-                      />
-                      <p className="text-xs text-gray-400 leading-relaxed flex-1">
-                        Enter 4 digits to set or replace the PIN. Leave blank to keep the current one. It&apos;s stored securely and never shown again.
-                      </p>
-                    </div>
-                    {pinError && <p className="text-xs text-red-600 mt-2">{pinError}</p>}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Banking Pause */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Banking App Pause</label>
-              <div className={`rounded-xl border-2 transition-all ${bankingPause.enabled ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white'}`}>
-                <div className="flex items-center justify-between px-4 py-3.5">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${bankingPause.enabled ? 'bg-blue-100' : 'bg-gray-100'}`}>
-                      <CreditCard size={17} className={bankingPause.enabled ? 'text-blue-600' : 'text-gray-400'} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className={`font-semibold text-sm ${bankingPause.enabled ? 'text-gray-900' : 'text-gray-600'}`}>Banking Pause</p>
-                      <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">Pause participants when banking apps are detected open</p>
-                    </div>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
-                    <input type="checkbox" checked={bankingPause.enabled} onChange={e => setBankingPause(p => ({ ...p, enabled: e.target.checked }))} className="sr-only peer" />
-                    <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
-                  </label>
-                </div>
-                <div className="px-4 pb-4 pt-1 border-t border-blue-100 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Reminder (minutes)</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={bankingPause.reminder_minutes}
-                        onChange={e => setBankingPause(p => ({ ...p, reminder_minutes: parseInt(e.target.value) || 30 }))}
-                        className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Escalation (minutes)</label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={bankingPause.escalation_minutes}
-                        onChange={e => setBankingPause(p => ({ ...p, escalation_minutes: parseInt(e.target.value) || 120 }))}
-                        className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-500 mb-2">Monitored App Package IDs</label>
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {bankingPause.apps.map(app => (
-                        <span key={app} className="inline-flex items-center gap-1.5 text-xs bg-white border border-gray-200 text-gray-700 px-2.5 py-1 rounded-full font-mono">
-                          {app}
-                          <button
-                            type="button"
-                            onClick={() => setBankingPause(p => ({ ...p, apps: p.apps.filter(a => a !== app) }))}
-                            className="text-gray-400 hover:text-red-500 transition-colors"
-                          >
-                            <X size={11} />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newAppId}
-                        onChange={e => setNewAppId(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault()
-                            const trimmed = newAppId.trim()
-                            if (trimmed && !bankingPause.apps.includes(trimmed)) {
-                              setBankingPause(p => ({ ...p, apps: [...p.apps, trimmed] }))
-                              setNewAppId('')
-                            }
-                          }
-                        }}
-                        placeholder="com.example.bankapp"
-                        className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const trimmed = newAppId.trim()
-                          if (trimmed && !bankingPause.apps.includes(trimmed)) {
-                            setBankingPause(p => ({ ...p, apps: [...p.apps, trimmed] }))
-                            setNewAppId('')
-                          }
-                        }}
-                        className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-colors"
-                      >
-                        <Plus size={12} /> Add
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3 pt-1">
-              <button onClick={handleSave} disabled={saving} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors">
-                {saving ? 'Saving…' : 'Save Changes'}
-              </button>
-              <button onClick={() => {
-                setEditing(false)
-                setForm(study)
-                setGuidedPermissions(!!(study.config?.guided_permissions))
-                setAutoParticipantId(!!(study.config?.auto_participant_id))
-                setBankingPause(study.config?.banking_pause
-                  ? { enabled: study.config.banking_pause.enabled ?? true, apps: study.config.banking_pause.apps ?? DEFAULT_BANKING_APPS, reminder_minutes: study.config.banking_pause.reminder_minutes ?? 30, escalation_minutes: study.config.banking_pause.escalation_minutes ?? 120 }
-                  : { enabled: true, apps: DEFAULT_BANKING_APPS, reminder_minutes: 30, escalation_minutes: 120 })
-                setNewAppId('')
-              }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-                Cancel
-              </button>
-              {isAdmin && <button type="button" onClick={() => openDelete('delete')} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
-                <Trash2 size={14} /> Delete study
-              </button>}
-            </div>
+              )}
+            </Field>
           </div>
         ) : (
-          <div className="px-6 py-5">
-            <div className="flex items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <h1 className="text-xl font-bold text-gray-900">{study.name}</h1>
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[study.status] || STATUS_STYLES.draft}`}>
-                    {study.status}
-                  </span>
-                </div>
-                {study.description && <p className="text-gray-500 text-sm mt-1.5">{study.description}</p>}
-                {study.app_description && (
-                  <p className="text-gray-400 text-xs mt-1">
-                    <span className="font-medium text-gray-500">App: </span>{study.app_description}
-                  </p>
-                )}
-                <div className="flex items-center gap-4 mt-3 text-xs text-gray-400">
-                  <span>{participantCount} participants</span>
-                  <span>Sync every {study.sync_interval_minutes} min</span>
-                  {study.config?.guided_permissions && (
-                    <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
-                      <ShieldCheck size={12} /> Guided permissions
-                    </span>
-                  )}
-                  {study.config?.auto_participant_id && (
-                    <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
-                      <BadgeCheck size={12} /> Auto participant ID
-                    </span>
-                  )}
-                  {study.config?.banking_pause?.enabled && (
-                    <span className="inline-flex items-center gap-1 text-blue-600 font-medium">
-                      <CreditCard size={12} /> Banking pause ({study.config.banking_pause.apps?.length ?? 0} apps)
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                <button
-                  onClick={handleExport}
-                  disabled={!!exportStatus}
-                  title="Download every table for this study as CSV files in a zip"
-                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-60 transition-colors"
-                >
-                  <Download size={13} /> {exportStatus ? `Exporting: ${exportStatus}` : 'Export all study data'}
-                </button>
-                {access.canEdit && (
-                  <button
-                    onClick={() => setEditing(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                  >
-                    <Edit2 size={13} /> Edit
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+          <DescriptionList items={[
+            { label: 'Study name', value: study.name },
+            { label: 'Upload every', value: `${study.sync_interval_minutes} min` },
+            { label: 'Description for your team', value: study.description || <span className="text-subtle">None</span> },
+            { label: 'Description for participants', value: study.app_description || <span className="text-subtle">None</span> },
+          ]} />
         )}
-      </div>
+      </Card>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        {tabs.map(tab => (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            className="bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all px-4 py-4 flex items-center gap-3 group"
-          >
-            <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center group-hover:bg-blue-50 transition-colors shrink-0">
-              <tab.icon size={16} className="text-gray-500 group-hover:text-blue-500 transition-colors" />
+      {/* Joining the study */}
+      <Card>
+        <CardHeader icon={<UserPlus size={16} />} title="Joining the study"
+          description="What participants need to join, and what the app does on first launch." />
+        <div className="space-y-5">
+          <div className="rounded-xl border border-line p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <KeyRound size={15} className="text-subtle" aria-hidden="true" />
+                <h3 className="text-sm font-medium text-fg">Study PIN</h3>
+                {study.pin_required ? <Badge tone="green">On</Badge> : <Badge>Off</Badge>}
+              </div>
+              {canEdit && study.pin_required && (
+                <Button variant="danger-ghost" size="sm" onClick={removePin} disabled={pinBusy}>Remove PIN</Button>
+              )}
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-gray-800">{tab.label}</p>
-              <p className="text-xs text-gray-400 mt-0.5">{tab.description}</p>
-            </div>
-            <ChevronRight size={14} className="text-gray-300 group-hover:text-gray-400 ml-auto shrink-0 transition-colors" />
-          </Link>
-        ))}
-      </div>
+            <p className="mt-1 text-xs text-subtle">
+              {study.pin_required
+                ? 'Participants must type the 4-digit PIN to join. It is stored hashed, so it cannot be shown again.'
+                : 'No PIN: anyone with the app can join. Set one to limit joining to people you give it to.'}
+            </p>
+            {canEdit && (
+              <form onSubmit={submitPin} className="mt-3 flex flex-wrap items-start gap-2" noValidate>
+                <Field label={study.pin_required ? 'New PIN' : 'PIN'} error={pinError} className="w-36">
+                  {(fid, d) => (
+                    <Input id={fid} aria-describedby={d} aria-invalid={pinError ? true : undefined} value={pinInput}
+                      inputMode="numeric" autoComplete="off" maxLength={4} placeholder="4 digits"
+                      onChange={e => { setPinInput(e.target.value); setPinError(null) }}
+                      className="font-mono tracking-widest" />
+                  )}
+                </Field>
+                <Button type="submit" variant="secondary" loading={pinBusy} className="mt-[1.625rem]">
+                  {study.pin_required ? 'Change PIN' : 'Set PIN'}
+                </Button>
+              </form>
+            )}
+          </div>
+
+          <Toggle checked={form.auto_participant_id} disabled={!canEdit} onChange={v => patch({ auto_participant_id: v })}
+            label="Automatic participant IDs"
+            description="Give each new participant an ID when they join, instead of asking them to type one." />
+          <Toggle checked={form.guided_permissions} disabled={!canEdit} onChange={v => patch({ guided_permissions: v })}
+            label="Guided permissions"
+            description="Walk participants through each Android permission the first time they open the app." />
+
+          <PinLockouts studyId={id} canEdit={canEdit} />
+        </div>
+      </Card>
+
+      {/* Banking pause */}
+      <Card>
+        <CardHeader icon={<CreditCard size={16} />} title="Banking app pause"
+          description="Many banking apps refuse to open while gesture collection is on. When a listed app opens, the phone offers to pause gestures and reminds the participant to turn them back on." />
+        <div className="space-y-4">
+          <Toggle checked={form.banking.enabled} disabled={!canEdit} onChange={v => patchBanking({ enabled: v })}
+            label="Offer to pause for banking apps" />
+          {form.banking.enabled && (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field label="First reminder after" hint="Minutes paused before a gentle reminder.">
+                  {(fid, d) => (
+                    <div className="flex items-center gap-2">
+                      <NumberInput id={fid} describedBy={d} min={1} max={10080} disabled={!canEdit}
+                        value={form.banking.reminder_minutes} onChange={v => patchBanking({ reminder_minutes: v })} />
+                      <span className="text-sm text-subtle">min</span>
+                    </div>
+                  )}
+                </Field>
+                <Field label="Urgent reminder after" hint="Minutes paused before a high-priority reminder." error={showErrors ? bankingProblem : null}>
+                  {(fid, d) => (
+                    <div className="flex items-center gap-2">
+                      <NumberInput id={fid} describedBy={d} min={1} max={10080} disabled={!canEdit} invalid={showErrors && !!bankingProblem}
+                        value={form.banking.escalation_minutes} onChange={v => patchBanking({ escalation_minutes: v })} />
+                      <span className="text-sm text-subtle">min</span>
+                    </div>
+                  )}
+                </Field>
+              </div>
+              <AppListEditor label="Banking apps" apps={form.banking.apps} disabled={!canEdit}
+                onChange={apps => patchBanking({ apps })} placeholder="com.example.bank"
+                hint="Android package names. Press Enter or Add."
+                confirmRemoveBody={app => <p>Phones will no longer offer to pause gestures when {app} opens, once you save.</p>} />
+            </>
+          )}
+        </div>
+      </Card>
+
+      {/* Study status */}
+      <Card>
+        <CardHeader icon={<ShieldAlert size={16} />} title="Study status" />
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusPill study={study} />
+          <p className="text-sm text-muted">{statusInfo.description}</p>
+        </div>
+        {statusButtons.length > 0 ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {statusButtons.map(s => (
+              <Button key={s} variant={STATUS_ACTIONS[s]?.tone === 'danger' ? 'danger-ghost' : 'secondary'} onClick={() => changeStatus(s)}>
+                {STATUS_ACTIONS[s]?.label(study.status) ?? s}
+              </Button>
+            ))}
+          </div>
+        ) : !pending && statusRule.reason ? (
+          <p className="mt-3 text-xs text-subtle">{statusRule.reason}</p>
+        ) : null}
+      </Card>
+
+      {/* Export */}
+      <Card>
+        <CardHeader icon={<Download size={16} />} title="Export"
+          description="Every table for this study as CSV files in one zip. Phone numbers stay hashed." />
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" onClick={handleExport} loading={!!exportStatus}>
+            {!exportStatus && <Download size={14} aria-hidden="true" />} Export all study data
+          </Button>
+          <p aria-live="polite" className="text-sm text-subtle">{exportStatus ? `Exporting: ${exportStatus}` : ''}</p>
+        </div>
+      </Card>
+
+      {/* Danger zone */}
+      {access.isAdmin && (
+        <section aria-label="Danger zone" className="rounded-xl border border-danger/40 bg-surface p-5 shadow-card">
+          <CardHeader icon={<Trash2 size={16} />} title="Danger zone"
+            description="Deleting removes the study, its participants and every row they uploaded. It cannot be undone." />
+          <Button variant="danger" onClick={() => openRemoval('delete')}>
+            <Trash2 size={14} aria-hidden="true" /> Delete study
+          </Button>
+        </section>
+      )}
+
+      {canEdit && (
+        <SaveBar dirty={dirty} saving={saving} onSave={save}
+          onDiscard={() => { setForm(formFromStudy(study)); setShowErrors(false) }}
+          message={showErrors && (nameError || syncProblem || bankingProblem) ? 'Fix the highlighted fields to save.' : undefined} />
+      )}
 
       <ConfirmDialog
-        open={deleteMode !== null}
+        open={removal !== null}
         tone="danger"
-        title={deleteMode === 'reject' ? `Reject ${study.name}?` : `Delete ${study.name}?`}
-        body={deleteMode === 'reject'
-          ? <p>Rejecting deletes this pending study and its setup. The reason is kept in the audit log.</p>
-          : <p>This permanently deletes the study, its {participantCount} participant{participantCount === 1 ? '' : 's'} and all collected data. This cannot be undone.</p>}
-        confirmLabel={deleteMode === 'reject' ? 'Reject study' : 'Delete permanently'}
-        requireText={deleteMode === 'delete' ? study.name : undefined}
-        busy={deleting}
-        error={deleteError}
-        onConfirm={handleDelete}
-        onCancel={() => { if (!deleting) setDeleteMode(null) }}
+        title={removal === 'reject' ? `Reject ${study.name}?` : `Delete ${study.name}?`}
+        body={removal === 'reject'
+          ? <p>Rejecting deletes this pending study and its setup. The reason is kept in the activity log.</p>
+          : <p>This permanently deletes the study, its {participantCount ?? 'enrolled'} participant{participantCount === 1 ? '' : 's'} and all collected data. Phones in the study stop uploading.</p>}
+        confirmLabel={removal === 'reject' ? 'Reject study' : 'Delete study'}
+        requireText={removal === 'delete' ? study.name : undefined}
+        busy={removing}
+        error={removalError}
+        onConfirm={confirmRemoval}
+        onCancel={() => { if (!removing) setRemoval(null) }}
       >
-        <label className="block text-sm font-medium text-gray-700">
-          Reason{deleteMode === 'delete' && <span className="font-normal text-gray-400"> (optional)</span>}
-          <textarea value={deleteReason} onChange={e => setDeleteReason(e.target.value)} rows={2} maxLength={1000}
-            required={deleteMode === 'reject'}
-            className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
-        </label>
+        <div>
+          <label htmlFor={reasonId} className="block text-sm font-medium text-fg">Reason</label>
+          <Textarea id={reasonId} value={reason} onChange={e => { setReason(e.target.value); setRemovalError(null) }}
+            rows={2} maxLength={1000} required className="mt-1.5 resize-none"
+            placeholder={removal === 'reject' ? 'Why it was not approved' : 'Why it is being deleted'} />
+        </div>
       </ConfirmDialog>
     </div>
   )

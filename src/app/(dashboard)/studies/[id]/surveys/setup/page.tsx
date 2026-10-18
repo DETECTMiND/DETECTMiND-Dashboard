@@ -2,31 +2,29 @@
 
 import { createClient } from '@/lib/supabase-browser'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useStudyAccess } from '@/lib/access'
-import { Notice, ReadOnlyBanner, errorText, type NoticeState } from '@/components/feedback'
-import { useConfirm } from '@/components/confirm-dialog'
 import { useParams } from 'next/navigation'
+import { AlertTriangle, ClipboardList, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useStudyAccess } from '@/lib/access'
 import {
-  Plus, Trash2, Clock, Shuffle, AlignLeft,
-  Hash, SlidersHorizontal, List, CheckSquare, ToggleLeft,
-  Calendar, Bell, ClipboardList, X, Pencil, Save,
-} from 'lucide-react'
+  Badge, Button, Card, CardHeader, DescriptionList, EmptyState, ErrorState, Field, Input, Notice, ReadOnlyBanner,
+  SectionHeader, Select, Skeleton, SkeletonRows, Textarea, Toggle, errorText, useConfirm, useUnsavedChangesGuard,
+  type NoticeState,
+} from '@/components/ui'
+import { NumberInput } from '@/components/study/number-input'
+import {
+  BLANK_SCHEDULE_FORM, NotificationPreview, ScheduleFormBody, buildSchedulePayload, scheduleToForm, scheduleTypeInfo,
+  timingSummary, validateSchedule, type Schedule, type ScheduleForm,
+} from '@/components/study/schedule-form'
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Questions ───────────────────────────────────────────────────────────────
 
-interface Schedule {
-  id: string
-  name: string
-  description: string | null
-  schedule_type: string
-  times_of_day: string[] | null
-  random_count: number | null
-  random_window_start: string | null
-  random_window_end: string | null
-  expiry_minutes: number
-  notification_title: string
-  notification_body: string
-  enabled: boolean
+interface QuestionConfig {
+  min?: number
+  max?: number
+  step?: number
+  label_min?: string | null
+  label_max?: string | null
+  [key: string]: unknown
 }
 
 interface Question {
@@ -37,33 +35,10 @@ interface Question {
   question_text: string
   required: boolean
   options: string[] | null
-  config: QuestionConfig
+  config: QuestionConfig | null
 }
 
-// esm_questions.config (likert / slider / number)
-interface QuestionConfig {
-  min?: number
-  max?: number
-  step?: number
-  label_min?: string
-  label_max?: string
-  [key: string]: unknown
-}
-
-type ScheduleForm = {
-  name: string
-  description: string
-  schedule_type: string
-  times_of_day: string[]
-  random_count: number
-  random_window_start: string
-  random_window_end: string
-  expiry_minutes: number
-  notification_title: string
-  notification_body: string
-}
-
-type QuestionForm = {
+interface QuestionForm {
   question_type: string
   question_text: string
   required: boolean
@@ -75,63 +50,28 @@ type QuestionForm = {
   label_max: string
 }
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const SCHEDULE_TYPES = [
-  { key: 'fixed',  label: 'Fixed Times', icon: Clock,   description: 'Specific times each day' },
-  { key: 'random', label: 'Random',      icon: Shuffle, description: 'Random within a window' },
+const QUESTION_TYPES: { key: string; label: string }[] = [
+  { key: 'likert', label: 'Rating scale (Likert)' },
+  { key: 'slider', label: 'Slider' },
+  { key: 'text', label: 'Free text' },
+  { key: 'number', label: 'Number' },
+  { key: 'single_choice', label: 'Single choice' },
+  { key: 'multi_choice', label: 'Multiple choice' },
+  { key: 'yes_no', label: 'Yes or no' },
+  { key: 'time', label: 'Time of day' },
+  { key: 'date', label: 'Date' },
 ]
 
-const QUESTION_TYPES = [
-  { key: 'likert',        label: 'Likert Scale',  icon: SlidersHorizontal },
-  { key: 'slider',        label: 'Slider',        icon: SlidersHorizontal },
-  { key: 'text',          label: 'Open Text',     icon: AlignLeft },
-  { key: 'number',        label: 'Number',        icon: Hash },
-  { key: 'single_choice', label: 'Single Choice', icon: List },
-  { key: 'multi_choice',  label: 'Multi Choice',  icon: CheckSquare },
-  { key: 'yes_no',        label: 'Yes / No',      icon: ToggleLeft },
-  { key: 'time',          label: 'Time',          icon: Clock },
-  { key: 'date',          label: 'Date',          icon: Calendar },
-]
-
-const TYPE_BADGE: Record<string, string> = {
-  fixed:  'bg-blue-50 text-blue-700 border-blue-100',
-  random: 'bg-violet-50 text-violet-700 border-violet-100',
-}
-
-const BLANK_SCHEDULE_FORM: ScheduleForm = {
-  name: '', description: '', schedule_type: 'fixed',
-  times_of_day: ['09:00', '12:00', '18:00'],
-  random_count: 5, random_window_start: '08:00', random_window_end: '22:00',
-  expiry_minutes: 60,
-  notification_title: 'Survey Available',
-  notification_body: 'Please take a moment to complete a short survey.',
-}
+const SCALE_TYPES = ['likert', 'slider', 'number']
+const CHOICE_TYPES = ['single_choice', 'multi_choice']
 
 const BLANK_QUESTION_FORM: QuestionForm = {
   question_type: 'likert', question_text: '', required: true,
-  options: '', min: 1, max: 7, step: 1,
-  label_min: '', label_max: '',
+  options: '', min: 1, max: 7, step: 1, label_min: '', label_max: '',
 }
 
-const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white placeholder-gray-400'
-const smallInputCls = 'w-full px-2.5 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white'
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function scheduleToForm(s: Schedule): ScheduleForm {
-  return {
-    name: s.name,
-    description: s.description || '',
-    schedule_type: s.schedule_type === 'event_triggered' ? 'fixed' : s.schedule_type,
-    times_of_day: s.times_of_day?.length ? s.times_of_day : ['09:00'],
-    random_count: s.random_count ?? 5,
-    random_window_start: s.random_window_start ?? '08:00',
-    random_window_end: s.random_window_end ?? '22:00',
-    expiry_minutes: s.expiry_minutes,
-    notification_title: s.notification_title,
-    notification_body: s.notification_body,
-  }
+function questionTypeLabel(type: string) {
+  return QUESTION_TYPES.find(t => t.key === type)?.label ?? type.replace(/_/g, ' ')
 }
 
 function questionToForm(q: Question): QuestionForm {
@@ -148,557 +88,209 @@ function questionToForm(q: Question): QuestionForm {
   }
 }
 
-function timingSummary(s: Schedule) {
-  if (s.schedule_type === 'fixed') {
-    return (s.times_of_day || []).join(' · ') || '—'
-  }
-  if (s.schedule_type === 'random') {
-    return `${s.random_count}× between ${s.random_window_start}–${s.random_window_end}`
-  }
-  return '—'
+function splitOptions(text: string) {
+  return text.split(',').map(o => o.trim()).filter(Boolean)
 }
 
-function buildSchedulePayload(f: ScheduleForm) {
-  return {
-    name: f.name,
-    description: f.description || null,
-    schedule_type: f.schedule_type,
-    times_of_day: f.schedule_type === 'fixed' ? f.times_of_day.filter(Boolean) : null,
-    random_count: f.schedule_type === 'random' ? f.random_count : null,
-    random_window_start: f.schedule_type === 'random' ? f.random_window_start : null,
-    random_window_end: f.schedule_type === 'random' ? f.random_window_end : null,
-    expiry_minutes: f.expiry_minutes,
-    notification_title: f.notification_title,
-    notification_body: f.notification_body,
-  }
+type QuestionErrors = Partial<Record<'text' | 'options' | 'scale', string>>
+
+function validateQuestion(f: QuestionForm): QuestionErrors {
+  const e: QuestionErrors = {}
+  if (!f.question_text.trim()) e.text = 'Enter the question.'
+  if (CHOICE_TYPES.includes(f.question_type) && splitOptions(f.options).length < 2) e.options = 'Add at least two options, separated by commas.'
+  if (SCALE_TYPES.includes(f.question_type) && (f.min >= f.max || f.step <= 0)) e.scale = 'The highest value must be above the lowest, and the step at least 1.'
+  return e
 }
 
 function buildQuestionPayload(f: QuestionForm, order: number) {
-  const opts = ['single_choice', 'multi_choice'].includes(f.question_type) && f.options
-    ? f.options.split(',').map(o => o.trim()).filter(Boolean)
-    : null
-  const cfg = ['likert', 'slider', 'number'].includes(f.question_type)
-    ? {
-        min: f.min, max: f.max, step: f.step,
-        label_min: f.label_min.trim() || null,
-        label_max: f.label_max.trim() || null,
-      }
-    : {}
   return {
     question_type: f.question_type,
-    question_text: f.question_text,
+    question_text: f.question_text.trim(),
     required: f.required,
-    options: opts,
-    config: cfg,
+    options: CHOICE_TYPES.includes(f.question_type) ? splitOptions(f.options) : null,
+    config: SCALE_TYPES.includes(f.question_type)
+      ? { min: f.min, max: f.max, step: f.step, label_min: f.label_min.trim() || null, label_max: f.label_max.trim() || null }
+      : {},
     question_order: order,
   }
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={e => { e.stopPropagation(); onChange(!checked) }}
-      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60 ${checked ? 'bg-blue-500' : 'bg-gray-200'}`}
-    >
-      <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${checked ? 'translate-x-4' : ''}`} />
-    </button>
-  )
-}
-
-// Segmented control for schedule type
-function ScheduleTypeSelector({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="grid grid-cols-2 gap-1 p-1 bg-gray-100 rounded-xl">
-      {SCHEDULE_TYPES.map(t => {
-        const active = value === t.key
-        return (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => onChange(t.key)}
-            className={`flex flex-col items-center gap-1.5 py-2.5 px-2 rounded-lg transition-all text-center ${
-              active ? 'bg-white shadow-sm text-blue-700' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <t.icon size={15} className={active ? 'text-blue-600' : 'text-gray-400'} />
-            <span className="text-xs font-semibold leading-tight">{t.label}</span>
-            <span className="text-[10px] text-gray-400 leading-tight hidden sm:block">{t.description}</span>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// Individual time pickers with add/remove
-function TimePicker({
-  times,
-  onChange,
-}: {
-  times: string[]
-  onChange: (t: string[]) => void
-}) {
-  function update(i: number, val: string) {
-    const next = [...times]
-    next[i] = val
-    onChange(next.slice().sort())
-  }
-  function remove(i: number) {
-    onChange(times.filter((_, idx) => idx !== i))
-  }
-  function add() {
-    onChange([...times, '12:00'].sort())
-  }
-
-  return (
-    <div className="space-y-2">
-      {times.map((t, i) => (
-        <div key={i} className="flex items-center gap-2">
-          <input
-            type="time"
-            value={t}
-            onChange={e => update(i, e.target.value)}
-            className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white"
-          />
-          <span className="text-xs text-gray-400">{formatTime12(t)}</span>
-          {times.length > 1 && (
-            <button
-              type="button"
-              onClick={() => remove(i)}
-              className="ml-auto text-gray-300 hover:text-red-400 transition-colors"
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
-      ))}
-      <button
-        type="button"
-        onClick={add}
-        className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-semibold transition-colors mt-1"
-      >
-        <Plus size={12} /> Add time
-      </button>
-    </div>
-  )
-}
-
-function formatTime12(t: string) {
-  if (!t) return ''
-  const [h, m] = t.split(':').map(Number)
-  const ampm = h >= 12 ? 'PM' : 'AM'
-  const h12 = h % 12 || 12
-  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`
-}
-
-// Horizontal pill selector for question types
-function QuestionTypePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="flex gap-1.5 flex-wrap">
-      {QUESTION_TYPES.map(t => {
-        const active = value === t.key
-        return (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => onChange(t.key)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all ${
-              active
-                ? 'bg-blue-600 border-blue-600 text-white'
-                : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
-            }`}
-          >
-            <t.icon size={11} />
-            {t.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// Scale preview (numbered boxes)
-function ScalePreview({ min, max, step, labelMin, labelMax }: {
-  min: number; max: number; step: number; labelMin?: string; labelMax?: string
-}) {
+function scaleValues(min: number, max: number, step: number) {
   const values: number[] = []
-  for (let v = min; v <= max; v += step) {
-    values.push(v)
-    if (values.length >= 10) break
-  }
-  const overflow = Math.ceil((max - min) / step) + 1 > 10
+  if (step <= 0 || max < min) return { values, more: false }
+  for (let v = min; v <= max && values.length < 11; v += step) values.push(v)
+  return { values, more: Math.floor((max - min) / step) + 1 > values.length }
+}
 
+function ScalePreview({ min, max, step, labelMin, labelMax }: { min: number; max: number; step: number; labelMin?: string | null; labelMax?: string | null }) {
+  const { values, more } = scaleValues(min, max, step)
+  if (!values.length) return null
   return (
-    <div>
-      <div className="flex items-center gap-1.5 flex-wrap">
+    <div aria-label="Scale preview">
+      <div className="flex flex-wrap items-center gap-1">
         {values.map(v => (
-          <div
-            key={v}
-            className="w-8 h-8 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center text-xs font-semibold text-gray-600"
-          >
-            {v}
-          </div>
+          <span key={v} className="flex h-7 min-w-7 items-center justify-center rounded-md border border-line bg-sunken px-1 text-[11px] font-semibold text-muted">{v}</span>
         ))}
-        {overflow && <span className="text-xs text-gray-400">… {max}</span>}
+        {more && <span className="text-xs text-subtle">… {max}</span>}
       </div>
       {(labelMin || labelMax) && (
-        <div className="flex justify-between mt-1 px-0.5">
-          <span className="text-[11px] text-gray-400">{labelMin || min}</span>
-          <span className="text-[11px] text-gray-400">{labelMax || max}</span>
+        <div className="mt-1 flex justify-between gap-4 text-[11px] text-subtle">
+          <span>{labelMin}</span><span>{labelMax}</span>
         </div>
       )}
     </div>
   )
 }
 
-function ScheduleFormBody({ form, setForm }: { form: ScheduleForm; setForm: (f: ScheduleForm) => void }) {
-  const set = (patch: Partial<ScheduleForm>) => setForm({ ...form, ...patch })
-
-  return (
-    <div className="space-y-6">
-      {/* Name + Description */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Name *</label>
-          <input
-            value={form.name}
-            onChange={e => set({ name: e.target.value })}
-            required
-            placeholder="e.g. Morning Check-in"
-            className={inputCls}
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Description</label>
-          <input
-            value={form.description}
-            onChange={e => set({ description: e.target.value })}
-            placeholder="Internal notes (optional)"
-            className={inputCls}
-          />
-        </div>
-      </div>
-
-      {/* Schedule type */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">Trigger</label>
-        <ScheduleTypeSelector value={form.schedule_type} onChange={v => set({ schedule_type: v })} />
-      </div>
-
-      {/* Type-specific fields */}
-      {form.schedule_type === 'fixed' && (
-        <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
-            Times of Day
-          </label>
-          <TimePicker
-            times={form.times_of_day}
-            onChange={t => set({ times_of_day: t })}
-          />
-        </div>
-      )}
-
-      {form.schedule_type === 'random' && (
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-              Prompts / day
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={form.random_count}
-              onChange={e => set({ random_count: parseInt(e.target.value) || 1 })}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-              Window start
-            </label>
-            <input
-              type="time"
-              value={form.random_window_start}
-              onChange={e => set({ random_window_start: e.target.value })}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-              Window end
-            </label>
-            <input
-              type="time"
-              value={form.random_window_end}
-              onChange={e => set({ random_window_end: e.target.value })}
-              className={inputCls}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Expiry */}
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-            Survey Expiry (minutes)
-          </label>
-          <input
-            type="number"
-            min={1}
-            value={form.expiry_minutes}
-            onChange={e => set({ expiry_minutes: parseInt(e.target.value) || 1 })}
-            className={inputCls}
-          />
-          <p className="text-xs text-gray-400 mt-1">Participant must respond within this window</p>
-        </div>
-      </div>
-
-      {/* Notification */}
-      <div className="rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex items-center gap-2">
-          <Bell size={13} className="text-gray-400" />
-          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Push Notification</span>
-          <span className="ml-auto text-xs text-gray-400">Shown to participants</span>
-        </div>
-        <div className="p-4 grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Title</label>
-            <input
-              value={form.notification_title}
-              onChange={e => set({ notification_title: e.target.value })}
-              className={smallInputCls}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Body</label>
-            <input
-              value={form.notification_body}
-              onChange={e => set({ notification_body: e.target.value })}
-              className={smallInputCls}
-            />
-          </div>
-        </div>
-        {/* Notification preview */}
-        {(form.notification_title || form.notification_body) && (
-          <div className="mx-4 mb-4 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-3 flex items-start gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center shrink-0">
-              <Bell size={13} className="text-white" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-gray-800 leading-tight">
-                {form.notification_title || '—'}
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5 leading-snug line-clamp-2">
-                {form.notification_body || '—'}
-              </p>
-            </div>
-            <span className="text-[10px] text-gray-400 shrink-0 mt-0.5">now</span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function QuestionFormBody({ form, setForm }: { form: QuestionForm; setForm: (f: QuestionForm) => void }) {
-  const set = (patch: Partial<QuestionForm>) => setForm({ ...form, ...patch })
-  const isScale = ['likert', 'slider', 'number'].includes(form.question_type)
-  const isChoice = ['single_choice', 'multi_choice'].includes(form.question_type)
-
+function QuestionFormBody({ form, setForm, errors }: { form: QuestionForm; setForm: (f: QuestionForm) => void; errors: QuestionErrors }) {
+  const set = (p: Partial<QuestionForm>) => setForm({ ...form, ...p })
+  const isScale = SCALE_TYPES.includes(form.question_type)
+  const isChoice = CHOICE_TYPES.includes(form.question_type)
   return (
     <div className="space-y-4">
-      {/* Question type */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
-          Question Type
-        </label>
-        <QuestionTypePicker value={form.question_type} onChange={v => set({ question_type: v })} />
-      </div>
-
-      {/* Question text */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-          Question Text *
-        </label>
-        <textarea
-          value={form.question_text}
-          onChange={e => set({ question_text: e.target.value })}
-          required
-          rows={2}
-          placeholder="e.g. How are you feeling right now?"
-          className={`${inputCls} resize-none`}
-        />
-      </div>
-
-      {/* Scale config */}
+      <Field label="Answer type">
+        {(id, d) => (
+          <Select id={id} aria-describedby={d} value={form.question_type} onChange={e => set({ question_type: e.target.value })} className="sm:w-72">
+            {QUESTION_TYPES.map(t => <option key={t.key} value={t.key}>{t.label}</option>)}
+          </Select>
+        )}
+      </Field>
+      <Field label="Question" required error={errors.text}>
+        {(id, d) => (
+          <Textarea id={id} aria-describedby={d} aria-invalid={errors.text ? true : undefined} rows={2} value={form.question_text}
+            onChange={e => set({ question_text: e.target.value })} placeholder="e.g. How are you feeling right now?" />
+        )}
+      </Field>
       {isScale && (
-        <div className="space-y-3 rounded-xl border border-gray-200 p-4">
-          <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Scale</p>
+        <fieldset className="space-y-3 rounded-xl border border-line p-4">
+          <legend className="px-1 text-sm font-medium text-fg">Scale</legend>
           <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Min</label>
-              <input
-                type="number"
-                value={form.min}
-                onChange={e => set({ min: parseInt(e.target.value) || 0 })}
-                className={smallInputCls}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Max</label>
-              <input
-                type="number"
-                value={form.max}
-                onChange={e => set({ max: parseInt(e.target.value) || 1 })}
-                className={smallInputCls}
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">Step</label>
-              <input
-                type="number"
-                value={form.step}
-                min={1}
-                onChange={e => set({ step: parseInt(e.target.value) || 1 })}
-                className={smallInputCls}
-              />
-            </div>
+            <Field label="Lowest">{(id, d) => <NumberInput id={id} describedBy={d} className="w-full" value={form.min} onChange={min => set({ min })} />}</Field>
+            <Field label="Highest">{(id, d) => <NumberInput id={id} describedBy={d} className="w-full" value={form.max} onChange={max => set({ max })} />}</Field>
+            <Field label="Step">{(id, d) => <NumberInput id={id} describedBy={d} className="w-full" min={1} value={form.step} onChange={step => set({ step })} />}</Field>
           </div>
           {form.question_type !== 'number' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Min label <span className="text-gray-400">(optional)</span></label>
-                <input
-                  value={form.label_min}
-                  onChange={e => set({ label_min: e.target.value })}
-                  placeholder="e.g. Not at all"
-                  className={smallInputCls}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Max label <span className="text-gray-400">(optional)</span></label>
-                <input
-                  value={form.label_max}
-                  onChange={e => set({ label_max: e.target.value })}
-                  placeholder="e.g. Extremely"
-                  className={smallInputCls}
-                />
-              </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Label for lowest" hint="Optional">
+                {(id, d) => <Input id={id} aria-describedby={d} value={form.label_min} onChange={e => set({ label_min: e.target.value })} placeholder="e.g. Not at all" />}
+              </Field>
+              <Field label="Label for highest" hint="Optional">
+                {(id, d) => <Input id={id} aria-describedby={d} value={form.label_max} onChange={e => set({ label_max: e.target.value })} placeholder="e.g. Extremely" />}
+              </Field>
             </div>
           )}
-          <ScalePreview
-            min={form.min} max={form.max} step={form.step}
-            labelMin={form.label_min} labelMax={form.label_max}
-          />
-        </div>
+          {errors.scale && <p role="alert" className="text-xs font-medium text-danger">{errors.scale}</p>}
+          <ScalePreview min={form.min} max={form.max} step={form.step} labelMin={form.label_min} labelMax={form.label_max} />
+        </fieldset>
       )}
-
-      {/* Choice options */}
       {isChoice && (
-        <div>
-          <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">
-            Options <span className="font-normal text-gray-400 normal-case">(comma-separated)</span>
-          </label>
-          <input
-            value={form.options}
-            onChange={e => set({ options: e.target.value })}
-            placeholder="Strongly agree, Agree, Neutral, Disagree, Strongly disagree"
-            className={inputCls}
-          />
-          {form.options && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {form.options.split(',').map(o => o.trim()).filter(Boolean).map((o, i) => (
-                <span key={i} className="text-xs bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 rounded-full font-medium">
-                  {o}
-                </span>
-              ))}
+        <Field label="Options" hint="Separate options with commas." error={errors.options}>
+          {(id, d) => (
+            <div>
+              <Input id={id} aria-describedby={d} aria-invalid={errors.options ? true : undefined} value={form.options}
+                onChange={e => set({ options: e.target.value })} placeholder="Very good, Good, Neutral, Bad, Very bad" />
+              {splitOptions(form.options).length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {splitOptions(form.options).map((o, i) => <Badge key={i} tone="blue">{o}</Badge>)}
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </Field>
       )}
-
-      {/* Required toggle */}
-      <label className="flex items-center gap-2.5 cursor-pointer select-none w-fit">
-        <Toggle checked={form.required} onChange={v => set({ required: v })} />
-        <span className="text-sm text-gray-700 font-medium">Required</span>
-      </label>
+      <Toggle size="sm" checked={form.required} onChange={required => set({ required })}
+        label="Answer required" description="Participants cannot submit the survey without answering." />
     </div>
   )
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+function QuestionSummary({ q }: { q: Question }) {
+  const cfg = q.config ?? {}
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="mb-1 flex flex-wrap items-center gap-1.5">
+        <Badge>{questionTypeLabel(q.question_type)}</Badge>
+        {q.required && <Badge tone="amber">Required</Badge>}
+      </div>
+      <p className="break-words text-sm text-fg">{q.question_text}</p>
+      {SCALE_TYPES.includes(q.question_type) && cfg.min !== undefined && cfg.max !== undefined && (
+        <div className="mt-2"><ScalePreview min={cfg.min} max={cfg.max} step={cfg.step || 1} labelMin={cfg.label_min} labelMax={cfg.label_max} /></div>
+      )}
+      {q.options && q.options.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {q.options.map((o, j) => <Badge key={j}>{o}</Badge>)}
+        </div>
+      )}
+    </div>
+  )
+}
 
-export default function ESMPage() {
+// ─── Page ────────────────────────────────────────────────────────────────────
+
+type Counts = Record<string, number | null>
+
+export default function SurveySetupPage() {
   const { id: studyId } = useParams<{ id: string }>()
   const supabase = useMemo(() => createClient(), [])
   const access = useStudyAccess(studyId)
   const canEdit = access.canEdit
+  const { ask, dialog: confirmDialog } = useConfirm()
   const [notice, setNotice] = useState<NoticeState>(null)
-  const { ask, dialog } = useConfirm()
 
-  const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
-  const [questions, setQuestions] = useState<Question[]>([])
-  const [questionCounts, setQuestionCounts] = useState<Record<string, number>>({})
+  const [schedules, setSchedules] = useState<Schedule[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [questionCounts, setQuestionCounts] = useState<Counts>({})
+  const [responseCounts, setResponseCounts] = useState<Counts>({})
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const [showCreateSchedule, setShowCreateSchedule] = useState(false)
-  const [createScheduleForm, setCreateScheduleForm] = useState<ScheduleForm>(BLANK_SCHEDULE_FORM)
-  const [editingSchedule, setEditingSchedule] = useState(false)
-  const [editScheduleForm, setEditScheduleForm] = useState<ScheduleForm>(BLANK_SCHEDULE_FORM)
+  const [questions, setQuestions] = useState<{ scheduleId: string; list: Question[] } | null>(null)
+  const [questionsError, setQuestionsError] = useState<string | null>(null)
 
-  const [showAddQuestion, setShowAddQuestion] = useState(false)
-  const [addQuestionForm, setAddQuestionForm] = useState<QuestionForm>(BLANK_QUESTION_FORM)
-  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null)
-  const [editQuestionForm, setEditQuestionForm] = useState<QuestionForm>(BLANK_QUESTION_FORM)
+  const [scheduleMode, setScheduleMode] = useState<'create' | 'edit' | null>(null)
+  const [scheduleForm, setScheduleForm] = useState<ScheduleForm>(BLANK_SCHEDULE_FORM)
+  const [scheduleShowErrors, setScheduleShowErrors] = useState(false)
+  const [scheduleSaving, setScheduleSaving] = useState(false)
 
-  // ── Data loading ───────────────────────────────────────────────────────────
+  // 'new' while adding, a question id while editing one
+  const [questionEditing, setQuestionEditing] = useState<string | null>(null)
+  const [questionForm, setQuestionForm] = useState<QuestionForm>(BLANK_QUESTION_FORM)
+  const [questionShowErrors, setQuestionShowErrors] = useState(false)
+  const [questionSaving, setQuestionSaving] = useState(false)
+
+  const selected = schedules?.find(s => s.id === selectedId) ?? null
+  const selectedKnown = selected ? scheduleTypeInfo(selected.schedule_type).known : true
+  const questionList = questions && questions.scheduleId === selectedId ? questions.list : null
+
+  // ── Loading ──────────────────────────────────────────────────────────────
 
   const fetchSchedules = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('esm_schedules').select('*').eq('study_id', studyId).order('created_at')
+    const { data, error } = await supabase.from('esm_schedules').select('*').eq('study_id', studyId).order('created_at')
+    if (error) return { error: errorText(error), list: [] as Schedule[], qCounts: {}, rCounts: {} }
     const list = (data || []) as Schedule[]
-    const counts: Record<string, number> = {}
-    await Promise.all(list.map(async s => {
-      const { count } = await supabase
-        .from('esm_questions').select('*', { count: 'exact', head: true }).eq('schedule_id', s.id)
-      counts[s.id] = count || 0
-    }))
-    return { list, counts, error }
+    const ids = list.map(s => s.id)
+    const qCounts: Counts = Object.fromEntries(ids.map(i => [i, 0]))
+    const rCounts: Counts = {}
+    if (ids.length) {
+      // One query for every question count, and the response counts in parallel.
+      const [qRes, ...rRes] = await Promise.all([
+        supabase.from('esm_questions').select('schedule_id').in('schedule_id', ids),
+        ...ids.map(i => supabase.from('data_esm_responses').select('id', { count: 'exact', head: true }).eq('schedule_id', i)),
+      ])
+      if (qRes.error) ids.forEach(i => { qCounts[i] = null })
+      else for (const row of (qRes.data || []) as { schedule_id: string }[]) qCounts[row.schedule_id] = (qCounts[row.schedule_id] ?? 0) + 1
+      ids.forEach((i, n) => { rCounts[i] = rRes[n].error ? null : (rRes[n].count ?? 0) })
+    }
+    return { error: null, list, qCounts, rCounts }
   }, [supabase, studyId])
 
   const applySchedules = useCallback((res: Awaited<ReturnType<typeof fetchSchedules>>) => {
+    setLoadError(res.error)
+    if (res.error) return
     setSchedules(res.list)
-    setQuestionCounts(res.counts)
-    if (res.error) setNotice({ tone: 'error', text: `Could not load schedules: ${errorText(res.error)}` })
-    setSelectedSchedule(current => (current && res.list.find(s => s.id === current.id)) || res.list[0] || null)
+    setQuestionCounts(res.qCounts)
+    setResponseCounts(res.rCounts)
+    setSelectedId(cur => (cur && res.list.some(s => s.id === cur)) ? cur : res.list[0]?.id ?? null)
   }, [])
-
-  async function loadSchedules() {
-    applySchedules(await fetchSchedules())
-  }
-
-  async function loadQuestions(scheduleId: string) {
-    const { data, error } = await supabase
-      .from('esm_questions').select('*').eq('schedule_id', scheduleId).order('question_order')
-    if (error) setNotice({ tone: 'error', text: `Could not load questions: ${errorText(error)}` })
-    setQuestions((data || []) as Question[])
-  }
-
-  // Changing the selected schedule also closes any open editors.
-  function selectSchedule(next: Schedule | null) {
-    setSelectedSchedule(next)
-    setEditingSchedule(false)
-    setShowAddQuestion(false)
-    setEditingQuestionId(null)
-  }
 
   useEffect(() => {
     let cancelled = false
@@ -706,574 +298,374 @@ export default function ESMPage() {
     return () => { cancelled = true }
   }, [fetchSchedules, applySchedules])
 
-  const selectedId = selectedSchedule?.id
+  const fetchQuestions = useCallback(async (scheduleId: string) => {
+    const { data, error } = await supabase.from('esm_questions').select('*').eq('schedule_id', scheduleId).order('question_order')
+    return { scheduleId, list: (data || []) as Question[], error: error ? errorText(error) : null }
+  }, [supabase])
+
+  const applyQuestions = useCallback((res: Awaited<ReturnType<typeof fetchQuestions>>) => {
+    setQuestionsError(res.error)
+    setQuestions({ scheduleId: res.scheduleId, list: res.list })
+    if (!res.error) setQuestionCounts(c => ({ ...c, [res.scheduleId]: res.list.length }))
+  }, [])
+
   useEffect(() => {
     if (!selectedId) return
     let cancelled = false
-    supabase.from('esm_questions').select('*').eq('schedule_id', selectedId).order('question_order')
-      .then(({ data }) => { if (!cancelled) setQuestions((data || []) as Question[]) })
+    fetchQuestions(selectedId).then(res => { if (!cancelled) applyQuestions(res) })
     return () => { cancelled = true }
-  }, [supabase, selectedId])
+  }, [selectedId, fetchQuestions, applyQuestions])
 
-  /** Shows an error banner for a failed write; RLS-blocked updates return 0 rows. */
-  function failed(error: { message: string } | null, rows: unknown[] | null | undefined, what: string): boolean {
-    if (!error && rows && rows.length > 0) return false
-    setNotice({ tone: 'error', text: `Could not ${what}: ${error ? errorText(error) : 'you do not have permission to edit this study.'}` })
-    return true
-  }
+  // ── Unsaved changes ──────────────────────────────────────────────────────
 
-  // ── Schedule actions ───────────────────────────────────────────────────────
+  const editingQuestion = questionEditing && questionEditing !== 'new' ? questionList?.find(q => q.id === questionEditing) : null
+  const scheduleDirty = scheduleMode === 'create'
+    ? JSON.stringify(scheduleForm) !== JSON.stringify(BLANK_SCHEDULE_FORM)
+    : scheduleMode === 'edit' && !!selected && JSON.stringify(scheduleForm) !== JSON.stringify(scheduleToForm(selected))
+  const questionDirty = questionEditing === 'new'
+    ? JSON.stringify(questionForm) !== JSON.stringify(BLANK_QUESTION_FORM)
+    : !!editingQuestion && JSON.stringify(questionForm) !== JSON.stringify(questionToForm(editingQuestion))
+  const dirty = scheduleDirty || questionDirty
+  const { dialog: guardDialog } = useUnsavedChangesGuard(dirty)
 
-  async function createSchedule(e: React.FormEvent) {
-    e.preventDefault()
-    const { data, error } = await supabase.from('esm_schedules')
-      .insert({ study_id: studyId, ...buildSchedulePayload(createScheduleForm) })
-      .select()
-    if (failed(error, data, 'create the schedule')) return
-    setShowCreateSchedule(false)
-    setCreateScheduleForm(BLANK_SCHEDULE_FORM)
-    await loadSchedules()
-    if (data?.[0]) selectSchedule(data[0] as Schedule)
-  }
-
-  async function saveScheduleEdit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!selectedSchedule) return
-    const payload = buildSchedulePayload(editScheduleForm)
-    const { data, error } = await supabase.from('esm_schedules').update(payload).eq('id', selectedSchedule.id).select('id')
-    if (failed(error, data, 'save the schedule')) return
-    const updated = { ...selectedSchedule, ...payload } as Schedule
-    setSchedules(prev => prev.map(s => s.id === updated.id ? updated : s))
-    setSelectedSchedule(updated)
-    setEditingSchedule(false)
-    setNotice({ tone: 'success', text: 'Schedule saved.' })
-  }
-
-  async function toggleSchedule(s: Schedule) {
-    const { data, error } = await supabase.from('esm_schedules').update({ enabled: !s.enabled }).eq('id', s.id).select('id')
-    if (failed(error, data, s.enabled ? 'pause the schedule' : 'enable the schedule')) return
-    const updated = { ...s, enabled: !s.enabled }
-    setSchedules(prev => prev.map(x => x.id === s.id ? updated : x))
-    if (selectedSchedule?.id === s.id) setSelectedSchedule(updated)
-  }
-
-  function deleteSchedule(id: string) {
-    const name = schedules.find(s => s.id === id)?.name
+  /** Runs `action` now, or after the researcher agrees to drop unsaved changes. */
+  function whenClean(action: () => void) {
+    if (!dirty) { action(); return }
     ask({
-      title: `Delete ${name ? `“${name}”` : 'this schedule'}?`,
+      title: 'Discard unsaved changes?',
+      body: <p>The form you have open has changes that are not saved.</p>,
+      confirmLabel: 'Discard changes',
       tone: 'danger',
-      confirmLabel: 'Delete schedule',
-      body: <p>This deletes the schedule and all its questions. Responses already collected are kept.</p>,
-      run: async () => { await removeSchedule(id) },
+      run: async () => { action() },
     })
   }
 
-  async function removeSchedule(id: string) {
-    const { data: removed, error } = await supabase.from('esm_schedules').delete().eq('id', id).select('id')
-    if (failed(error, removed, 'delete the schedule')) return
-    const res = await fetchSchedules()
-    setSchedules(res.list)
-    setQuestionCounts(res.counts)
-    const next = res.list[0] ?? null
-    selectSchedule(next)
-    if (!next) setQuestions([])
+  function closeForms() {
+    setScheduleMode(null)
+    setScheduleShowErrors(false)
+    setQuestionEditing(null)
+    setQuestionShowErrors(false)
   }
 
-  // ── Question actions ───────────────────────────────────────────────────────
+  function selectSchedule(id: string) {
+    if (id === selectedId) return
+    whenClean(() => { closeForms(); setSelectedId(id) })
+  }
 
-  async function addQuestion(e: React.FormEvent) {
+  /** Shows an error for a failed write; RLS-blocked writes return no rows. */
+  function failed(error: { message: string } | null, rows: unknown[] | null | undefined, what: string): string | null {
+    if (!error && rows && rows.length > 0) return null
+    return `Could not ${what}: ${error ? errorText(error) : 'you do not have permission to edit this study.'}`
+  }
+
+  // ── Schedules ────────────────────────────────────────────────────────────
+
+  function openCreateSchedule() {
+    whenClean(() => { closeForms(); setScheduleForm(BLANK_SCHEDULE_FORM); setScheduleMode('create') })
+  }
+
+  function openEditSchedule() {
+    if (!selected) return
+    whenClean(() => { closeForms(); setScheduleForm(scheduleToForm(selected)); setScheduleMode('edit') })
+  }
+
+  async function submitSchedule(e: React.FormEvent) {
     e.preventDefault()
-    if (!selectedSchedule) return
-    const nextOrder = questions.length > 0
-      ? Math.max(...questions.map(q => q.question_order)) + 1
-      : 0
-    const { data, error } = await supabase.from('esm_questions').insert({
-      schedule_id: selectedSchedule.id,
-      ...buildQuestionPayload(addQuestionForm, nextOrder),
-    }).select('id')
-    if (failed(error, data, 'add the question')) return
-    setShowAddQuestion(false)
-    setAddQuestionForm(BLANK_QUESTION_FORM)
-    loadQuestions(selectedSchedule.id)
-    setQuestionCounts(c => ({ ...c, [selectedSchedule.id]: (c[selectedSchedule.id] || 0) + 1 }))
+    if (Object.keys(validateSchedule(scheduleForm)).length) { setScheduleShowErrors(true); return }
+    setScheduleSaving(true)
+    setNotice(null)
+    const payload = buildSchedulePayload(scheduleForm)
+    if (scheduleMode === 'create') {
+      // New schedules start switched off: they have no questions yet.
+      const { data, error } = await supabase.from('esm_schedules').insert({ study_id: studyId, ...payload, enabled: false }).select()
+      setScheduleSaving(false)
+      const problem = failed(error, data, 'create the schedule')
+      if (problem) { setNotice({ tone: 'error', text: problem }); return }
+      const createdSchedule = data![0] as Schedule
+      setSchedules(list => [...(list ?? []), createdSchedule])
+      setQuestionCounts(c => ({ ...c, [createdSchedule.id]: 0 }))
+      setResponseCounts(c => ({ ...c, [createdSchedule.id]: 0 }))
+      closeForms()
+      setSelectedId(createdSchedule.id)
+      setNotice({ tone: 'success', text: 'Schedule created. Add its questions, then switch it on.' })
+    } else if (selected) {
+      const { data, error } = await supabase.from('esm_schedules').update(payload).eq('id', selected.id).select('id')
+      setScheduleSaving(false)
+      const problem = failed(error, data, 'save the schedule')
+      if (problem) { setNotice({ tone: 'error', text: problem }); return }
+      setSchedules(list => (list ?? []).map(s => s.id === selected.id ? { ...s, ...payload } : s))
+      closeForms()
+      setNotice({ tone: 'success', text: 'Schedule saved. Phones pick it up at their next sync.' })
+    }
   }
 
-  async function saveQuestionEdit(e: React.FormEvent, q: Question) {
+  async function toggleSchedule(s: Schedule, enabled: boolean) {
+    setNotice(null)
+    if (enabled && (questionCounts[s.id] ?? 0) === 0) {
+      setNotice({ tone: 'error', text: 'Add at least one question before switching this schedule on.' })
+      return
+    }
+    const { data, error } = await supabase.from('esm_schedules').update({ enabled }).eq('id', s.id).select('id')
+    const problem = failed(error, data, enabled ? 'switch the schedule on' : 'switch the schedule off')
+    if (problem) { setNotice({ tone: 'error', text: problem }); return }
+    setSchedules(list => (list ?? []).map(x => x.id === s.id ? { ...x, enabled } : x))
+  }
+
+  function deleteSchedule(s: Schedule) {
+    const responses = responseCounts[s.id]
+    ask({
+      title: `Delete “${s.name}”?`,
+      tone: 'danger',
+      confirmLabel: 'Delete schedule',
+      body: <>
+        <p>This deletes the schedule and its {questionCounts[s.id] ?? 0} question{questionCounts[s.id] === 1 ? '' : 's'}. Phones stop sending it at their next sync.</p>
+        {!!responses && <p>The {responses.toLocaleString()} response{responses === 1 ? '' : 's'} already collected are kept, but will no longer be linked to a schedule.</p>}
+      </>,
+      run: async () => {
+        const { data, error } = await supabase.from('esm_schedules').delete().eq('id', s.id).select('id')
+        const problem = failed(error, data, 'delete the schedule')
+        if (problem) return problem
+        closeForms()
+        applySchedules(await fetchSchedules())
+        setNotice({ tone: 'success', text: `Deleted “${s.name}”.` })
+      },
+    })
+  }
+
+  // ── Questions ────────────────────────────────────────────────────────────
+
+  function openAddQuestion() {
+    whenClean(() => { closeForms(); setQuestionForm(BLANK_QUESTION_FORM); setQuestionEditing('new') })
+  }
+
+  function openEditQuestion(q: Question) {
+    whenClean(() => { closeForms(); setQuestionForm(questionToForm(q)); setQuestionEditing(q.id) })
+  }
+
+  async function submitQuestion(e: React.FormEvent) {
     e.preventDefault()
-    const scheduleId = selectedSchedule?.id
-    if (!scheduleId) return
-    const { data, error } = await supabase.from('esm_questions')
-      .update(buildQuestionPayload(editQuestionForm, q.question_order))
-      .eq('id', q.id).select('id')
-    if (failed(error, data, 'save the question')) return
-    setEditingQuestionId(null)
-    loadQuestions(scheduleId)
+    if (!selected || !questionEditing) return
+    if (Object.keys(validateQuestion(questionForm)).length) { setQuestionShowErrors(true); return }
+    setQuestionSaving(true)
+    setNotice(null)
+    let problem: string | null
+    if (questionEditing === 'new') {
+      const list = questionList ?? []
+      const order = list.length ? Math.max(...list.map(q => q.question_order)) + 1 : 0
+      const { data, error } = await supabase.from('esm_questions')
+        .insert({ schedule_id: selected.id, ...buildQuestionPayload(questionForm, order) }).select('id')
+      problem = failed(error, data, 'add the question')
+    } else {
+      const order = editingQuestion?.question_order ?? 0
+      const { data, error } = await supabase.from('esm_questions')
+        .update(buildQuestionPayload(questionForm, order)).eq('id', questionEditing).select('id')
+      problem = failed(error, data, 'save the question')
+    }
+    setQuestionSaving(false)
+    if (problem) { setNotice({ tone: 'error', text: problem }); return }
+    closeForms()
+    applyQuestions(await fetchQuestions(selected.id))
   }
 
-  async function deleteQuestion(qId: string) {
-    const scheduleId = selectedSchedule?.id
-    if (!scheduleId) return
-    const { data, error } = await supabase.from('esm_questions').delete().eq('id', qId).select('id')
-    if (failed(error, data, 'delete the question')) return
-    loadQuestions(scheduleId)
-    setQuestionCounts(c => ({
-      ...c,
-      [scheduleId]: Math.max(0, (c[scheduleId] || 1) - 1),
-    }))
+  function deleteQuestion(q: Question, index: number) {
+    if (!selected) return
+    ask({
+      title: `Delete question ${index + 1}?`,
+      tone: 'danger',
+      confirmLabel: 'Delete question',
+      body: <p>“{q.question_text}” is removed from the survey at the phones&apos; next sync. Answers already collected are kept.</p>,
+      run: async () => {
+        const { data, error } = await supabase.from('esm_questions').delete().eq('id', q.id).select('id')
+        const problem = failed(error, data, 'delete the question')
+        if (problem) return problem
+        if (questionEditing === q.id) closeForms()
+        applyQuestions(await fetchQuestions(selected.id))
+      },
+    })
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  const scheduleErrors = scheduleShowErrors ? validateSchedule(scheduleForm) : {}
+  const questionErrors = questionShowErrors ? validateQuestion(questionForm) : {}
+
+  const scheduleFormCard = (
+    <Card>
+      <CardHeader title={scheduleMode === 'create' ? 'New schedule' : 'Edit schedule'}
+        description={scheduleMode === 'create' ? 'It starts switched off. Add questions, then switch it on.' : undefined} />
+      <form onSubmit={submitSchedule} noValidate>
+        <ScheduleFormBody form={scheduleForm} setForm={setScheduleForm} errors={scheduleErrors} />
+        <div className="mt-5 flex flex-wrap gap-2 border-t border-line pt-4">
+          <Button type="submit" loading={scheduleSaving}>{scheduleMode === 'create' ? 'Create schedule' : 'Save schedule'}</Button>
+          <Button variant="secondary" onClick={closeForms} disabled={scheduleSaving}>Cancel</Button>
+        </div>
+      </form>
+    </Card>
+  )
+
+  const questionFormCard = (title: string) => (
+    <form onSubmit={submitQuestion} noValidate className="rounded-xl border border-accent bg-surface p-4 shadow-card">
+      <h4 className="mb-3 text-sm font-semibold text-fg">{title}</h4>
+      <QuestionFormBody form={questionForm} setForm={setQuestionForm} errors={questionErrors} />
+      <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-3">
+        <Button type="submit" loading={questionSaving}>{questionEditing === 'new' ? 'Add question' : 'Save question'}</Button>
+        <Button variant="secondary" onClick={closeForms} disabled={questionSaving}>Cancel</Button>
+      </div>
+    </form>
+  )
 
   return (
-    <div className="space-y-6">
-      {dialog}
+    <div>
+      {guardDialog}
+      {confirmDialog}
+      <SectionHeader title="Survey schedules"
+        description="When participants are asked, and the questions they answer."
+        actions={canEdit && schedules && schedules.length > 0 && scheduleMode !== 'create'
+          ? <Button onClick={openCreateSchedule}><Plus size={15} aria-hidden="true" /> New schedule</Button>
+          : undefined} />
 
-      {/* Header */}
-      <div>
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Survey Setup</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Experience sampling schedules and survey questions</p>
-          </div>
-          {canEdit && !showCreateSchedule && (
-            <button
-              onClick={() => { setShowCreateSchedule(true); setCreateScheduleForm(BLANK_SCHEDULE_FORM) }}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
-            >
-              <Plus size={15} /> New Schedule
-            </button>
-          )}
-        </div>
-      </div>
+      <div className="space-y-4">
+        {!access.loading && !canEdit && <ReadOnlyBanner />}
+        <Notice notice={notice} onClose={() => setNotice(null)} />
 
-      {!access.loading && !canEdit && <ReadOnlyBanner />}
-      <Notice notice={notice} onClose={() => setNotice(null)} />
-
-      {/* Create schedule panel */}
-      {canEdit && showCreateSchedule && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-900">New Schedule</h2>
-            <button
-              onClick={() => setShowCreateSchedule(false)}
-              className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100"
-            >
-              <X size={18} />
-            </button>
-          </div>
-          <form onSubmit={createSchedule} className="px-6 py-5 space-y-5">
-            <ScheduleFormBody form={createScheduleForm} setForm={setCreateScheduleForm} />
-            <div className="flex gap-3 pt-2 border-t border-gray-100">
-              <button
-                type="submit"
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors"
-              >
-                <Plus size={14} /> Create Schedule
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowCreateSchedule(false)}
-                className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
+        {loadError ? (
+          <ErrorState title="Could not load survey schedules" message={loadError}
+            onRetry={async () => { setLoadError(null); applySchedules(await fetchSchedules()) }} />
+        ) : schedules === null ? (
+          <div role="status" aria-label="Loading schedules" className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <SkeletonRows rows={3} className="[&>span]:h-20" />
+            <div className="space-y-3 lg:col-span-2">
+              <Skeleton className="h-40 w-full" />
+              <Skeleton className="h-24 w-full" />
             </div>
-          </form>
-        </div>
-      )}
-
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
-
-        {/* Left: schedule list */}
-        <div className="space-y-2">
-          <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-1 mb-2">
-            Schedules · {schedules.length}
-          </p>
-
-          {schedules.length === 0 ? (
-            <div className="bg-white border border-dashed border-gray-200 rounded-xl py-10 text-center">
-              <ClipboardList size={28} className="mx-auto text-gray-300 mb-2" />
-              <p className="text-gray-400 text-sm font-medium">No schedules yet</p>
-              {canEdit && <button
-                onClick={() => setShowCreateSchedule(true)}
-                className="mt-2 text-blue-600 text-sm font-semibold hover:text-blue-700 transition-colors"
-              >
-                + Create one
-              </button>}
-            </div>
-          ) : schedules.map(s => {
-            const typeInfo = SCHEDULE_TYPES.find(t => t.key === s.schedule_type)!
-            const isSelected = selectedSchedule?.id === s.id
-            return (
-              <div
-                key={s.id}
-                onClick={() => { if (selectedSchedule?.id !== s.id) selectSchedule(s) }}
-                className={`group bg-white rounded-xl border cursor-pointer transition-all overflow-hidden ${
-                  isSelected
-                    ? 'border-blue-400 ring-1 ring-blue-100 shadow-sm'
-                    : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
-                }`}
-              >
-                <div className="px-4 py-3.5">
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                        <span className="font-semibold text-sm text-gray-800 truncate">{s.name}</span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md border ${TYPE_BADGE[s.schedule_type]}`}>
-                          {typeInfo.label}
+          </div>
+        ) : schedules.length === 0 && scheduleMode !== 'create' ? (
+          <EmptyState icon={<ClipboardList size={32} aria-hidden="true" />} title="No survey schedules yet"
+            hint="A schedule decides when the phone notifies participants to answer a short survey.">
+            {canEdit && <Button onClick={openCreateSchedule}><Plus size={15} aria-hidden="true" /> Create a schedule</Button>}
+          </EmptyState>
+        ) : (
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+            {/* Schedule list */}
+            <nav aria-label="Schedules" className="min-w-0">
+              <ul className="space-y-2">
+                {schedules.map(s => {
+                  const info = scheduleTypeInfo(s.schedule_type)
+                  const on = s.id === selectedId
+                  const qn = questionCounts[s.id]
+                  const rn = responseCounts[s.id]
+                  return (
+                    <li key={s.id}>
+                      <button type="button" onClick={() => selectSchedule(s.id)} aria-current={on ? 'true' : undefined}
+                        className={`w-full rounded-xl border bg-surface px-4 py-3 text-left shadow-card transition-colors ${on ? 'border-accent ring-1 ring-accent' : 'border-line hover:bg-sunken/60'}`}>
+                        <span className="flex items-start justify-between gap-2">
+                          <span className="min-w-0 break-words text-sm font-semibold text-fg">{s.name}</span>
+                          {s.enabled ? <Badge tone="green">On</Badge> : <Badge>Off</Badge>}
                         </span>
-                        <span className="text-xs text-gray-400 truncate">{timingSummary(s)}</span>
+                        <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                          <Badge tone={info.known ? (s.schedule_type === 'random' ? 'violet' : 'blue') : 'red'}>{info.label}</Badge>
+                          <span className="text-xs text-subtle">{timingSummary(s)}</span>
+                        </span>
+                        <span className="mt-1.5 block text-xs text-subtle">
+                          {qn == null ? '—' : qn} question{qn === 1 ? '' : 's'} · {rn == null ? '—' : rn.toLocaleString()} response{rn === 1 ? '' : 's'}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </nav>
+
+            {/* Detail */}
+            <div className="min-w-0 space-y-4 lg:col-span-2">
+              {scheduleMode === 'create' ? scheduleFormCard : !selected ? (
+                <EmptyState title="Select a schedule" hint="Choose a schedule to see its timing and questions." />
+              ) : scheduleMode === 'edit' ? scheduleFormCard : (
+                <Card>
+                  <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="break-words text-base font-semibold text-fg">{selected.name}</h3>
+                      {selected.description && <p className="mt-0.5 text-sm text-subtle">{selected.description}</p>}
+                    </div>
+                    {canEdit && (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedKnown && (
+                          <Button variant="secondary" size="sm" onClick={openEditSchedule}><Pencil size={13} aria-hidden="true" /> Edit</Button>
+                        )}
+                        <Button variant="danger-ghost" size="sm" onClick={() => deleteSchedule(selected)}><Trash2 size={13} aria-hidden="true" /> Delete</Button>
                       </div>
-                      <p className="text-[11px] text-gray-400 mt-1.5">
-                        {questionCounts[s.id] ?? 0} {(questionCounts[s.id] ?? 0) === 1 ? 'question' : 'questions'}
-                      </p>
-                    </div>
-                    <div className="flex flex-col items-end gap-2 shrink-0 mt-0.5">
-                      <Toggle checked={s.enabled} disabled={!canEdit} onChange={() => toggleSchedule(s)} />
-                      {canEdit && <button
-                        onClick={e => { e.stopPropagation(); deleteSchedule(s.id) }}
-                        className="text-gray-200 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <Trash2 size={13} />
-                      </button>}
-                    </div>
+                    )}
                   </div>
-                </div>
-                {isSelected && <div className="h-0.5 bg-blue-500" />}
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Right: detail + questions */}
-        <div className="lg:col-span-2 space-y-4">
-
-          {!selectedSchedule ? (
-            <div className="bg-white border border-dashed border-gray-200 rounded-xl flex flex-col items-center justify-center py-24 text-center">
-              <ClipboardList size={36} className="text-gray-300 mb-3" />
-              <p className="text-gray-500 font-medium">Select a schedule</p>
-              <p className="text-gray-400 text-sm mt-1">Choose a schedule on the left to manage its questions</p>
-            </div>
-          ) : editingSchedule ? (
-
-            /* Edit schedule */
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50">
-                <div className="flex items-center gap-2">
-                  <Pencil size={14} className="text-gray-500" />
-                  <h2 className="font-semibold text-gray-900 text-sm">Edit Schedule</h2>
-                </div>
-                <button
-                  onClick={() => setEditingSchedule(false)}
-                  className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-lg hover:bg-gray-100"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <form onSubmit={saveScheduleEdit} className="px-6 py-5 space-y-5">
-                <ScheduleFormBody form={editScheduleForm} setForm={setEditScheduleForm} />
-                <div className="flex gap-3 pt-2 border-t border-gray-100">
-                  <button
-                    type="submit"
-                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors"
-                  >
-                    <Save size={14} /> Save Changes
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingSchedule(false)}
-                    className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteSchedule(selectedSchedule.id)}
-                    className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors"
-                  >
-                    <Trash2 size={13} /> Delete Schedule
-                  </button>
-                </div>
-              </form>
-            </div>
-
-          ) : (
-
-            /* Schedule detail card */
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="px-5 py-4 flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2.5 flex-wrap">
-                    <span className="font-bold text-gray-900 text-base">{selectedSchedule.name}</span>
-                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md border ${TYPE_BADGE[selectedSchedule.schedule_type]}`}>
-                      {SCHEDULE_TYPES.find(t => t.key === selectedSchedule.schedule_type)?.label}
-                    </span>
-                    <span className={`text-xs font-medium ${selectedSchedule.enabled ? 'text-emerald-600' : 'text-gray-400'}`}>
-                      {selectedSchedule.enabled ? '● Active' : '○ Paused'}
-                    </span>
-                  </div>
-                  {selectedSchedule.description && (
-                    <p className="text-gray-400 text-xs mt-1">{selectedSchedule.description}</p>
+                  {!selectedKnown && (
+                    <div role="note" className="mb-4 flex items-start gap-2 rounded-xl border border-line bg-warning-soft px-4 py-3 text-sm text-fg">
+                      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+                      <p>This schedule uses a trigger the app no longer runs (“{selected.schedule_type.replace(/_/g, ' ')}”), so phones never send it. It is shown read-only. To keep asking these questions, create a new fixed or random schedule.</p>
+                    </div>
                   )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Toggle
-                    checked={selectedSchedule.enabled}
-                    disabled={!canEdit}
-                    onChange={() => toggleSchedule(selectedSchedule)}
-                  />
-                  {canEdit && <button
-                    onClick={() => {
-                      setEditScheduleForm(scheduleToForm(selectedSchedule))
-                      setEditingSchedule(true)
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-all"
-                  >
-                    <Pencil size={12} /> Edit
-                  </button>}
-                </div>
-              </div>
+                  <Toggle checked={selected.enabled} disabled={!canEdit || !selectedKnown} onChange={v => toggleSchedule(selected, v)}
+                    label="Send this survey"
+                    description={selected.enabled ? 'Phones notify participants on this schedule.' : 'Switched off: phones do not send it.'} />
+                  <DescriptionList className="mt-4 border-t border-line pt-4" items={[
+                    { label: 'When', value: <><Badge tone={selectedKnown ? 'blue' : 'red'} className="mr-1.5">{scheduleTypeInfo(selected.schedule_type).label}</Badge>{timingSummary(selected)}</> },
+                    { label: 'Expires after', value: `${selected.expiry_minutes} min` },
+                    { label: 'Questions', value: questionCounts[selected.id] ?? '—' },
+                    { label: 'Responses so far', value: responseCounts[selected.id] == null ? '—' : responseCounts[selected.id]!.toLocaleString() },
+                  ]} />
+                  <NotificationPreview className="mt-4" title={selected.notification_title} body={selected.notification_body} />
+                </Card>
+              )}
 
-              {/* Summary row */}
-              <div className="grid grid-cols-3 gap-0 border-t border-gray-100">
-                <div className="px-5 py-3 border-r border-gray-100">
-                  <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-0.5">Timing</p>
-                  <p className="text-sm text-gray-800 font-medium">{timingSummary(selectedSchedule)}</p>
-                </div>
-                <div className="px-5 py-3 border-r border-gray-100">
-                  <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-0.5">Expiry</p>
-                  <p className="text-sm text-gray-800 font-medium">{selectedSchedule.expiry_minutes} min</p>
-                </div>
-                <div className="px-5 py-3">
-                  <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold mb-0.5">Questions</p>
-                  <p className="text-sm text-gray-800 font-medium">{questions.length}</p>
-                </div>
-              </div>
-
-              {/* Notification preview */}
-              <div className="border-t border-gray-100 px-5 py-3 bg-gray-50 flex items-center gap-3">
-                <div className="w-8 h-8 bg-blue-600 rounded-xl flex items-center justify-center shrink-0">
-                  <Bell size={13} className="text-white" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-800 leading-tight truncate">
-                    {selectedSchedule.notification_title}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5 leading-snug line-clamp-1">
-                    {selectedSchedule.notification_body}
-                  </p>
-                </div>
-                <span className="text-[10px] text-gray-400 shrink-0 font-medium">Notification</span>
-              </div>
-            </div>
-          )}
-
-          {/* Questions section */}
-          {selectedSchedule && !editingSchedule && (
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                  Questions · {questions.length}
-                </p>
-                {canEdit && !showAddQuestion && !editingQuestionId && (
-                  <button
-                    onClick={() => { setShowAddQuestion(true); setAddQuestionForm(BLANK_QUESTION_FORM) }}
-                    className="flex items-center gap-1.5 text-blue-600 hover:text-blue-700 text-sm font-semibold transition-colors"
-                  >
-                    <Plus size={14} /> Add Question
-                  </button>
-                )}
-              </div>
-
-              {questions.length === 0 && !showAddQuestion ? (
-                <div className="bg-white border border-dashed border-gray-200 rounded-xl py-12 text-center">
-                  <ClipboardList size={28} className="mx-auto text-gray-300 mb-2" />
-                  <p className="text-gray-500 text-sm font-medium">No questions yet</p>
-                  <p className="text-gray-400 text-xs mt-1">Add questions participants will answer</p>
-                  {canEdit && <button
-                    onClick={() => setShowAddQuestion(true)}
-                    className="mt-3 text-blue-600 text-sm font-semibold hover:text-blue-700 transition-colors"
-                  >
-                    + Add the first question
-                  </button>}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {questions.map((q, i) => {
-                    const typeInfo = QUESTION_TYPES.find(t => t.key === q.question_type)
-                    const isEditing = editingQuestionId === q.id
-
-                    if (isEditing) {
-                      return (
-                        <div key={q.id} className="bg-white rounded-xl border-2 border-blue-400 shadow-sm overflow-hidden">
-                          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-blue-50">
-                            <div className="flex items-center gap-2">
-                              <div className="w-6 h-6 bg-blue-100 rounded-md flex items-center justify-center">
-                                <span className="text-xs font-bold text-blue-600">Q{i + 1}</span>
+              {selected && scheduleMode === null && (
+                <section aria-labelledby="questions-title">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <h3 id="questions-title" className="text-sm font-semibold text-fg">
+                      Questions{questionList ? ` (${questionList.length})` : ''}
+                    </h3>
+                    {canEdit && questionList && questionList.length > 0 && questionEditing !== 'new' && (
+                      <Button variant="secondary" size="sm" onClick={openAddQuestion}><Plus size={14} aria-hidden="true" /> Add question</Button>
+                    )}
+                  </div>
+                  {questionsError ? (
+                    <ErrorState title="Could not load questions" message={questionsError}
+                      onRetry={async () => applyQuestions(await fetchQuestions(selected.id))} />
+                  ) : !questionList ? (
+                    <SkeletonRows rows={3} />
+                  ) : (
+                    <div className="space-y-2">
+                      {questionList.length === 0 && questionEditing !== 'new' && (
+                        <EmptyState title="No questions yet" hint="Add the questions participants answer when this survey arrives.">
+                          {canEdit && <Button onClick={openAddQuestion}><Plus size={15} aria-hidden="true" /> Add the first question</Button>}
+                        </EmptyState>
+                      )}
+                      <ol className="space-y-2">
+                        {questionList.map((q, i) => questionEditing === q.id ? (
+                          <li key={q.id}>{questionFormCard(`Edit question ${i + 1}`)}</li>
+                        ) : (
+                          <li key={q.id} className="flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-card">
+                            <span aria-hidden="true" className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-md bg-sunken px-1 text-xs font-bold text-muted">{i + 1}</span>
+                            <span className="sr-only">Question {i + 1}:</span>
+                            <QuestionSummary q={q} />
+                            {canEdit && (
+                              <div className="flex shrink-0 gap-1">
+                                <Button variant="ghost" size="sm" iconOnly aria-label={`Edit question ${i + 1}`} onClick={() => openEditQuestion(q)}>
+                                  <Pencil size={14} aria-hidden="true" />
+                                </Button>
+                                <Button variant="danger-ghost" size="sm" iconOnly aria-label={`Delete question ${i + 1}`} onClick={() => deleteQuestion(q, i)}>
+                                  <Trash2 size={14} aria-hidden="true" />
+                                </Button>
                               </div>
-                              <p className="font-semibold text-sm text-blue-900">Edit Question</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setEditingQuestionId(null)}
-                              className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition-colors"
-                            >
-                              <X size={16} />
-                            </button>
-                          </div>
-                          <form onSubmit={e => saveQuestionEdit(e, q)} className="px-4 py-4 space-y-4">
-                            <QuestionFormBody form={editQuestionForm} setForm={setEditQuestionForm} />
-                            <div className="flex gap-2 pt-1 border-t border-gray-100">
-                              <button
-                                type="submit"
-                                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-                              >
-                                <Save size={13} /> Save
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingQuestionId(null)}
-                                className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { deleteQuestion(q.id); setEditingQuestionId(null) }}
-                                className="ml-auto flex items-center gap-1.5 px-3 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors"
-                              >
-                                <Trash2 size={13} /> Delete
-                              </button>
-                            </div>
-                          </form>
-                        </div>
-                      )
-                    }
-
-                    return (
-                      <div
-                        key={q.id}
-                        className="bg-white rounded-xl border border-gray-200 px-4 py-3.5 flex items-start gap-3 group hover:border-gray-300 hover:shadow-sm transition-all"
-                      >
-                        <div className="w-6 h-6 bg-gray-100 rounded-md flex items-center justify-center shrink-0 mt-0.5">
-                          <span className="text-xs font-bold text-gray-500">Q{i + 1}</span>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap mb-1.5">
-                            <span className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-medium">
-                              {typeInfo && <typeInfo.icon size={10} />}
-                              {typeInfo?.label || q.question_type}
-                            </span>
-                            {q.required && (
-                              <span className="text-[11px] text-red-500 font-semibold">Required</span>
                             )}
-                          </div>
-                          <p className="text-sm text-gray-800 leading-snug">{q.question_text}</p>
-
-                          {/* Scale summary */}
-                          {q.config?.min !== undefined && (
-                            <div className="mt-2">
-                              <div className="flex items-center gap-1 flex-wrap">
-                                {Array.from(
-                                  { length: Math.min(Math.ceil(((q.config.max ?? 0) - (q.config.min ?? 0)) / (q.config.step || 1)) + 1, 10) },
-                                  (_, idx) => (q.config.min ?? 0) + idx * (q.config.step || 1)
-                                ).map(v => (
-                                  <span key={v} className="w-6 h-6 rounded border border-gray-200 bg-gray-50 flex items-center justify-center text-[10px] font-semibold text-gray-500">
-                                    {v}
-                                  </span>
-                                ))}
-                                {Math.ceil(((q.config.max ?? 0) - (q.config.min ?? 0)) / (q.config.step || 1)) >= 10 && (
-                                  <span className="text-[10px] text-gray-400">…{(q.config.max ?? 0)}</span>
-                                )}
-                              </div>
-                              {(q.config.label_min || q.config.label_max) && (
-                                <div className="flex gap-4 mt-0.5">
-                                  {q.config.label_min && (
-                                    <span className="text-[11px] text-gray-400">{q.config.label_min}</span>
-                                  )}
-                                  {q.config.label_max && (
-                                    <span className="text-[11px] text-gray-400 ml-auto">{q.config.label_max}</span>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Choice options */}
-                          {q.options && (q.options as string[]).length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {(q.options as string[]).map((o, j) => (
-                                <span key={j} className="text-xs bg-gray-100 text-gray-600 px-2.5 py-0.5 rounded-full font-medium">
-                                  {o}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        {canEdit && <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5">
-                          <button
-                            onClick={() => {
-                              setEditingQuestionId(q.id)
-                              setEditQuestionForm(questionToForm(q))
-                              setShowAddQuestion(false)
-                            }}
-                            className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
-                          >
-                            <Pencil size={13} />
-                          </button>
-                          <button
-                            onClick={() => deleteQuestion(q.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>}
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* Add question form */}
-              {showAddQuestion && (
-                <form onSubmit={addQuestion} className="mt-2 bg-white rounded-xl border-2 border-blue-300 shadow-sm overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-blue-50">
-                    <p className="font-semibold text-sm text-blue-900">New Question</p>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddQuestion(false)}
-                      className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100 transition-colors"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                  <div className="px-4 py-4">
-                    <QuestionFormBody form={addQuestionForm} setForm={setAddQuestionForm} />
-                  </div>
-                  <div className="flex gap-2 px-4 pb-4">
-                    <button
-                      type="submit"
-                      className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors"
-                    >
-                      <Plus size={13} /> Add Question
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowAddQuestion(false)}
-                      className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
+                          </li>
+                        ))}
+                      </ol>
+                      {questionEditing === 'new' && questionFormCard('New question')}
+                    </div>
+                  )}
+                </section>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )

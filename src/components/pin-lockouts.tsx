@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { KeyRound, Unlock } from 'lucide-react'
+import { Badge, Button, errorText } from '@/components/ui'
 
 type Attempt = {
   study_id: string
@@ -12,6 +13,10 @@ type Attempt = {
   locked_until: string | null
 }
 
+/**
+ * Phones that typed a wrong study PIN, with a way to clear their attempts.
+ * Renders nothing while there are none.
+ */
 export function PinLockouts({ studyId, canEdit = true }: { studyId: string; canEdit?: boolean }) {
   const supabase = useMemo(() => createClient(), [])
   const [attempts, setAttempts] = useState<Attempt[]>([])
@@ -19,14 +24,14 @@ export function PinLockouts({ studyId, canEdit = true }: { studyId: string; canE
   const [error, setError] = useState<string | null>(null)
 
   const fetchAttempts = useCallback(async () => {
-    const { data } = await supabase.from('pin_attempts').select('*')
+    const { data, error } = await supabase.from('pin_attempts').select('*')
       .eq('study_id', studyId).order('last_fail_at', { ascending: false })
-    return (data || []) as Attempt[]
+    return { rows: (data || []) as Attempt[], error: error ? `Could not load PIN attempts: ${errorText(error)}` : null }
   }, [supabase, studyId])
 
   useEffect(() => {
     let cancelled = false
-    fetchAttempts().then(rows => { if (!cancelled) setAttempts(rows) })
+    fetchAttempts().then(res => { if (!cancelled) { setAttempts(res.rows); setError(res.error) } })
     return () => { cancelled = true }
   }, [fetchAttempts])
 
@@ -35,37 +40,47 @@ export function PinLockouts({ studyId, canEdit = true }: { studyId: string; canE
     setError(null)
     const { data, error } = await supabase.from('pin_attempts').delete()
       .eq('study_id', studyId).eq('device_id', deviceId).select('device_id')
-    if (error || !data?.length) setError(error ? error.message : 'You do not have permission to clear PIN attempts.')
-    setAttempts(await fetchAttempts())
+    const problem = error ? errorText(error) : !data?.length ? 'You do not have permission to clear PIN attempts.' : null
+    const res = await fetchAttempts()
+    setAttempts(res.rows)
+    setError(problem ?? res.error)
     setBusy(null)
   }
 
-  if (!attempts.length) return null
+  if (!attempts.length && !error) return null
   return (
-    <section className="rounded-xl border border-amber-200 bg-amber-50 overflow-hidden">
-      <div className="px-4 py-3 border-b border-amber-200 flex items-center gap-2 text-sm font-semibold text-amber-900">
-        <KeyRound size={15} /> PIN attempts and lockouts
+    <section aria-labelledby="pin-lockouts-title" className="overflow-hidden rounded-xl border border-line bg-surface">
+      <div className="flex items-center gap-2 border-b border-line bg-warning-soft px-4 py-2.5">
+        <KeyRound size={15} className="text-warning" aria-hidden="true" />
+        <h3 id="pin-lockouts-title" className="text-sm font-semibold text-fg">Wrong PIN attempts</h3>
       </div>
-      {error && <p role="alert" className="border-b border-amber-200 bg-red-50 px-4 py-2 text-xs text-red-700">{error}</p>}
-      <div className="divide-y divide-amber-100">
+      {error && <p role="alert" className="border-b border-line bg-danger-soft px-4 py-2 text-xs text-danger">{error}</p>}
+      <ul className="divide-y divide-line">
         {attempts.map(a => {
           const locked = !!a.locked_until && new Date(a.locked_until) > new Date()
-          return <div key={a.device_id} className="px-4 py-3 flex items-center justify-between gap-4 text-sm">
-            <div>
-              <p className="font-medium text-gray-800">{a.device_id}</p>
-              <p className="text-xs text-gray-500">
-                {a.fails} failed attempt{a.fails === 1 ? '' : 's'} · {locked
-                  ? `locked until ${new Date(a.locked_until!).toLocaleString()}`
-                  : `last attempt ${new Date(a.last_fail_at).toLocaleString()}`}
-              </p>
-            </div>
-            {canEdit && <button onClick={() => unlock(a.device_id)} disabled={busy === a.device_id}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-white border border-amber-300 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50">
-              <Unlock size={12} /> {busy === a.device_id ? 'Unlocking…' : 'Clear attempts'}
-            </button>}
-          </div>
+          return (
+            <li key={a.device_id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm">
+              <div className="min-w-0">
+                <p className="flex flex-wrap items-center gap-2 font-medium text-fg">
+                  <span className="break-all font-mono text-xs">{a.device_id}</span>
+                  {locked && <Badge tone="red">Locked</Badge>}
+                </p>
+                <p className="mt-0.5 text-xs text-subtle">
+                  {a.fails} failed attempt{a.fails === 1 ? '' : 's'} · {locked
+                    ? `locked until ${new Date(a.locked_until!).toLocaleString()}`
+                    : `last attempt ${new Date(a.last_fail_at).toLocaleString()}`}
+                </p>
+              </div>
+              {canEdit && (
+                <Button variant="secondary" size="sm" loading={busy === a.device_id} onClick={() => unlock(a.device_id)}
+                  aria-label={`Clear PIN attempts for ${a.device_id}`}>
+                  {busy !== a.device_id && <Unlock size={12} aria-hidden="true" />} Clear attempts
+                </Button>
+              )}
+            </li>
+          )
         })}
-      </div>
+      </ul>
     </section>
   )
 }
