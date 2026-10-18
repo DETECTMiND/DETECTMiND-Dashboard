@@ -407,11 +407,17 @@ function SensorDataInner() {
       const from = page * pageSize
       const to = from + pageSize - 1
 
+      // Check if sorting by a datetime column (ends with _at or _time)
+      const isDatetimeCol = effectiveSortCol.endsWith('_at') || effectiveSortCol.endsWith('_time')
+
       const [rowsRes, countRes] = await Promise.all([
         supabase
           .from(selectedTable.key)
           .select('*')
           .in('participant_id', pIds)
+          // Order on the server in the requested direction so pagination pages
+          // through the right rows (page 1 of a descending sort = newest rows).
+          // The rows are re-sorted on the client below for exact temporal order.
           .order(effectiveSortCol, { ascending: sortDir === 'asc', nullsFirst: false })
           .range(from, to),
         supabase
@@ -419,7 +425,36 @@ function SensorDataInner() {
           .select('*', { count: 'exact', head: true })
           .in('participant_id', pIds),
       ])
-      setData(rowsRes.data || [])
+
+      let rows = rowsRes.data || []
+
+      // Client-side sort for datetime columns (ensures correct temporal ordering)
+      if (isDatetimeCol && rows.length > 0) {
+        rows = [...rows].sort((a, b) => {
+          const aVal = a[effectiveSortCol]
+          const bVal = b[effectiveSortCol]
+          if (aVal == null && bVal == null) return 0
+          if (aVal === null || aVal === undefined) return 1  // nulls last (matches the server)
+          if (bVal === null || bVal === undefined) return -1
+          const aTime = new Date(aVal).getTime()
+          const bTime = new Date(bVal).getTime()
+          return sortDir === 'asc' ? aTime - bTime : bTime - aTime
+        })
+      } else if (!isDatetimeCol && rows.length > 0) {
+        // Client-side sort for non-datetime columns too (to respect sortDir)
+        rows = [...rows].sort((a, b) => {
+          const aVal = a[effectiveSortCol]
+          const bVal = b[effectiveSortCol]
+          if (aVal == null && bVal == null) return 0
+          if (aVal === null || aVal === undefined) return 1  // nulls last (matches the server)
+          if (bVal === null || bVal === undefined) return -1
+          if (aVal < bVal) return sortDir === 'asc' ? -1 : 1
+          if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
+          return 0
+        })
+      }
+
+      setData(rows)
       setTotalCount(countRes.count ?? 0)
       setLoading(false)
     }

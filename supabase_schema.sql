@@ -621,9 +621,24 @@ END $$;
 -- ============================================================
 -- Computed live from the raw event streams the app uploads.
 -- security_invoker = true keeps the underlying tables' RLS in force, so only
--- researchers see rows. A screen-on "session" runs from an on/unlocked event
--- to the next off/locked event. Timestamps bucket in the database timezone
--- (Europe/London).
+-- researchers see rows (anon has no privileges on any view).
+--
+-- A screen-on "session" runs from a cleaned 'on' transition to the next 'off'.
+-- The app logs a wake as two events ('on' then 'unlocked') and a sleep as two
+-- ('off' then 'locked'), and often drops the closing event entirely when the OS
+-- kills it. We collapse the raw stream to clean ALTERNATING on/off transitions,
+-- then pair each 'on' with the next transition -- so sessions can never overlap
+-- and no hour can exceed 60 minutes. A missing or implausibly long close is
+-- capped at 3 hours (long enough not to truncate a normal session, short enough
+-- that a dropped close cannot invent a day of usage). daily_usage is rolled up
+-- from hourly_usage, so the daily total always equals the sum of that day's
+-- hourly cells. All timestamps are bucketed in the single fixed zone returned by
+-- app_tz() (formerly migration_2026_10_usage_views_fix.sql, now folded in).
+
+-- One place to set the bucketing timezone for every summary view. Views call
+-- it as the researcher, so authenticated is granted EXECUTE (see PRIVILEGES).
+CREATE OR REPLACE FUNCTION app_tz() RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$ SELECT 'Europe/London' $$;
 
 CREATE OR REPLACE VIEW screen_sessions
 WITH (security_invoker = true) AS
@@ -631,88 +646,58 @@ WITH normalized AS (
     SELECT
         participant_id,
         recorded_at::timestamptz AS ts,
+        id,
         CASE WHEN state IN ('on', 'unlocked') THEN 'on' ELSE 'off' END AS dir
     FROM data_screen_state
     WHERE state IN ('on', 'off', 'locked', 'unlocked')
 ),
-with_next AS (
+-- Keep only direction CHANGES, so the stream strictly alternates on,off,on,off.
+-- (id breaks ties when two events share a timestamp, keeping the order stable.)
+deduped AS (
+    SELECT participant_id, ts, dir
+    FROM (
+        SELECT
+            participant_id, ts, dir,
+            LAG(dir) OVER (PARTITION BY participant_id ORDER BY ts, id) AS prev_dir
+        FROM normalized
+    ) t
+    WHERE prev_dir IS DISTINCT FROM dir
+),
+paired AS (
     SELECT
         participant_id,
         ts AS start_ts,
         dir,
         LEAD(ts)  OVER (PARTITION BY participant_id ORDER BY ts) AS next_ts,
         LEAD(dir) OVER (PARTITION BY participant_id ORDER BY ts) AS next_dir
-    FROM normalized
+    FROM deduped
 )
 SELECT
     participant_id,
     start_ts,
-    next_ts AS end_ts,
-    COALESCE(EXTRACT(EPOCH FROM (next_ts - start_ts)), 0)::bigint AS session_seconds,
-    (next_dir IS DISTINCT FROM 'off' OR next_ts IS NULL) AS was_capped
-FROM with_next
+    LEAST(COALESCE(next_ts, start_ts + interval '3 hours'),
+          start_ts + interval '3 hours') AS end_ts,
+    (next_ts IS NULL
+     OR next_ts - start_ts > interval '3 hours') AS was_capped
+FROM paired
 WHERE dir = 'on';
 
-CREATE OR REPLACE VIEW daily_usage
-WITH (security_invoker = true) AS
-WITH sessions AS (
-    SELECT
-        participant_id,
-        start_ts::date AS usage_date,
-        -- Cap session_seconds to only count time up to now() for today
-        CASE
-            WHEN start_ts::date = now()::date
-            THEN LEAST(session_seconds, EXTRACT(EPOCH FROM (now() - start_ts))::int)
-            ELSE session_seconds
-        END AS session_seconds,
-        was_capped
-    FROM screen_sessions
-),
-unlocks AS (
-    SELECT
-        participant_id,
-        recorded_at::date AS usage_date,
-        COUNT(*) AS unlock_count
-    FROM data_screen_state
-    WHERE state = 'unlocked'
-    GROUP BY 1, 2
-)
-SELECT
-    s.participant_id,
-    s.usage_date,
-    SUM(s.session_seconds)                        AS screen_on_seconds,
-    ROUND(SUM(s.session_seconds) / 60.0, 1)       AS screen_on_minutes,
-    ROUND(SUM(s.session_seconds) / 3600.0, 2)     AS screen_on_hours,
-    COUNT(*)                                      AS session_count,
-    ROUND(AVG(s.session_seconds) / 60.0, 1)       AS avg_session_minutes,
-    COALESCE(MAX(u.unlock_count), 0)              AS unlock_count,
-    SUM(CASE WHEN s.was_capped THEN 1 ELSE 0 END) AS capped_sessions
-FROM sessions s
-LEFT JOIN unlocks u
-    ON u.participant_id = s.participant_id
-   AND u.usage_date    = s.usage_date
-GROUP BY s.participant_id, s.usage_date;
-
+-- Single source of truth for screen-on time; daily_usage rolls up from it.
 CREATE OR REPLACE VIEW hourly_usage
 WITH (security_invoker = true) AS
 WITH bounded AS (
-    SELECT
-        participant_id,
-        start_ts,
-        start_ts + make_interval(secs => session_seconds) AS end_ts
+    SELECT participant_id, start_ts, end_ts
     FROM screen_sessions
-    WHERE session_seconds > 0
+    WHERE end_ts > start_ts
 ),
 hour_buckets AS (
     SELECT
         participant_id,
         start_ts,
         end_ts,
-        -- Generate hour boundaries in database's local time (Europe/London)
-        -- Include current hour but cap end_ts to now() to show partial hour data
         generate_series(
-            date_trunc('hour', start_ts),
-            LEAST(date_trunc('hour', end_ts), date_trunc('hour', now())),
+            date_trunc('hour', start_ts AT TIME ZONE app_tz()) AT TIME ZONE app_tz(),
+            date_trunc('hour', end_ts   AT TIME ZONE app_tz()) AT TIME ZONE app_tz(),
             interval '1 hour'
         ) AS hour_start
     FROM bounded
@@ -720,28 +705,66 @@ hour_buckets AS (
 SELECT
     participant_id,
     hour_start AS usage_hour,
-    hour_start::date AS usage_date,
-    EXTRACT(HOUR FROM hour_start)::int AS hour_of_day,
-    SUM(
-        EXTRACT(EPOCH FROM (
-            LEAST(end_ts, hour_start + interval '1 hour', now())
-            - GREATEST(start_ts, hour_start)
-        ))
-    )::bigint AS screen_on_seconds
+    (hour_start AT TIME ZONE app_tz())::date       AS usage_date,
+    EXTRACT(HOUR FROM hour_start AT TIME ZONE app_tz())::int AS hour_of_day,
+    SUM(EXTRACT(EPOCH FROM (
+        LEAST(end_ts, hour_start + interval '1 hour')
+        - GREATEST(start_ts, hour_start)
+    )))::bigint AS screen_on_seconds
 FROM hour_buckets
 GROUP BY participant_id, hour_start
-HAVING SUM(
-    EXTRACT(EPOCH FROM (
-        LEAST(end_ts, hour_start + interval '1 hour', now())
-        - GREATEST(start_ts, hour_start)
-    ))
-) > 0;
+HAVING SUM(EXTRACT(EPOCH FROM (
+    LEAST(end_ts, hour_start + interval '1 hour')
+    - GREATEST(start_ts, hour_start)
+))) > 0;
+
+CREATE OR REPLACE VIEW daily_usage
+WITH (security_invoker = true) AS
+WITH hourly AS (
+    SELECT participant_id, usage_date, SUM(screen_on_seconds) AS screen_on_seconds
+    FROM hourly_usage
+    GROUP BY participant_id, usage_date
+),
+sessions AS (
+    SELECT
+        participant_id,
+        (start_ts AT TIME ZONE app_tz())::date AS usage_date,
+        COUNT(*)                                        AS session_count,
+        AVG(EXTRACT(EPOCH FROM (end_ts - start_ts)))    AS avg_session_seconds,
+        SUM(CASE WHEN was_capped THEN 1 ELSE 0 END)     AS capped_sessions
+    FROM screen_sessions
+    GROUP BY 1, 2
+),
+unlocks AS (
+    SELECT
+        participant_id,
+        (recorded_at::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
+        COUNT(*) AS unlock_count
+    FROM data_screen_state
+    WHERE state = 'unlocked'
+    GROUP BY 1, 2
+)
+SELECT
+    h.participant_id,
+    h.usage_date,
+    h.screen_on_seconds                             AS screen_on_seconds,
+    ROUND(h.screen_on_seconds / 60.0, 1)            AS screen_on_minutes,
+    ROUND(h.screen_on_seconds / 3600.0, 2)          AS screen_on_hours,
+    COALESCE(s.session_count, 0)                    AS session_count,
+    ROUND(COALESCE(s.avg_session_seconds, 0) / 60.0, 1) AS avg_session_minutes,
+    COALESCE(u.unlock_count, 0)                     AS unlock_count,
+    COALESCE(s.capped_sessions, 0)                  AS capped_sessions
+FROM hourly h
+LEFT JOIN sessions s
+    ON s.participant_id = h.participant_id AND s.usage_date = h.usage_date
+LEFT JOIN unlocks u
+    ON u.participant_id = h.participant_id AND u.usage_date = h.usage_date;
 
 CREATE OR REPLACE VIEW daily_app_usage
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    start_time::date AS usage_date,
+    (start_time::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
     package_name,
     MAX(app_name)                          AS app_name,
     SUM(duration_seconds)                  AS foreground_seconds,
@@ -754,49 +777,48 @@ CREATE OR REPLACE VIEW hourly_app_usage
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    date_trunc('hour', start_time)::timestamp AS usage_hour,
-    (date_trunc('hour', start_time))::date AS usage_date,
-    EXTRACT(HOUR FROM date_trunc('hour', start_time))::int AS hour_of_day,
+    date_trunc('hour', start_time AT TIME ZONE app_tz()) AT TIME ZONE app_tz() AS usage_hour,
+    (start_time AT TIME ZONE app_tz())::date                        AS usage_date,
+    EXTRACT(HOUR FROM start_time AT TIME ZONE app_tz())::int        AS hour_of_day,
     package_name,
     MAX(app_name)                          AS app_name,
     SUM(duration_seconds)                  AS foreground_seconds,
     ROUND(SUM(duration_seconds) / 60.0, 1) AS foreground_minutes,
     COUNT(*)                               AS open_count
 FROM data_app_usage
-GROUP BY participant_id, date_trunc('hour', start_time), package_name;
+GROUP BY participant_id, 2, 3, 4, package_name;
 
 CREATE OR REPLACE VIEW daily_app_usage_total
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    start_time::date AS usage_date,
-    SUM(duration_seconds)                  AS total_foreground_seconds,
-    ROUND(SUM(duration_seconds) / 60.0, 1) AS total_foreground_minutes,
+    (start_time AT TIME ZONE app_tz())::date AS usage_date,
+    SUM(duration_seconds)                    AS total_foreground_seconds,
+    ROUND(SUM(duration_seconds) / 60.0, 1)   AS total_foreground_minutes,
     ROUND(SUM(duration_seconds) / 3600.0, 2) AS total_foreground_hours,
-    COUNT(DISTINCT package_name)           AS unique_apps,
-    COUNT(*)                               AS total_opens
+    COUNT(DISTINCT package_name)             AS unique_apps,
+    COUNT(*)                                 AS total_opens
 FROM data_app_usage
-GROUP BY participant_id, start_time::date;
+GROUP BY participant_id, 2;
 
 CREATE OR REPLACE VIEW daily_pickups
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    recorded_at::date AS usage_date,
-    EXTRACT(HOUR FROM recorded_at)::int AS hour_of_day,
+    (recorded_at::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
+    EXTRACT(HOUR FROM recorded_at::timestamptz AT TIME ZONE app_tz())::int AS hour_of_day,
     COUNT(*) AS pickups
 FROM data_screen_state
 WHERE state = 'unlocked'
 GROUP BY 1, 2, 3;
 
--- 2. First and last phone use per day (sleep/wake proxy) ----------------------
 CREATE OR REPLACE VIEW daily_first_last_use
 WITH (security_invoker = true) AS
 WITH uses AS (
     SELECT
         participant_id,
-        recorded_at::date AS usage_date,
-        recorded_at AS ts,
+        (recorded_at::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
+        recorded_at::timestamptz AS ts,
         state
     FROM data_screen_state
     WHERE state IN ('on', 'unlocked', 'off', 'locked')
@@ -806,29 +828,27 @@ SELECT
     usage_date,
     MIN(ts) FILTER (WHERE state IN ('on', 'unlocked'))  AS first_use,
     MAX(ts) FILTER (WHERE state IN ('off', 'locked'))   AS last_use,
-    to_char(MIN(ts) FILTER (WHERE state IN ('on', 'unlocked')), 'HH24:MI') AS first_use_local,
-    to_char(MAX(ts) FILTER (WHERE state IN ('off', 'locked')), 'HH24:MI') AS last_use_local
+    to_char(MIN(ts) FILTER (WHERE state IN ('on', 'unlocked')) AT TIME ZONE app_tz(), 'HH24:MI') AS first_use_local,
+    to_char(MAX(ts) FILTER (WHERE state IN ('off', 'locked'))  AT TIME ZONE app_tz(), 'HH24:MI') AS last_use_local
 FROM uses
 GROUP BY participant_id, usage_date;
 
--- 3. Daily notifications received ---------------------------------------------
 CREATE OR REPLACE VIEW daily_notifications
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    posted_at::date AS usage_date,
+    (posted_at::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
     COUNT(*)                                               AS notifications,
     COUNT(DISTINCT package_name)                           AS distinct_apps,
     COUNT(*) FILTER (WHERE removal_reason = 'clicked')     AS opened
 FROM data_notifications
 GROUP BY 1, 2;
 
--- 4. Daily battery summary ----------------------------------------------------
 CREATE OR REPLACE VIEW daily_battery_summary
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    recorded_at::date AS usage_date,
+    (recorded_at::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
     ROUND(AVG(level))::int                                        AS avg_level,
     MIN(level)                                                    AS min_level,
     MAX(level)                                                    AS max_level,
@@ -845,7 +865,7 @@ CREATE OR REPLACE VIEW daily_steps
 WITH (security_invoker = true) AS
 SELECT
     participant_id,
-    recorded_at::date AS usage_date,
+    (recorded_at::timestamptz AT TIME ZONE app_tz())::date AS usage_date,
     SUM(steps)  AS steps,
     COUNT(*)    AS samples
 FROM data_steps
@@ -868,7 +888,7 @@ SELECT
     participant_id,
     ts AS paused_at,
     CASE WHEN next_event = 'resumed' THEN next_ts END AS resumed_at,
-    (ts AT TIME ZONE 'Europe/London')::date AS pause_date,
+    (ts AT TIME ZONE app_tz())::date AS pause_date,
     CASE WHEN next_event = 'resumed'
          THEN ROUND(EXTRACT(EPOCH FROM (next_ts - ts)) / 60.0, 1)
     END AS gap_minutes
@@ -876,8 +896,7 @@ FROM ordered
 WHERE event = 'paused';
 
 -- Pair each 'revoked' with the next 'granted' for the same participant+permission
--- into an outage interval (how long a permission was off). A still-revoked
--- permission has restored_at = null and an open gap.
+-- into an outage interval. A still-revoked permission has restored_at = null.
 CREATE OR REPLACE VIEW permission_outages
 WITH (security_invoker = true) AS
 WITH ordered AS (
@@ -895,7 +914,7 @@ SELECT
     permission,
     ts AS revoked_at,
     CASE WHEN next_action = 'granted' THEN next_ts END AS restored_at,
-    (ts AT TIME ZONE 'Europe/London')::date AS outage_date,
+    (ts AT TIME ZONE app_tz())::date AS outage_date,
     CASE WHEN next_action = 'granted'
          THEN ROUND(EXTRACT(EPOCH FROM (next_ts - ts)) / 60.0, 1)
     END AS outage_minutes
@@ -912,7 +931,7 @@ WITH (security_invoker = true) AS
 WITH g AS (
     SELECT
         participant_id,
-        recorded_at::date AS usage_date,
+        (recorded_at AT TIME ZONE app_tz())::date AS usage_date,
         COALESCE(app_name, interaction_data->>'package_name') AS app_name,
         interaction_type,
         CASE WHEN jsonb_typeof(interaction_data->'dwell_ms')     = 'number' THEN (interaction_data->>'dwell_ms')::numeric     END AS dwell_ms,
@@ -1303,6 +1322,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authentic
 REVOKE INSERT, UPDATE, DELETE ON researchers FROM authenticated;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
 GRANT EXECUTE ON FUNCTION is_researcher() TO authenticated;          -- used by RLS policies
+GRANT EXECUTE ON FUNCTION app_tz() TO authenticated;                 -- used by the processed views (security_invoker)
 GRANT EXECUTE ON FUNCTION merge_participants(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION set_study_pin(UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID, TEXT) TO authenticated;
