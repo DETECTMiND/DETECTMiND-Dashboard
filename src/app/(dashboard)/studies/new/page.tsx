@@ -1,956 +1,372 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { Notice, errorText } from '@/components/feedback'
-import { useState } from 'react'
-import { useMe } from '@/lib/access'
+import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
+import { ArrowLeft, ArrowRight, Check, ClipboardList, Info, MinusCircle } from 'lucide-react'
+import { useMe } from '@/lib/access'
+import { studyPaths } from '@/lib/nav'
+import { DEFAULT_BANKING_APPS, SENSORS } from '@/lib/sensors'
+import { notifyPendingStudiesChanged } from '@/lib/pending-studies'
 import {
-  ArrowLeft, ArrowRight, Check, FlaskConical,
-  Smartphone, Phone, MessageSquare, MapPin, BatteryCharging,
-  Bell, Monitor, Zap, Sun, MousePointerClick, ClipboardList,
-  Clock, ShieldCheck, BadgeCheck, Footprints, Compass, Info,
-} from 'lucide-react'
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface SensorOption {
-  key: string
-  label: string
-  description: string
-  icon: React.ElementType
-  hasInterval: boolean
-  defaultInterval?: number
-  category: 'behavioral' | 'physical' | 'device'
-}
-
-// sensor_configs.config JSON (location: movement_threshold; gestures: interaction settings).
-interface SensorConfigJson {
-  movement_threshold?: number
-  interaction_types?: Record<string, boolean>
-  skip_rules?: Record<string, boolean>
-  [key: string]: unknown
-}
+  Badge, Button, ButtonLink, Card, CardHeader, DescriptionList, Field, Input, Notice, PageHeader, Select, TextField,
+  Textarea, Toggle, errorText, useUnsavedChangesGuard,
+} from '@/components/ui'
+import { ChoiceCards } from '@/components/study/choice-cards'
+import { SensorSettingsEditor, defaultSensorDrafts, rowsFromDrafts, sensorSummary, type SensorDrafts } from '@/components/study/sensor-settings'
+import {
+  BLANK_SCHEDULE_FORM, ScheduleFormBody, buildSchedulePayload, timingSummary, validateSchedule, type ScheduleForm,
+} from '@/components/study/schedule-form'
 
 interface WizardState {
-  // Step 1 – Basic Info
   name: string
   description: string
   appDescription: string
   syncInterval: number
-  guidedPermissions: boolean
+  pin: string
   autoParticipantId: boolean
-  pin: string            // optional 4-digit PIN; empty = no PIN
-
-  // Step 2 – Data to Collect
-  sensors: Record<string, { enabled: boolean; interval_seconds: number | null; config: SensorConfigJson }>
-
-  // Step 3 – ESM/EMA
-  enableEsm: boolean
+  guidedPermissions: boolean
+  sensors: SensorDrafts
+  bankingPause: boolean
+  addSchedule: 'none' | 'add'
+  schedule: ScheduleForm
 }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+const STEPS = ['Basics', 'Sensors', 'Surveys', 'Review'] as const
 
-const SENSOR_OPTIONS: SensorOption[] = [
-  {
-    key: 'app_usage',
-    label: 'App Usage',
-    description: 'Foreground app usage with start/end times per app',
-    icon: Smartphone,
-    hasInterval: false,
-    category: 'behavioral',
-  },
-  {
-    key: 'notifications',
-    label: 'App Notifications',
-    description: 'Notification events per app (posted, opened and dismissed time)',
-    icon: Bell,
-    hasInterval: false,
-    category: 'behavioral',
-  },
-  {
-    key: 'calls',
-    label: 'Phone Calls',
-    description: 'Incoming, outgoing, and missed call logs (contact hashed)',
-    icon: Phone,
-    hasInterval: false,
-    category: 'behavioral',
-  },
-  {
-    key: 'sms',
-    label: 'SMS Messages',
-    description: 'Sent and received SMS logs (contact & body hashed)',
-    icon: MessageSquare,
-    hasInterval: false,
-    category: 'behavioral',
-  },
-  {
-    key: 'screen_state',
-    label: 'Screen State',
-    description: 'Screen on/off/lock/unlock events with timestamps',
-    icon: Monitor,
-    hasInterval: false,
-    category: 'behavioral',
-  },
-  {
-    key: 'gestures',
-    label: 'User Gestures',
-    description: 'Tap, scroll, long press, and window content change events',
-    icon: MousePointerClick,
-    hasInterval: false,
-    category: 'behavioral',
-  },
-  {
-    key: 'location',
-    label: 'Location',
-    description: 'GPS/network location at intervals or on movement',
-    icon: MapPin,
-    hasInterval: true,
-    defaultInterval: 300,
-    category: 'physical',
-  },
-  {
-    key: 'battery',
-    label: 'Battery',
-    description: 'Battery level, charging state, temperature at intervals',
-    icon: BatteryCharging,
-    hasInterval: true,
-    defaultInterval: 300,
-    category: 'physical',
-  },
-  {
-    key: 'light',
-    label: 'Ambient Light',
-    description: 'Ambient light sensor readings (lux) at intervals',
-    icon: Sun,
-    hasInterval: true,
-    defaultInterval: 60,
-    category: 'physical',
-  },
-  {
-    key: 'steps',
-    label: 'Physical Activity (Steps)',
-    description: 'Step counts at intervals. Needs a step sensor + Activity Recognition permission',
-    icon: Footprints,
-    hasInterval: true,
-    defaultInterval: 300,
-    category: 'physical',
-  },
-  {
-    key: 'proximity',
-    label: 'Proximity / Orientation',
-    description: 'Near/far distance and device orientation (face up/down/upright) at intervals',
-    icon: Compass,
-    hasInterval: true,
-    defaultInterval: 60,
-    category: 'physical',
-  },
+const SYNC_OPTIONS = [
+  { value: 15, label: 'Every 15 minutes' },
+  { value: 30, label: 'Every 30 minutes' },
+  { value: 60, label: 'Every hour' },
+  { value: 360, label: 'Every 6 hours' },
+  { value: 720, label: 'Every 12 hours' },
+  { value: 1440, label: 'Once a day' },
 ]
 
-const CATEGORIES = [
-  { key: 'behavioral', label: 'Behavioral', description: 'App usage, communication, and interaction patterns' },
-  { key: 'physical', label: 'Physical & Device', description: 'Location, battery, and sensor readings' },
-]
-
-const STEPS = [
-  { number: 1, label: 'Basic Info' },
-  { number: 2, label: 'Data Collection' },
-  { number: 3, label: 'ESM / EMA' },
-  { number: 4, label: 'Review' },
-]
-
-const SCREEN_INTERACTION_DEFAULTS = {
-  interaction_types: {
-    TYPE_VIEW_SCROLLED: true,
-    TYPE_VIEW_CLICKED: true,
-    TYPE_VIEW_LONG_CLICKED: true,
-    TYPE_WINDOW_CONTENT_CHANGED: true,
-  },
-  skip_rules: {
-    skip_system_ui: true,
-    skip_launchers: true,
-    skip_keyboards: true,
-    skip_system_settings: true,
-  },
-}
-
-const defaultSensors = (): WizardState['sensors'] => {
-  const s: WizardState['sensors'] = {}
-  SENSOR_OPTIONS.forEach(opt => {
-    let config: SensorConfigJson = {}
-    if (opt.key === 'location') config = { movement_threshold: 50 }
-    if (opt.key === 'gestures') config = SCREEN_INTERACTION_DEFAULTS
-    s[opt.key] = {
-      enabled: false,
-      interval_seconds: opt.defaultInterval ?? null,
-      config,
-    }
-  })
-  return s
-}
-
-const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white placeholder-gray-400'
-
-// ─── Step Components ──────────────────────────────────────────────────────────
-
-function StepBasicInfo({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
-  const set = (patch: Partial<WizardState>) => setState({ ...state, ...patch })
-  return (
-    <div className="space-y-5">
-      <div>
-        <label htmlFor="study-name" className="block text-sm font-medium text-gray-700 mb-1.5">
-          Study name <span className="text-red-500" aria-hidden="true">*</span>
-        </label>
-        <input
-          id="study-name"
-          aria-label="Study name"
-          required
-          value={state.name}
-          onChange={e => set({ name: e.target.value })}
-          placeholder="e.g. Sleep Pattern Study 2025"
-          className={inputCls}
-          autoFocus
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          Internal Description <span className="text-gray-400 font-normal">(optional)</span>
-        </label>
-        <textarea
-          value={state.description}
-          onChange={e => set({ description: e.target.value })}
-          rows={3}
-          placeholder="Notes for your research team about this study…"
-          className={`${inputCls} resize-none`}
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          App Description <span className="text-gray-400 font-normal">(shown to participants in the mobile app)</span>
-        </label>
-        <textarea
-          value={state.appDescription}
-          onChange={e => set({ appDescription: e.target.value })}
-          rows={3}
-          placeholder="What participants will see when they enroll in your study…"
-          className={`${inputCls} resize-none`}
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          Sync Interval
-        </label>
-        <div className="flex items-center gap-3">
-          <select
-            value={state.syncInterval}
-            onChange={e => set({ syncInterval: parseInt(e.target.value) })}
-            className="px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all bg-white"
-          >
-            <option value={5}>Every 5 minutes</option>
-            <option value={15}>Every 15 minutes</option>
-            <option value={30}>Every 30 minutes</option>
-            <option value={60}>Every hour</option>
-            <option value={360}>Every 6 hours</option>
-            <option value={720}>Every 12 hours</option>
-            <option value={1440}>Once a day</option>
-          </select>
-          <p className="text-xs text-gray-400">How often the app uploads data to the server</p>
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          Study PIN <span className="text-gray-400 font-normal">(optional)</span>
-        </label>
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            inputMode="numeric"
-            maxLength={4}
-            value={state.pin}
-            onChange={e => set({ pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-            placeholder="••••"
-            className="w-28 px-3 py-2.5 border border-gray-200 rounded-lg text-lg font-mono text-center tracking-[0.5em] pl-[0.5em] focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
-          />
-          <p className="text-xs text-gray-400">If set, only participants given this PIN can join. You can change it later.</p>
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">App Permissions</label>
-        <div className="grid grid-cols-2 gap-2">
-          {/* Guided Permissions */}
-          <div
-            className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
-              state.guidedPermissions ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
-            }`}
-            onClick={() => set({ guidedPermissions: !state.guidedPermissions })}
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                state.guidedPermissions ? 'bg-blue-100' : 'bg-gray-100'
-              }`}>
-                <ShieldCheck size={17} className={state.guidedPermissions ? 'text-blue-600' : 'text-gray-400'} />
-              </div>
-              <div className="min-w-0">
-                <p className={`font-semibold text-sm ${state.guidedPermissions ? 'text-gray-900' : 'text-gray-600'}`}>
-                  Guided Permissions
-                </p>
-                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
-                  Walk participants through granting permissions on first launch
-                </p>
-              </div>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
-              <input type="checkbox" checked={state.guidedPermissions} onChange={e => set({ guidedPermissions: e.target.checked })} className="sr-only peer" />
-              <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
-            </label>
-          </div>
-
-          {/* Auto Participant ID */}
-          <div
-            className={`flex items-center justify-between rounded-xl border-2 px-4 py-3.5 cursor-pointer transition-all ${
-              state.autoParticipantId ? 'border-blue-400 bg-blue-50/40' : 'border-gray-200 bg-white hover:border-gray-300'
-            }`}
-            onClick={() => set({ autoParticipantId: !state.autoParticipantId })}
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                state.autoParticipantId ? 'bg-blue-100' : 'bg-gray-100'
-              }`}>
-                <BadgeCheck size={17} className={state.autoParticipantId ? 'text-blue-600' : 'text-gray-400'} />
-              </div>
-              <div className="min-w-0">
-                <p className={`font-semibold text-sm ${state.autoParticipantId ? 'text-gray-900' : 'text-gray-600'}`}>
-                  Auto Participant ID
-                </p>
-                <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">
-                  Automatically assign a unique ID to each participant on enrollment
-                </p>
-              </div>
-            </div>
-            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3" onClick={e => e.stopPropagation()}>
-              <input type="checkbox" checked={state.autoParticipantId} onChange={e => set({ autoParticipantId: e.target.checked })} className="sr-only peer" />
-              <div className="w-9 h-5 bg-gray-200 rounded-full peer peer-checked:bg-blue-600 after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border after:border-gray-300 after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full peer-checked:after:border-white" />
-            </label>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function SensorCard({
-  sensor,
-  enabled,
-  interval,
-  config,
-  onChange,
-}: {
-  sensor: SensorOption
-  enabled: boolean
-  interval: number | null
-  config: SensorConfigJson
-  onChange: (patch: { enabled?: boolean; interval_seconds?: number | null; config?: SensorConfigJson }) => void
-}) {
-  const Icon = sensor.icon
-  return (
-    <div
-      className={`rounded-xl border-2 transition-all cursor-pointer ${
-        enabled
-          ? 'border-blue-400 bg-blue-50/40 shadow-sm'
-          : 'border-gray-200 bg-white hover:border-gray-300'
-      }`}
-      onClick={() => onChange({ enabled: !enabled })}
-    >
-      <div className="px-4 py-3.5 flex items-start gap-3">
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-          enabled ? 'bg-blue-100' : 'bg-gray-100'
-        }`}>
-          <Icon size={17} className={enabled ? 'text-blue-600' : 'text-gray-400'} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between gap-2">
-            <p className={`font-semibold text-sm ${enabled ? 'text-gray-900' : 'text-gray-600'}`}>
-              {sensor.label}
-            </p>
-            <div
-              className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
-                enabled ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
-              }`}
-              onClick={e => { e.stopPropagation(); onChange({ enabled: !enabled }) }}
-            >
-              {enabled && <Check size={11} className="text-white" strokeWidth={3} />}
-            </div>
-          </div>
-          <p className="text-xs text-gray-400 mt-0.5 leading-relaxed">{sensor.description}</p>
-        </div>
-      </div>
-
-      {enabled && sensor.key === 'gestures' && (
-        <div className="px-4 pb-4 border-t border-blue-100 pt-3 grid grid-cols-2 gap-4" onClick={e => e.stopPropagation()}>
-          <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Interaction Types</p>
-            <div className="space-y-1.5">
-              {([
-                { key: 'TYPE_VIEW_SCROLLED', label: 'TYPE_VIEW_SCROLLED' },
-                { key: 'TYPE_VIEW_CLICKED', label: 'TYPE_VIEW_CLICKED' },
-                { key: 'TYPE_VIEW_LONG_CLICKED', label: 'TYPE_VIEW_LONG_CLICKED' },
-                { key: 'TYPE_WINDOW_CONTENT_CHANGED', label: 'TYPE_WINDOW_CONTENT_CHANGED' },
-              ] as const).map(({ key, label }) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={config.interaction_types?.[key] ?? true}
-                    onChange={e => onChange({ config: { ...config, interaction_types: { ...config.interaction_types, [key]: e.target.checked } } })}
-                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer shrink-0"
-                  />
-                  <span className="text-xs font-mono text-gray-600 truncate">{label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Skip Rules</p>
-            <div className="space-y-1.5">
-              {([
-                { key: 'skip_system_ui', label: 'System UI' },
-                { key: 'skip_launchers', label: 'Launchers' },
-                { key: 'skip_keyboards', label: 'Keyboards' },
-                { key: 'skip_system_settings', label: 'System Settings' },
-              ] as const).map(({ key, label }) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={config.skip_rules?.[key] ?? true}
-                    onChange={e => onChange({ config: { ...config, skip_rules: { ...config.skip_rules, [key]: e.target.checked } } })}
-                    className="w-3.5 h-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500/30 cursor-pointer shrink-0"
-                  />
-                  <span className="text-xs text-gray-600">{label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {enabled && sensor.hasInterval && (
-        <div
-          className="px-4 pb-3.5 flex items-center flex-wrap gap-2"
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="flex items-center gap-2 bg-white border border-blue-200 rounded-lg px-3 py-1.5">
-            <Clock size={12} className="text-blue-500 shrink-0" />
-            <span className="text-xs text-gray-500">Every</span>
-            <input
-              type="number"
-              value={interval || sensor.defaultInterval || 300}
-              min={10}
-              onChange={e => onChange({ interval_seconds: parseInt(e.target.value) || 60 })}
-              className="w-16 text-sm text-center font-semibold text-gray-800 focus:outline-none bg-transparent"
-            />
-            <span className="text-xs text-gray-500">sec</span>
-          </div>
-          <span className="text-xs text-gray-400 shrink-0">
-            = {(((interval || sensor.defaultInterval || 300)) / 60).toFixed(1)} min
-          </span>
-          {sensor.key === 'location' && (
-            <div className="flex items-center gap-2 bg-white border border-blue-200 rounded-lg px-3 py-1.5">
-              <MapPin size={12} className="text-blue-500 shrink-0" />
-              <span className="text-xs text-gray-500 shrink-0">Move ≥</span>
-              <input
-                type="number"
-                value={config.movement_threshold ?? 50}
-                min={0}
-                onChange={e => {
-                  const val = parseInt(e.target.value)
-                  onChange({ config: { ...config, movement_threshold: isNaN(val) ? 0 : val } })
-                }}
-                className="w-14 text-sm text-center font-semibold text-gray-800 focus:outline-none bg-transparent"
-              />
-              <span className="text-xs text-gray-500">m</span>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function StepDataCollection({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
-  const enabledCount = Object.values(state.sensors).filter(s => s.enabled).length
-
-  function updateSensor(key: string, patch: { enabled?: boolean; interval_seconds?: number | null; config?: SensorConfigJson }) {
-    setState({
-      ...state,
-      sensors: {
-        ...state.sensors,
-        [key]: { ...state.sensors[key], ...patch },
-      },
-    })
-  }
-
-  function toggleAll(category: string, enable: boolean) {
-    const keys = SENSOR_OPTIONS.filter(s => s.category === category).map(s => s.key)
-    const updated = { ...state.sensors }
-    keys.forEach(k => { updated[k] = { ...updated[k], enabled: enable } })
-    setState({ ...state, sensors: updated })
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">
-          Select the data types you want to collect from participants&apos; devices.
-          {enabledCount > 0 && (
-            <span className="ml-2 font-semibold text-blue-600">{enabledCount} selected</span>
-          )}
-        </p>
-      </div>
-
-      {CATEGORIES.map(cat => {
-        const sensors = SENSOR_OPTIONS.filter(s => s.category === cat.key)
-        const catAny = sensors.some(s => state.sensors[s.key]?.enabled)
-
-        return (
-          <div key={cat.key}>
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{cat.label}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{cat.description}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => toggleAll(cat.key, !catAny)}
-                className="text-xs text-blue-600 hover:text-blue-700 font-semibold transition-colors"
-              >
-                {catAny ? 'Deselect all' : 'Select all'}
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {sensors.map(sensor => (
-                <SensorCard
-                  key={sensor.key}
-                  sensor={sensor}
-                  enabled={state.sensors[sensor.key]?.enabled ?? false}
-                  interval={state.sensors[sensor.key]?.interval_seconds ?? null}
-                  config={state.sensors[sensor.key]?.config ?? {}}
-                  onChange={patch => updateSensor(sensor.key, patch)}
-                />
-              ))}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function StepEsmEma({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-gray-500">
-        ESM/EMA (Experience Sampling Method / Ecological Momentary Assessment) lets you send survey
-        prompts to participants at scheduled times, randomly, or based on device events.
-      </p>
-
-      <div
-        className={`rounded-xl border-2 cursor-pointer transition-all ${
-          state.enableEsm
-            ? 'border-blue-400 bg-blue-50/40'
-            : 'border-gray-200 bg-white hover:border-gray-300'
-        }`}
-        onClick={() => setState({ ...state, enableEsm: true })}
-      >
-        <div className="px-5 py-4 flex items-start gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-            state.enableEsm ? 'bg-blue-100' : 'bg-gray-100'
-          }`}>
-            <ClipboardList size={20} className={state.enableEsm ? 'text-blue-600' : 'text-gray-400'} />
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center justify-between">
-              <p className={`font-semibold ${state.enableEsm ? 'text-gray-900' : 'text-gray-700'}`}>
-                Enable ESM / EMA
-              </p>
-              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                state.enableEsm ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
-              }`}>
-                {state.enableEsm && <Check size={11} className="text-white" strokeWidth={3} />}
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">
-              Send periodic surveys to participants. Configure schedules, questions, and notifications after creating the study.
-            </p>
-            <div className="flex flex-wrap gap-2 mt-3">
-              {['Fixed time', 'Random window'].map(t => (
-                <span key={t} className="text-xs bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 rounded-full font-medium">
-                  {t}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div
-        className={`rounded-xl border-2 cursor-pointer transition-all ${
-          !state.enableEsm
-            ? 'border-gray-400 bg-gray-50'
-            : 'border-gray-200 bg-white hover:border-gray-300'
-        }`}
-        onClick={() => setState({ ...state, enableEsm: false })}
-      >
-        <div className="px-5 py-4 flex items-start gap-3">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-            !state.enableEsm ? 'bg-gray-200' : 'bg-gray-100'
-          }`}>
-            <Zap size={20} className={!state.enableEsm ? 'text-gray-600' : 'text-gray-400'} />
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center justify-between">
-              <p className={`font-semibold ${!state.enableEsm ? 'text-gray-900' : 'text-gray-600'}`}>
-                Sensor data only
-              </p>
-              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                !state.enableEsm ? 'bg-gray-600 border-gray-600' : 'border-gray-300'
-              }`}>
-                {!state.enableEsm && <Check size={11} className="text-white" strokeWidth={3} />}
-              </div>
-            </div>
-            <p className="text-sm text-gray-500 mt-1">
-              Collect passive sensor data only. No surveys or prompts will be sent to participants.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {state.enableEsm && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
-          <p className="text-sm text-blue-800 font-medium">Next step after creation</p>
-          <p className="text-xs text-blue-600 mt-0.5">
-            After creating the study, go to <strong>ESM / EMA</strong> in the study menu to configure survey schedules and questions.
-          </p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function StepReview({ state }: { state: WizardState }) {
-  const enabledSensors = SENSOR_OPTIONS.filter(s => state.sensors[s.key]?.enabled)
-
-  return (
-    <div className="space-y-5">
-      <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
-        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Study Details</p>
-        </div>
-        <div className="px-4 py-3 space-y-2">
-          <div className="flex items-start justify-between gap-4">
-            <span className="text-sm text-gray-500">Name</span>
-            <span className="text-sm font-semibold text-gray-900 text-right">{state.name}</span>
-          </div>
-          {state.description && (
-            <div className="flex items-start justify-between gap-4">
-              <span className="text-sm text-gray-500">Description</span>
-              <span className="text-sm text-gray-700 text-right max-w-xs">{state.description}</span>
-            </div>
-          )}
-          {state.appDescription && (
-            <div className="flex items-start justify-between gap-4">
-              <span className="text-sm text-gray-500">App description</span>
-              <span className="text-sm text-gray-700 text-right max-w-xs">{state.appDescription}</span>
-            </div>
-          )}
-          <div className="flex items-start justify-between gap-4">
-            <span className="text-sm text-gray-500">Sync interval</span>
-            <span className="text-sm text-gray-700">Every {state.syncInterval} min</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
-        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Data Collection</p>
-          <span className="text-xs text-gray-400">{enabledSensors.length} sensor{enabledSensors.length !== 1 ? 's' : ''} selected</span>
-        </div>
-        <div className="px-4 py-3">
-          {enabledSensors.length === 0 ? (
-            <p className="text-sm text-gray-400 italic">No sensors selected — you can configure this later</p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {enabledSensors.map(s => {
-                const Icon = s.icon
-                return (
-                  <span key={s.key} className="inline-flex items-center gap-1.5 text-xs bg-blue-50 text-blue-700 border border-blue-100 px-2.5 py-1 rounded-full font-medium">
-                    <Icon size={11} />
-                    {s.label}
-                  </span>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
-        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">ESM / EMA</p>
-        </div>
-        <div className="px-4 py-3">
-          {state.enableEsm ? (
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full bg-blue-600 flex items-center justify-center">
-                <Check size={9} className="text-white" strokeWidth={3} />
-              </div>
-              <span className="text-sm text-gray-700">Enabled — configure schedules after creation</span>
-            </div>
-          ) : (
-            <span className="text-sm text-gray-400">Not enabled</span>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Wizard Page ──────────────────────────────────────────────────────────────
-
-export default function NewStudyPage() {
-  const router = useRouter()
-  const supabase = createClient()
-  const me = useMe()
-  const isAdmin = me?.role === 'admin'
-  // Admins may publish straight away; everyone else always gets a pending draft (enforced by the DB).
-  const [activateNow, setActivateNow] = useState(true)
-  const [step, setStep] = useState(1)
-  const [submitting, setSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState<string | null>(null)
-  const [state, setState] = useState<WizardState>({
+function initialState(): WizardState {
+  return {
     name: '',
     description: '',
     appDescription: '',
     syncInterval: 30,
-    guidedPermissions: false,
-    autoParticipantId: false,
     pin: '',
-    sensors: defaultSensors(),
-    enableEsm: false,
-  })
+    autoParticipantId: false,
+    guidedPermissions: false,
+    sensors: defaultSensorDrafts(),
+    bankingPause: true,
+    addSchedule: 'none',
+    schedule: BLANK_SCHEDULE_FORM,
+  }
+}
 
-  function canProceed() {
-    if (step === 1) return state.name.trim().length > 0
-    return true
+function yesNo(on: boolean) {
+  return on ? <Badge tone="green">On</Badge> : <Badge>Off</Badge>
+}
+
+function StepIndicator({ step }: { step: number }) {
+  return (
+    <nav aria-label="Steps" className="mb-6">
+      <p className="mb-2 text-sm text-subtle sm:hidden">Step {step + 1} of {STEPS.length}: <span className="font-medium text-fg">{STEPS[step]}</span></p>
+      <ol className="flex items-center gap-2">
+        {STEPS.map((label, i) => {
+          const done = i < step
+          const current = i === step
+          return (
+            <li key={label} aria-current={current ? 'step' : undefined} className="flex min-w-0 flex-1 items-center gap-2">
+              <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${done || current ? 'bg-accent text-accent-fg' : 'bg-sunken text-subtle'} ${current ? 'ring-4 ring-accent-soft' : ''}`}>
+                {done ? <Check size={13} strokeWidth={3} aria-hidden="true" /> : i + 1}
+                <span className="sr-only">{done ? ' (done)' : ''}</span>
+              </span>
+              <span className={`hidden truncate text-sm sm:block ${current ? 'font-semibold text-fg' : 'text-subtle'}`}>{label}</span>
+              {i < STEPS.length - 1 && <span aria-hidden="true" className={`h-px flex-1 ${done ? 'bg-accent' : 'bg-line'}`} />}
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
+  )
+}
+
+export default function NewStudyPage() {
+  const router = useRouter()
+  const supabase = useMemo(() => createClient(), [])
+  const me = useMe()
+  const isAdmin = me?.role === 'admin'
+  const [initial] = useState(initialState)
+  const [state, setState] = useState<WizardState>(initial)
+  const [step, setStep] = useState(0)
+  const [showErrors, setShowErrors] = useState(false)
+  // Admins may publish straight away; everyone else always gets a pending draft (enforced by the database).
+  const [startAs, setStartAs] = useState<'active' | 'draft'>('active')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  // Set once the study row exists, so a partial failure cannot create it twice.
+  const [created, setCreated] = useState<{ id: string; problems: string[] } | null>(null)
+
+  const dirty = !created && JSON.stringify(state) !== JSON.stringify(initial)
+  const { dialog } = useUnsavedChangesGuard(dirty)
+
+  const set = (patch: Partial<WizardState>) => setState(s => ({ ...s, ...patch }))
+
+  const nameError = !state.name.trim() ? 'Enter a study name.' : null
+  const pinError = state.pin && !/^\d{4}$/.test(state.pin) ? 'The PIN must be exactly 4 digits, or leave it empty.' : null
+  const scheduleErrors = state.addSchedule === 'add' ? validateSchedule(state.schedule) : {}
+  const stepErrors = [
+    !!(nameError || pinError),
+    false,
+    Object.keys(scheduleErrors).length > 0,
+    false,
+  ]
+
+  function next() {
+    if (stepErrors[step]) { setShowErrors(true); return }
+    setShowErrors(false)
+    setStep(s => Math.min(STEPS.length - 1, s + 1))
+    window.scrollTo({ top: 0 })
   }
 
-  async function handleSubmit() {
+  function goTo(i: number) {
+    setShowErrors(false)
+    setStep(i)
+    window.scrollTo({ top: 0 })
+  }
+
+  async function finishSetup(studyId: string): Promise<string[]> {
+    const problems: string[] = []
+    const { error: sensorError } = await supabase.from('sensor_configs').insert(rowsFromDrafts(studyId, state.sensors))
+    if (sensorError) problems.push(`the sensor settings were not saved (${errorText(sensorError)})`)
+    if (state.pin) {
+      const { error } = await supabase.rpc('set_study_pin', { p_study: studyId, p_pin: state.pin })
+      if (error) problems.push(`the PIN was not set (${errorText(error)})`)
+    }
+    if (state.addSchedule === 'add') {
+      // Created switched off: it has no questions yet.
+      const { error } = await supabase.from('esm_schedules')
+        .insert({ study_id: studyId, ...buildSchedulePayload(state.schedule), enabled: false })
+      if (error) problems.push(`the survey schedule was not created (${errorText(error)})`)
+    }
+    return problems
+  }
+
+  async function handleCreate() {
+    if (stepErrors.some(Boolean)) {
+      const first = stepErrors.findIndex(Boolean)
+      setShowErrors(true)
+      setStep(first)
+      return
+    }
     setSubmitting(true)
     setSubmitError(null)
     try {
-      // 1. Create study. The id is generated here rather than read back with
-      // RETURNING: the creator only becomes the study's owner (and so able to
-      // read it) once the insert has finished.
+      // The id is generated here rather than read back: the creator only becomes
+      // the study's owner (and so able to read it) once the insert has finished.
       const studyId = crypto.randomUUID()
-      const config: Record<string, unknown> = {}
+      const config: Record<string, unknown> = {
+        banking_pause: { enabled: state.bankingPause, apps: [...DEFAULT_BANKING_APPS], reminder_minutes: 30, escalation_minutes: 120 },
+      }
       if (state.guidedPermissions) config.guided_permissions = true
       if (state.autoParticipantId) config.auto_participant_id = true
-      config.banking_pause = {
-        enabled: true,
-        apps: [
-          'uk.co.hsbc.hsbcukmobilebanking',
-          'com.barclays.android.barclaysmobilebanking',
-          'com.htsu.hsbcpersonalbanking',
-          'com.monzo.android',
-          'com.starlingbank.android',
-          'com.revolut.app',
-        ],
-        reminder_minutes: 30,
-        escalation_minutes: 120,
-      }
-
-      const { error: studyError } = await supabase
-        .from('studies')
-        .insert({
-          id: studyId,
-          name: state.name.trim(),
-          description: state.description.trim() || null,
-          app_description: state.appDescription.trim() || null,
-          sync_interval_minutes: state.syncInterval,
-          config,
-          status: isAdmin && activateNow ? 'active' : 'draft',
-        })
-
-      if (studyError) {
-        setSubmitError(`Could not create the study: ${errorText(studyError)}`)
+      const { error } = await supabase.from('studies').insert({
+        id: studyId,
+        name: state.name.trim(),
+        description: state.description.trim() || null,
+        app_description: state.appDescription.trim() || null,
+        sync_interval_minutes: state.syncInterval,
+        config,
+        status: isAdmin && startAs === 'active' ? 'active' : 'draft',
+      })
+      if (error) {
+        setSubmitError(`Could not create the study: ${errorText(error)}`)
         setSubmitting(false)
         return
       }
-      const study = { id: studyId }
-
-      // 2. Create sensor configs for all sensors (enabled or not)
-      const { error: sensorError } = await supabase.from('sensor_configs').insert(
-        SENSOR_OPTIONS.map(s => ({
-          study_id: study.id,
-          sensor_type: s.key,
-          enabled: state.sensors[s.key]?.enabled ?? false,
-          interval_seconds: state.sensors[s.key]?.interval_seconds ?? null,
-          config: state.sensors[s.key]?.config ?? {},
-        }))
-      )
-      const problems: string[] = []
-      if (sensorError) problems.push(`sensor settings were not saved (${errorText(sensorError)})`)
-
-      // 2b. Set the study PIN if one was entered (hashed server-side).
-      if (/^\d{4}$/.test(state.pin)) {
-        const { error: pinError } = await supabase.rpc('set_study_pin', { p_study: study.id, p_pin: state.pin })
-        if (pinError) problems.push(`the PIN was not set (${errorText(pinError)})`)
-      }
+      const problems = await finishSetup(studyId)
+      notifyPendingStudiesChanged()
       if (problems.length) {
-        // The study exists; send the researcher to fix the rest there.
-        window.alert(`The study was created, but ${problems.join(' and ')}. Please check its settings.`)
+        setCreated({ id: studyId, problems })
+        setSubmitting(false)
+        return
       }
-
-      // 3. Go to the study page (shows the pending-approval banner when relevant).
-      router.push(`/studies/${study.id}`)
+      setCreated({ id: studyId, problems: [] })
+      router.push(studyPaths(studyId).overview)
     } catch (e) {
       setSubmitError(`Could not create the study: ${e instanceof Error ? e.message : 'unknown error'}`)
       setSubmitting(false)
     }
   }
 
-  const stepContent: Record<number, React.ReactNode> = {
-    1: <StepBasicInfo state={state} setState={setState} />,
-    2: <StepDataCollection state={state} setState={setState} />,
-    3: <StepEsmEma state={state} setState={setState} />,
-    4: <StepReview state={state} />,
-  }
+  const enabledSensors = SENSORS.filter(s => state.sensors[s.key].enabled)
+  const syncLabel = SYNC_OPTIONS.find(o => o.value === state.syncInterval)?.label ?? `Every ${state.syncInterval} minutes`
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="mb-8">
-        <Link
-          href="/studies"
-          className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors mb-4"
-        >
-          <ArrowLeft size={15} /> Back to Studies
-        </Link>
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center">
-            <FlaskConical size={16} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Create New Study</h1>
-            <p className="text-gray-400 text-sm">Set up your research study in a few steps</p>
-          </div>
-        </div>
-      </div>
+    <div className="mx-auto max-w-3xl">
+      {dialog}
+      <PageHeader title="New study" description="Set up the basics now. You can change everything later in the study's settings." />
 
       {me && !isAdmin && (
-        <div role="note" className="mb-6 flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-          <Info size={16} className="mt-0.5 shrink-0 text-blue-600" aria-hidden="true" />
-          <p>Your study will be reviewed by an admin before participants can join. You can set up sensors and surveys in the meantime.</p>
+        <div role="note" className="mb-6 flex items-start gap-2 rounded-xl border border-line bg-accent-soft px-4 py-3 text-sm text-fg">
+          <Info size={16} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
+          <p>An admin will review this study before participants can join. You can set up sensors and surveys in the meantime.</p>
         </div>
       )}
 
-      {/* Step indicator */}
-      <div className="flex items-center gap-0 mb-8">
-        {STEPS.map((s, i) => {
-          const done = step > s.number
-          const active = step === s.number
-          return (
-            <div key={s.number} className="flex items-center flex-1">
-              <div className="flex flex-col items-center">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                  done
-                    ? 'bg-blue-600 text-white'
-                    : active
-                      ? 'bg-blue-600 text-white ring-4 ring-blue-100'
-                      : 'bg-gray-100 text-gray-400'
-                }`}>
-                  {done ? <Check size={13} strokeWidth={3} /> : s.number}
-                </div>
-                <span className={`text-xs font-medium mt-1.5 whitespace-nowrap ${
-                  active ? 'text-blue-700' : done ? 'text-gray-500' : 'text-gray-400'
-                }`}>
-                  {s.label}
-                </span>
-              </div>
-              {i < STEPS.length - 1 && (
-                <div className={`flex-1 h-0.5 mx-2 mb-4 transition-colors ${done ? 'bg-blue-400' : 'bg-gray-200'}`} />
+      <StepIndicator step={step} />
+
+      {step === 0 && (
+        <Card>
+          <CardHeader title="Basics" description="What the study is called and how participants join." />
+          <div className="space-y-4">
+            <TextField label="Study name" required autoFocus value={state.name} maxLength={200}
+              onChange={e => set({ name: e.target.value })} placeholder="e.g. Sleep and phone use 2026"
+              error={showErrors ? nameError : null} />
+            <Field label="Description for your team" hint="Optional. Only researchers see this.">
+              {(id, d) => <Textarea id={id} aria-describedby={d} rows={2} value={state.description} onChange={e => set({ description: e.target.value })} />}
+            </Field>
+            <Field label="Description for participants" hint="Optional. Shown in the app when someone joins.">
+              {(id, d) => <Textarea id={id} aria-describedby={d} rows={3} value={state.appDescription} onChange={e => set({ appDescription: e.target.value })} />}
+            </Field>
+            <Field label="Upload data" hint="How often phones send what they collected.">
+              {(id, d) => (
+                <Select id={id} aria-describedby={d} value={state.syncInterval} onChange={e => set({ syncInterval: Number(e.target.value) })} className="sm:w-64">
+                  {SYNC_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </Select>
               )}
+            </Field>
+            <Field label="Study PIN" hint="Optional. If set, only people you give the 4-digit PIN to can join." error={showErrors ? pinError : null}>
+              {(id, d) => (
+                <Input id={id} aria-describedby={d} aria-invalid={showErrors && pinError ? true : undefined} value={state.pin}
+                  inputMode="numeric" autoComplete="off" maxLength={4} placeholder="4 digits"
+                  onChange={e => set({ pin: e.target.value })} className="w-36 font-mono tracking-widest" />
+              )}
+            </Field>
+            <div className="space-y-4 border-t border-line pt-4">
+              <Toggle checked={state.autoParticipantId} onChange={v => set({ autoParticipantId: v })}
+                label="Automatic participant IDs"
+                description="Give each new participant an ID when they join, instead of asking them to type one." />
+              <Toggle checked={state.guidedPermissions} onChange={v => set({ guidedPermissions: v })}
+                label="Guided permissions"
+                description="Walk participants through each Android permission the first time they open the app." />
             </div>
-          )
-        })}
-      </div>
+          </div>
+        </Card>
+      )}
 
-      {/* Step content */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/60">
-          <h2 className="font-semibold text-gray-800">{STEPS[step - 1].label}</h2>
+      {step === 1 && (
+        <div className="space-y-4">
+          <p className="text-sm text-muted">
+            Turn on what the phones should record. {enabledSensors.length > 0 ? `${enabledSensors.length} on.` : 'Nothing is on yet.'}
+          </p>
+          <SensorSettingsEditor value={state.sensors} onChange={sensors => set({ sensors })} />
+          <Card>
+            <Toggle checked={state.bankingPause} onChange={v => set({ bankingPause: v })}
+              label="Banking app pause"
+              description="Many banking apps refuse to open while gesture collection is on. When a common banking app opens, the phone offers to pause gestures and reminds the participant to turn them back on. You can edit the app list later." />
+          </Card>
         </div>
-        <div className="px-6 py-6">
-          {stepContent[step]}
-          {step === STEPS.length && isAdmin && (
-            <fieldset className="mt-5 rounded-xl border border-gray-200 bg-white px-4 py-3">
-              <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-gray-500">Status after creation</legend>
-              <div className="mt-1 space-y-2">
-                <label className="flex items-start gap-2.5 text-sm text-gray-700">
-                  <input type="radio" name="initial-status" className="mt-0.5" checked={activateNow} onChange={() => setActivateNow(true)} />
-                  <span><span className="font-semibold">Activate now</span><span className="block text-xs text-gray-500">Approved straight away; participants can join immediately.</span></span>
-                </label>
-                <label className="flex items-start gap-2.5 text-sm text-gray-700">
-                  <input type="radio" name="initial-status" className="mt-0.5" checked={!activateNow} onChange={() => setActivateNow(false)} />
-                  <span><span className="font-semibold">Save as draft</span><span className="block text-xs text-gray-500">Stays pending approval until you approve it.</span></span>
-                </label>
-              </div>
-            </fieldset>
-          )}
-          {submitError && <div className="mt-4"><Notice notice={{ tone: 'error', text: submitError }} onClose={() => setSubmitError(null)} /></div>}
-        </div>
-        <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => step > 1 ? setStep(step - 1) : router.push('/studies')}
-            className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors font-medium"
-          >
-            <ArrowLeft size={14} />
-            {step === 1 ? 'Cancel' : 'Back'}
-          </button>
+      )}
 
-          {step < STEPS.length ? (
-            <button
-              type="button"
-              onClick={() => canProceed() && setStep(step + 1)}
-              disabled={!canProceed()}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors"
-            >
-              Continue
-              <ArrowRight size={14} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={submitting}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
-            >
-              {submitting ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Creating…
-                </>
-              ) : (
-                <>
-                  <Check size={14} />
-                  Create study
-                </>
+      {step === 2 && (
+        <Card>
+          <CardHeader icon={<ClipboardList size={16} />} title="Surveys"
+            description="Short questionnaires sent to participants as phone notifications, at fixed or random times each day." />
+          <div className="space-y-5">
+            <ChoiceCards label="Survey schedule" value={state.addSchedule} onChange={addSchedule => set({ addSchedule })}
+              options={[
+                { value: 'none', label: 'No surveys for now', description: 'Add schedules later in Surveys → Setup.', icon: <MinusCircle size={16} /> },
+                { value: 'add', label: 'Add a survey schedule', description: 'Choose when it is sent. Add questions after the study is created.', icon: <ClipboardList size={16} /> },
+              ]} />
+            {state.addSchedule === 'add' && (
+              <>
+                <ScheduleFormBody form={state.schedule} setForm={schedule => set({ schedule })} errors={showErrors ? scheduleErrors : {}} />
+                <Notice notice={{ tone: 'info', text: 'The schedule is created switched off because it has no questions yet. Add questions in Surveys → Setup, then switch it on.' }} />
+              </>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {step === 3 && (
+        <div className="space-y-4">
+          <Card>
+            <CardHeader title="Basics" actions={<Button variant="ghost" size="sm" onClick={() => goTo(0)}>Edit</Button>} />
+            <DescriptionList items={[
+              { label: 'Study name', value: state.name.trim() || <span className="text-danger">Missing</span> },
+              { label: 'Upload data', value: syncLabel },
+              { label: 'Description for your team', value: state.description.trim() || <span className="text-subtle">None</span> },
+              { label: 'Description for participants', value: state.appDescription.trim() || <span className="text-subtle">None</span> },
+              { label: 'Study PIN', value: state.pin ? <Badge tone="green">On (4 digits)</Badge> : <Badge>Off: anyone with the app can join</Badge> },
+              { label: 'Automatic participant IDs', value: yesNo(state.autoParticipantId) },
+              { label: 'Guided permissions', value: yesNo(state.guidedPermissions) },
+            ]} />
+          </Card>
+          <Card>
+            <CardHeader title="Sensors" description={`${enabledSensors.length} of ${SENSORS.length} on`}
+              actions={<Button variant="ghost" size="sm" onClick={() => goTo(1)}>Edit</Button>} />
+            {enabledSensors.length === 0
+              ? <p className="text-sm text-subtle">No sensors on. You can turn them on later in Settings → Sensors.</p>
+              : (
+                <ul className="divide-y divide-line">
+                  {enabledSensors.map(s => (
+                    <li key={s.key} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2 text-sm">
+                      <span className="font-medium text-fg">{s.label}</span>
+                      <span className="text-muted">{sensorSummary(s, state.sensors[s.key])}</span>
+                    </li>
+                  ))}
+                </ul>
               )}
-            </button>
+            <div className="mt-3 flex items-center justify-between gap-4 border-t border-line pt-3 text-sm">
+              <span className="font-medium text-fg">Banking app pause</span>{yesNo(state.bankingPause)}
+            </div>
+          </Card>
+          <Card>
+            <CardHeader title="Surveys" actions={<Button variant="ghost" size="sm" onClick={() => goTo(2)}>Edit</Button>} />
+            {state.addSchedule === 'add' ? (
+              <DescriptionList items={[
+                { label: 'Schedule', value: state.schedule.name.trim() || <span className="text-danger">Missing name</span> },
+                { label: 'When', value: timingSummary(state.schedule) },
+                { label: 'Expires after', value: `${state.schedule.expiry_minutes} min` },
+                { label: 'Notification', value: state.schedule.notification_title || '—' },
+              ]} />
+            ) : <p className="text-sm text-subtle">No survey schedule. Add one later in Surveys → Setup.</p>}
+          </Card>
+          {isAdmin && (
+            <Card>
+              <CardHeader title="Status after creating" />
+              <ChoiceCards label="Status after creating" value={startAs} onChange={setStartAs}
+                options={[
+                  { value: 'active', label: 'Active now', description: 'Approved straight away. Participants can join immediately.' },
+                  { value: 'draft', label: 'Pending approval', description: 'Participants cannot join until you approve it.' },
+                ]} />
+            </Card>
+          )}
+          {submitError && <Notice notice={{ tone: 'error', text: submitError }} onClose={() => setSubmitError(null)} />}
+          {created && created.problems.length > 0 && (
+            <div className="space-y-3">
+              <Notice notice={{ tone: 'error', text: `The study was created, but ${created.problems.join(', and ')}. You can fix this in the study's settings.` }} />
+              <div className="flex flex-wrap gap-2">
+                <ButtonLink href={studyPaths(created.id).overview}>Go to the study</ButtonLink>
+                <ButtonLink variant="secondary" href={studyPaths(created.id).settings}>Open settings</ButtonLink>
+              </div>
+            </div>
           )}
         </div>
+      )}
+
+      {showErrors && stepErrors[step] && (
+        <p role="alert" className="mt-4 text-sm font-medium text-danger">Fix the highlighted fields to continue.</p>
+      )}
+
+      <div className="mt-6 flex items-center justify-between gap-3 border-t border-line pt-4">
+        {step === 0
+          ? <ButtonLink variant="secondary" href="/studies">Cancel</ButtonLink>
+          : <Button variant="secondary" onClick={() => goTo(step - 1)} disabled={submitting}><ArrowLeft size={14} aria-hidden="true" /> Back</Button>}
+        {step < STEPS.length - 1 ? (
+          <Button onClick={next}>Continue <ArrowRight size={14} aria-hidden="true" /></Button>
+        ) : (
+          <Button onClick={handleCreate} loading={submitting} disabled={!!created}>
+            {!submitting && <Check size={14} aria-hidden="true" />} {submitting ? 'Creating…' : 'Create study'}
+          </Button>
+        )}
       </div>
     </div>
   )
