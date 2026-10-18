@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { GitMerge } from 'lucide-react'
 
@@ -14,17 +14,15 @@ type Audit = {
 }
 
 export function MergeAudit({ studyId, names }: { studyId: string; names: Record<string, string> }) {
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
   const [rows, setRows] = useState<Audit[]>([])
-  const load = useCallback(async () => {
-    const { data } = await supabase.from('participant_merge_audit').select('*')
+  useEffect(() => {
+    let cancelled = false
+    supabase.from('participant_merge_audit').select('*')
       .eq('study_id', studyId).order('merged_at', { ascending: false }).limit(20)
-    setRows((data || []) as Audit[])
-  }, [studyId]) // eslint-disable-line react-hooks/exhaustive-deps
-  // The effect starts an external database synchronization; state is updated
-  // asynchronously after the request resolves.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void load() }, [load])
+      .then(({ data }) => { if (!cancelled) setRows((data || []) as Audit[]) })
+    return () => { cancelled = true }
+  }, [supabase, studyId])
   if (!rows.length) return null
   return <details className="rounded-xl border border-gray-200 bg-white">
     <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-700 flex items-center gap-2">

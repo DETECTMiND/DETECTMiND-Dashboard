@@ -8,7 +8,7 @@ import {
   AlertTriangle, Clock, Smartphone, Pencil, Check, ChevronDown,
   Database, MessageSquare, Search, X, Activity, RefreshCw,
   TrendingUp, Zap, AlertCircle, CheckCircle, ShieldCheck, ShieldAlert,
-  ChartColumn, CircleAlert, GitMerge, Hourglass,
+  ChartColumn, CircleAlert, GitMerge, Hourglass, Trash2, FileCheck2,
 } from 'lucide-react'
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
 import { MergeSuggestions } from '@/components/participant-merge'
@@ -16,6 +16,9 @@ import { PermissionHistoryModal } from '@/components/permission-history-modal'
 import { PinLockouts } from '@/components/pin-lockouts'
 import { MergeAudit } from '@/components/merge-audit'
 import { avatarColor, avatarInitial } from '@/components/participant-ui'
+import { useStudyAccess } from '@/lib/access'
+import { Notice, ReadOnlyBanner, errorText, type NoticeState } from '@/components/feedback'
+import { DeleteParticipantModal } from '@/components/delete-participant-modal'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -33,13 +36,11 @@ interface Participant {
   merged_into?: string | null
   merged_at?: string | null
   merge_adopted_at?: string | null
+  consent_version?: string | null
+  consent_at?: string | null
 }
 
 const STATUS_OPTIONS = ['active', 'withdrawn']
-const STATUS_STYLES: Record<string, string> = {
-  active:    'bg-emerald-50 text-emerald-700 border border-emerald-200',
-  withdrawn: 'bg-red-50 text-red-600 border border-red-200',
-}
 
 type FilterKey = 'all' | 'issues' | 'active' | 'withdrawn' | 'stale' | 'perm_missing'
 
@@ -89,15 +90,6 @@ function Chip({ tone, icon, title, children }: {
   )
 }
 
-function syncCellColor(rows: SyncRow[]): string {
-  if (!rows.length) return '#e5e7eb'
-  const hasError   = rows.some(r => r.status === 'error')
-  const hasPartial = rows.some(r => r.status === 'partial')
-  if (hasError)   return '#fca5a5'
-  if (hasPartial) return '#fcd34d'
-  return '#34d399'
-}
-
 function syncCellIntensity(rows: SyncRow[], maxPerDay: number): string {
   if (!rows.length) return '#e5e7eb'
   const hasError   = rows.some(r => r.status === 'error')
@@ -116,13 +108,14 @@ interface SyncModalProps {
 }
 
 function SyncHistoryModal({ participant, onClose }: SyncModalProps) {
-  const supabase = createClient()
-  const [rows, setRows] = useState<SyncRow[] | null>(null)
-  const [loading, setLoading] = useState(false)
+  const supabase = useMemo(() => createClient(), [])
+  const [result, setResult] = useState<{ range: string; rows: SyncRow[] } | null>(null)
   const [range, setRange] = useState<'30d' | '90d' | 'all'>('90d')
+  const [tick, setTick] = useState(0)
+  const fetchKey = `${range}:${tick}`
 
-  const fetchRows = useCallback(async () => {
-    setLoading(true)
+  useEffect(() => {
+    let cancelled = false
     let q = supabase
       .from('sync_log')
       .select('synced_at, status, records_synced, participant_id')
@@ -134,12 +127,13 @@ function SyncHistoryModal({ participant, onClose }: SyncModalProps) {
       since.setDate(since.getDate() - days)
       q = q.gte('synced_at', since.toISOString())
     }
-    const { data } = await q.limit(2000)
-    setRows((data || []) as SyncRow[])
-    setLoading(false)
-  }, [participant.id, range])
-
-  useEffect(() => { fetchRows() }, [fetchRows])
+    q.limit(2000).then(({ data }) => {
+      if (!cancelled) setResult({ range: fetchKey, rows: (data || []) as SyncRow[] })
+    })
+    return () => { cancelled = true }
+  }, [supabase, participant.id, range, fetchKey])
+  const rows = result?.rows ?? null
+  const loading = result?.range !== fetchKey
 
   // Close on Escape
   useEffect(() => {
@@ -250,7 +244,7 @@ function SyncHistoryModal({ participant, onClose }: SyncModalProps) {
               ))}
             </div>
             <button
-              onClick={fetchRows}
+              onClick={() => setTick(t => t + 1)}
               disabled={loading}
               className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all disabled:opacity-50"
               title="Refresh"
@@ -403,8 +397,8 @@ function SyncHistoryModal({ participant, onClose }: SyncModalProps) {
                     <YAxis yAxisId="syncs" orientation="right" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={30} />
                     <Tooltip
                       contentStyle={{ fontSize: 11, borderRadius: 8 }}
-                      formatter={(v: any, name: any) => {
-                        if (name === 'records') return [v.toLocaleString(), 'Records']
+                      formatter={(v, name) => {
+                        if (name === 'records') return [Number(v).toLocaleString(), 'Records']
                         if (name === 'syncs') return [v, 'Syncs']
                         return [v, 'Errors']
                       }}
@@ -481,7 +475,10 @@ function SyncHistoryModal({ participant, onClose }: SyncModalProps) {
 function ParticipantsContent() {
   const { id: studyId } = useParams()
   const searchParams = useSearchParams()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
+  const access = useStudyAccess(studyId as string)
+  const [notice, setNotice] = useState<NoticeState>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Participant | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [editingLabel, setEditingLabel] = useState<string | null>(null)
   const [labelValue, setLabelValue] = useState('')
@@ -497,18 +494,13 @@ function ParticipantsContent() {
     return (f && ['all', 'issues', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
   })
 
-  async function load() {
-    const [{ data }, { data: study }] = await Promise.all([
+  const fetchAll = useCallback(async () => {
+    const [{ data, error }, { data: study }] = await Promise.all([
       supabase.from('participants').select('*')
         .eq('study_id', studyId).order('enrolled_at', { ascending: false }),
       supabase.from('studies').select('sync_interval_minutes').eq('id', studyId).maybeSingle(),
     ])
-    const interval = Number(study?.sync_interval_minutes)
-    if (Number.isFinite(interval) && interval > 0) setSyncIntervalMinutes(interval)
     const rows = (data || []) as Participant[]
-    setParticipants(rows)
-    const requestedParticipant = searchParams.get('participant')
-    if (requestedParticipant) setDetailParticipant(rows.find(p => p.id === requestedParticipant) || null)
     const ids = new Set(rows.map(p => p.id))
     const { data: logs } = ids.size
       ? await supabase.from('sync_log').select('synced_at,status,records_synced,participant_id,error_message')
@@ -518,21 +510,51 @@ function ParticipantsContent() {
     for (const log of (logs || []) as SyncRow[]) {
       if (ids.has(log.participant_id) && !newest[log.participant_id]) newest[log.participant_id] = log
     }
-    setLatestSync(newest)
+    return { rows, newest, interval: Number(study?.sync_interval_minutes), error }
+  }, [supabase, studyId])
+
+  const apply = useCallback((res: Awaited<ReturnType<typeof fetchAll>>, initial: boolean) => {
+    if (Number.isFinite(res.interval) && res.interval > 0) setSyncIntervalMinutes(res.interval)
+    setParticipants(res.rows)
+    setLatestSync(res.newest)
+    if (res.error) setNotice({ tone: 'error', text: `Could not load participants: ${errorText(res.error)}` })
+    if (initial) {
+      const requested = searchParams.get('participant')
+      if (requested) setDetailParticipant(res.rows.find(p => p.id === requested) || null)
+    } else {
+      setDetailParticipant(current => current ? res.rows.find(p => p.id === current.id) || null : null)
+    }
+  }, [searchParams])
+
+  const load = useCallback(async () => apply(await fetchAll(), false), [apply, fetchAll])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchAll().then(res => { if (!cancelled) apply(res, true) })
+    return () => { cancelled = true }
+  }, [fetchAll, apply])
+
+  // PostgREST reports an RLS-filtered UPDATE as success with zero rows, so ask
+  // for the updated ids back to tell "saved" from "not allowed".
+  async function updateParticipant(participantId: string, patch: Partial<Participant>, what: string) {
+    const { data, error } = await supabase.from('participants').update(patch).eq('id', participantId).select('id')
+    if (error || !data?.length) {
+      setNotice({ tone: 'error', text: `Could not save ${what}: ${error ? errorText(error) : 'you do not have permission to edit participants in this study.'}` })
+      return false
+    }
+    return true
   }
 
-  useEffect(() => { load() }, [studyId])
-
   async function saveLabel(participantId: string) {
-    await supabase.from('participants').update({ label: labelValue }).eq('id', participantId)
-    setEditingLabel(null)
-    load()
+    const ok = await updateParticipant(participantId, { label: labelValue.trim() || null }, 'the label')
+    if (ok) setEditingLabel(null)
+    await load()
   }
 
   async function updateStatus(participantId: string, status: string) {
-    await supabase.from('participants').update({ status }).eq('id', participantId)
-    setDetailParticipant(current => current?.id === participantId ? { ...current, status } : current)
-    load()
+    const ok = await updateParticipant(participantId, { status }, 'the status')
+    if (ok) setNotice({ tone: 'success', text: `Participant marked ${status}.` })
+    await load()
   }
 
   function getMissingPermissions(p: Participant): string[] {
@@ -604,12 +626,15 @@ function ParticipantsContent() {
         </div>
       </div>
 
+      {!access.loading && !access.canEdit && <ReadOnlyBanner />}
+      <Notice notice={notice} onClose={() => setNotice(null)} />
+
       {/* Duplicate-participant merge suggestions */}
-      {participants.length > 0 && (
+      {participants.length > 0 && access.canEdit && (
         <MergeSuggestions participants={participants} onMerged={load} />
       )}
 
-      <PinLockouts studyId={studyId as string} />
+      <PinLockouts studyId={studyId as string} canEdit={access.canEdit} />
       <MergeAudit
         studyId={studyId as string}
         names={Object.fromEntries(participants.map(p => [p.id, pName(p)]))}
@@ -736,7 +761,7 @@ function ParticipantsContent() {
                           <button onClick={() => saveLabel(p.id)} className="p-1 rounded-md text-blue-600 hover:bg-blue-50" title="Save"><Check size={14} /></button>
                           <button onClick={() => setEditingLabel(null)} className="p-1 rounded-md text-gray-400 hover:bg-gray-100" title="Cancel"><X size={14} /></button>
                         </div>
-                      ) : (
+                      ) : access.canEdit ? (
                         <button
                           onClick={() => { setEditingLabel(p.id); setLabelValue(p.label || '') }}
                           className="group/name flex items-center gap-1.5 max-w-full text-[15px] font-semibold text-gray-900 hover:text-blue-600 transition-colors"
@@ -745,6 +770,8 @@ function ParticipantsContent() {
                           <span className="truncate">{name}</span>
                           <Pencil size={12} className="shrink-0 text-gray-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
                         </button>
+                      ) : (
+                        <p className="truncate text-[15px] font-semibold text-gray-900">{name}</p>
                       )}
                       {p.label && editingLabel !== p.id && (
                         <p className="text-[11px] text-gray-400 font-mono truncate" title={p.device_id}>{p.device_id}</p>
@@ -762,6 +789,14 @@ function ParticipantsContent() {
                       <span className="hidden sm:inline text-gray-300">|</span>
                       <span title={format(new Date(p.enrolled_at), 'PPpp')}>
                         Enrolled {formatDistanceToNow(new Date(p.enrolled_at), { addSuffix: true })}
+                      </span>
+                      <span className="hidden sm:inline text-gray-300">|</span>
+                      <span
+                        className={`inline-flex items-center gap-1 ${p.consent_version ? '' : 'text-gray-400'}`}
+                        title={p.consent_at ? `Consent accepted ${format(new Date(p.consent_at), 'PPpp')}` : 'This app version did not report a consent version'}
+                      >
+                        <FileCheck2 size={12} className="shrink-0" />
+                        {p.consent_version ? `Consent ${p.consent_version}` : 'Consent not recorded'}
                       </span>
                       <span className="hidden sm:inline text-gray-300">|</span>
                       <span
@@ -817,6 +852,9 @@ function ParticipantsContent() {
 
                   {/* Status + actions */}
                   <div className="flex items-center gap-2 lg:shrink-0 pt-2.5 lg:pt-0 border-t lg:border-t-0 border-gray-100">
+                    {!access.canEdit ? (
+                      <span className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${p.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>{p.status}</span>
+                    ) : (
                     <div className="relative">
                       <select
                         value={p.status}
@@ -833,6 +871,7 @@ function ParticipantsContent() {
                       <span className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${p.status === 'active' ? 'bg-emerald-500' : 'bg-gray-400'}`} />
                       <ChevronDown size={12} className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 ${p.status === 'active' ? 'text-emerald-600' : 'text-gray-500'}`} />
                     </div>
+                    )}
 
                     <div className="ml-auto lg:ml-0 flex items-center rounded-lg border border-gray-200 bg-white divide-x divide-gray-200 overflow-hidden">
                       <Link href={`/studies/${studyId}/data?participant=${p.id}`} className={ACTION_BTN} title="View sensor data">
@@ -847,6 +886,11 @@ function ParticipantsContent() {
                       <button onClick={() => setPermModalParticipant(p)} className={ACTION_BTN} title="Permission history">
                         <ShieldCheck size={14} /><span className="hidden xl:inline">Permissions</span>
                       </button>
+                      {access.canManage && (
+                        <button onClick={() => setDeleteTarget(p)} className={`${ACTION_BTN} hover:!bg-red-50 hover:!text-red-600`} title="Delete participant and all their data">
+                          <Trash2 size={14} /><span className="sr-only">Delete</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -871,6 +915,18 @@ function ParticipantsContent() {
           onClose={() => setPermModalParticipant(null)}
         />
       )}
+      {deleteTarget && (
+        <DeleteParticipantModal
+          participant={{ id: deleteTarget.id, name: pName(deleteTarget), deviceId: deleteTarget.device_id }}
+          mergedChildren={participants.filter(x => x.merged_into === deleteTarget.id).map(pName)}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={summary => {
+            setNotice({ tone: 'success', text: summary })
+            setDetailParticipant(null)
+            void load()
+          }}
+        />
+      )}
       {detailParticipant && (
         <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="participant-detail-title">
           <button className="absolute inset-0 bg-slate-950/40" onClick={() => setDetailParticipant(null)} aria-label="Close participant details" />
@@ -882,7 +938,9 @@ function ParticipantsContent() {
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
               <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Status</p><p className="mt-1 text-sm font-semibold capitalize text-gray-900">{detailParticipant.status}</p></div><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Last sync</p><p className="mt-1 text-sm font-semibold text-gray-900">{detailParticipant.last_sync_at ? formatDistanceToNow(new Date(detailParticipant.last_sync_at), { addSuffix: true }) : 'Never'}</p></div></div>
               <div><h3 className="text-sm font-semibold text-gray-900">Health</h3><div className="mt-2 flex flex-wrap gap-2">{isSyncStale(detailParticipant) && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Sync overdue</span>}{hasPermIssue(detailParticipant) && <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">Permission issue</span>}{!isSyncStale(detailParticipant) && !hasPermIssue(detailParticipant) && <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Healthy</span>}</div></div>
-              <div className="border-t border-gray-200 pt-5"><label className="text-sm font-semibold text-gray-900">Participant status<select value={detailParticipant.status} onChange={e => updateStatus(detailParticipant.id, e.target.value)} className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700">{STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}</select></label></div>
+              <div><h3 className="text-sm font-semibold text-gray-900">Consent</h3><p className="mt-1 text-sm text-gray-600">{detailParticipant.consent_version ? <>Version <span className="font-mono">{detailParticipant.consent_version}</span>{detailParticipant.consent_at && <> · accepted {format(new Date(detailParticipant.consent_at), 'PPpp')}</>}</> : 'Not recorded (enrolled with an app version that did not report it).'}</p></div>
+              {access.canEdit && <div className="border-t border-gray-200 pt-5"><label className="text-sm font-semibold text-gray-900">Participant status<select value={detailParticipant.status} onChange={e => updateStatus(detailParticipant.id, e.target.value)} className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700">{STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}</select></label></div>}
+              {access.canManage && <div className="border-t border-gray-200 pt-5"><button onClick={() => setDeleteTarget(detailParticipant)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50"><Trash2 size={14} /> Delete participant…</button></div>}
             </div>
           </aside>
         </div>

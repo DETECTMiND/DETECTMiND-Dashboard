@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { ShieldCheck, X, AlertTriangle, CheckCircle } from 'lucide-react'
 
@@ -61,15 +61,13 @@ export function PermissionHistoryModal({
   participant: Participant
   onClose: () => void
 }) {
-  const supabase = createClient()
-  const [events, setEvents] = useState<EventRow[] | null>(null)
-  const [outages, setOutages] = useState<OutageRow[] | null>(null)
-  const [loading, setLoading] = useState(false)
+  const supabase = useMemo(() => createClient(), [])
+  const [result, setResult] = useState<{ pid: string; events: EventRow[]; outages: OutageRow[] } | null>(null)
   const [tab, setTab] = useState<'outages' | 'events'>('outages')
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    const [evRes, outRes] = await Promise.all([
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
       supabase.from('data_permission_events')
         .select('permission, action, recorded_at')
         .eq('participant_id', participant.id)
@@ -80,13 +78,19 @@ export function PermissionHistoryModal({
         .eq('participant_id', participant.id)
         .order('revoked_at', { ascending: false })
         .limit(2000),
-    ])
-    setEvents((evRes.data || []) as EventRow[])
-    setOutages((outRes.data || []) as OutageRow[])
-    setLoading(false)
-  }, [participant.id])
-
-  useEffect(() => { fetchData() }, [fetchData])
+    ]).then(([evRes, outRes]) => {
+      if (cancelled) return
+      setResult({
+        pid: participant.id,
+        events: (evRes.data || []) as EventRow[],
+        outages: (outRes.data || []) as OutageRow[],
+      })
+    })
+    return () => { cancelled = true }
+  }, [supabase, participant.id])
+  const loading = result?.pid !== participant.id
+  const events = loading ? null : result.events
+  const outages = loading ? null : result.outages
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }

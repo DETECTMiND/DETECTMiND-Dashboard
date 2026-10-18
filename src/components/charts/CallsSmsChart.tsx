@@ -4,10 +4,10 @@ import { useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
+import type { CallSmsRow, ChartParticipant as Participant } from './types'
 
-interface Participant { id: string; label: string | null; device_id: string }
 interface Props {
-  data: any[]
+  data: CallSmsRow[]
   participants: Participant[]
   showParticipant: boolean
   sensorKey: string
@@ -30,9 +30,8 @@ function normaliseDir(v: string | null | undefined): string {
   return 'unknown'
 }
 
-export default function CallsSmsChart({ data, participants, showParticipant, sensorKey }: Props) {
+export default function CallsSmsChart({ data, sensorKey }: Props) {
   const isCalls = sensorKey === 'data_calls'
-  const timeCol = isCalls ? 'event_time' : 'event_time'
 
   const directions = useMemo(() => {
     const dirs = new Set<string>()

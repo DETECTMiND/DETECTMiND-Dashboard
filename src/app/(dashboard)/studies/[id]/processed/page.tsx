@@ -89,7 +89,7 @@ export default function ProcessedDataPage() {
   const [participants, setParticipants] = useState<Participant[]>([])
   const [selected, setSelected] = useState<string>('all')
   const [dataset, setDataset] = useState<DatasetKey>('hourly')
-  const [viewMode, setViewMode] = useState<ViewMode>('table')
+  const [chosenViewMode, setViewMode] = useState<ViewMode>('table')
   const [overallMode, setOverallMode] = useState<OverallMode>('avg')
 
   const [rowsByView, setRowsByView] = useState<Record<string, Row[]>>({})
@@ -127,10 +127,10 @@ export default function ProcessedDataPage() {
     load()
   }, [def.view, participants]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keep view mode valid when switching datasets.
-  useEffect(() => { if (!canChart) setViewMode('table') }, [canChart])
+  // Datasets without a chart always show the table.
+  const viewMode: ViewMode = canChart ? chosenViewMode : 'table'
 
-  const rawRows = rowsByView[def.view] || []
+  const rawRows = useMemo(() => rowsByView[def.view] || [], [rowsByView, def.view])
   const scoped = useMemo(
     () => isOverall ? rawRows : rawRows.filter(r => r.participant_id === selected),
     [rawRows, selected, isOverall],

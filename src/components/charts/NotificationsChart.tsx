@@ -4,14 +4,15 @@ import { useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
+import type { NotificationRow } from './types'
 
 interface Props {
-  data: any[]
+  data: NotificationRow[]
   participants: { id: string; label: string | null; device_id: string }[]
   showParticipant: boolean
 }
 
-export default function NotificationsChart({ data, participants, showParticipant }: Props) {
+export default function NotificationsChart({ data }: Props) {
   const spanDays = useMemo(() => {
     if (!data.length) return 0
     const times = data.map(r => new Date(r.posted_at).getTime())
@@ -177,7 +178,7 @@ export default function NotificationsChart({ data, participants, showParticipant
               tick={{ fontSize: 11 }}
               tickFormatter={(v: string) => v.length > 20 ? v.slice(0, 19) + '…' : v}
             />
-            <Tooltip formatter={(v: any) => [v, 'Notifications']} />
+            <Tooltip formatter={v => [v, 'Notifications']} />
             <Bar dataKey="count" fill="#3b82f6" radius={[0, 3, 3, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>

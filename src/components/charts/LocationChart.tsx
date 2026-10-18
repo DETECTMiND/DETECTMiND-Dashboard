@@ -5,12 +5,12 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
+import type { ChartParticipant as Participant, ChartPoint, LocationRow } from './types'
 
 const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
 
-interface Participant { id: string; label: string | null; device_id: string }
 interface Props {
-  data: any[]
+  data: LocationRow[]
   participants: Participant[]
   showParticipant: boolean
 }
@@ -167,7 +167,7 @@ export default function LocationChart({ data, participants, showParticipant }: P
     return Array.from(dateMap.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, byP]) => {
-        const entry: any = { date }
+        const entry: ChartPoint = { date }
         for (const pid of pIds) {
           const pts = byP[pid]
           if (!pts || pts.lats.length < 2) { entry[pid] = 0; continue }
@@ -242,7 +242,7 @@ export default function LocationChart({ data, participants, showParticipant }: P
             <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
             <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
             <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit=" km" />
-            <Tooltip formatter={(v: any) => [`${v} km`]} />
+            <Tooltip formatter={v => [`${v} km`]} />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             {pIds.map((pid, idx) => {
               const p = pMap[pid]

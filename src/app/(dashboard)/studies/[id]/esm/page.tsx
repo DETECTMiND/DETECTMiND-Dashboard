@@ -1,7 +1,9 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useStudyAccess } from '@/lib/access'
+import { Notice, ReadOnlyBanner, errorText, type NoticeState } from '@/components/feedback'
 import { useParams } from 'next/navigation'
 import {
   Plus, Trash2, Clock, Shuffle, AlignLeft,
@@ -34,7 +36,17 @@ interface Question {
   question_text: string
   required: boolean
   options: string[] | null
-  config: Record<string, any>
+  config: QuestionConfig
+}
+
+// esm_questions.config (likert / slider / number)
+interface QuestionConfig {
+  min?: number
+  max?: number
+  step?: number
+  label_min?: string
+  label_max?: string
+  [key: string]: unknown
 }
 
 type ScheduleForm = {
@@ -183,14 +195,15 @@ function buildQuestionPayload(f: QuestionForm, order: number) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${checked ? 'bg-blue-500' : 'bg-gray-200'}`}
+      disabled={disabled}
+      onClick={e => { e.stopPropagation(); onChange(!checked) }}
+      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60 ${checked ? 'bg-blue-500' : 'bg-gray-200'}`}
     >
       <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${checked ? 'translate-x-4' : ''}`} />
     </button>
@@ -623,8 +636,11 @@ function QuestionFormBody({ form, setForm }: { form: QuestionForm; setForm: (f: 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ESMPage() {
-  const { id: studyId } = useParams()
-  const supabase = createClient()
+  const { id: studyId } = useParams<{ id: string }>()
+  const supabase = useMemo(() => createClient(), [])
+  const access = useStudyAccess(studyId)
+  const canEdit = access.canEdit
+  const [notice, setNotice] = useState<NoticeState>(null)
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
@@ -643,36 +659,66 @@ export default function ESMPage() {
 
   // ── Data loading ───────────────────────────────────────────────────────────
 
-  async function loadSchedules() {
-    const { data } = await supabase
+  const fetchSchedules = useCallback(async () => {
+    const { data, error } = await supabase
       .from('esm_schedules').select('*').eq('study_id', studyId).order('created_at')
     const list = (data || []) as Schedule[]
-    setSchedules(list)
-    if (list.length > 0 && !selectedSchedule) setSelectedSchedule(list[0])
     const counts: Record<string, number> = {}
     await Promise.all(list.map(async s => {
       const { count } = await supabase
         .from('esm_questions').select('*', { count: 'exact', head: true }).eq('schedule_id', s.id)
       counts[s.id] = count || 0
     }))
-    setQuestionCounts(counts)
+    return { list, counts, error }
+  }, [supabase, studyId])
+
+  const applySchedules = useCallback((res: Awaited<ReturnType<typeof fetchSchedules>>) => {
+    setSchedules(res.list)
+    setQuestionCounts(res.counts)
+    if (res.error) setNotice({ tone: 'error', text: `Could not load schedules: ${errorText(res.error)}` })
+    setSelectedSchedule(current => (current && res.list.find(s => s.id === current.id)) || res.list[0] || null)
+  }, [])
+
+  async function loadSchedules() {
+    applySchedules(await fetchSchedules())
   }
 
   async function loadQuestions(scheduleId: string) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('esm_questions').select('*').eq('schedule_id', scheduleId).order('question_order')
+    if (error) setNotice({ tone: 'error', text: `Could not load questions: ${errorText(error)}` })
     setQuestions((data || []) as Question[])
   }
 
-  useEffect(() => { loadSchedules() }, [studyId])
+  // Changing the selected schedule also closes any open editors.
+  function selectSchedule(next: Schedule | null) {
+    setSelectedSchedule(next)
+    setEditingSchedule(false)
+    setShowAddQuestion(false)
+    setEditingQuestionId(null)
+  }
+
   useEffect(() => {
-    if (selectedSchedule) {
-      setEditingSchedule(false)
-      setShowAddQuestion(false)
-      setEditingQuestionId(null)
-      loadQuestions(selectedSchedule.id)
-    }
-  }, [selectedSchedule?.id])
+    let cancelled = false
+    fetchSchedules().then(res => { if (!cancelled) applySchedules(res) })
+    return () => { cancelled = true }
+  }, [fetchSchedules, applySchedules])
+
+  const selectedId = selectedSchedule?.id
+  useEffect(() => {
+    if (!selectedId) return
+    let cancelled = false
+    supabase.from('esm_questions').select('*').eq('schedule_id', selectedId).order('question_order')
+      .then(({ data }) => { if (!cancelled) setQuestions((data || []) as Question[]) })
+    return () => { cancelled = true }
+  }, [supabase, selectedId])
+
+  /** Shows an error banner for a failed write; RLS-blocked updates return 0 rows. */
+  function failed(error: { message: string } | null, rows: unknown[] | null | undefined, what: string): boolean {
+    if (!error && rows && rows.length > 0) return false
+    setNotice({ tone: 'error', text: `Could not ${what}: ${error ? errorText(error) : 'you do not have permission to edit this study.'}` })
+    return true
+  }
 
   // ── Schedule actions ───────────────────────────────────────────────────────
 
@@ -680,30 +726,30 @@ export default function ESMPage() {
     e.preventDefault()
     const { data, error } = await supabase.from('esm_schedules')
       .insert({ study_id: studyId, ...buildSchedulePayload(createScheduleForm) })
-      .select().single()
-    if (!error) {
-      setShowCreateSchedule(false)
-      setCreateScheduleForm(BLANK_SCHEDULE_FORM)
-      await loadSchedules()
-      if (data) setSelectedSchedule(data as Schedule)
-    }
+      .select()
+    if (failed(error, data, 'create the schedule')) return
+    setShowCreateSchedule(false)
+    setCreateScheduleForm(BLANK_SCHEDULE_FORM)
+    await loadSchedules()
+    if (data?.[0]) selectSchedule(data[0] as Schedule)
   }
 
   async function saveScheduleEdit(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedSchedule) return
     const payload = buildSchedulePayload(editScheduleForm)
-    const { error } = await supabase.from('esm_schedules').update(payload).eq('id', selectedSchedule.id)
-    if (!error) {
-      const updated = { ...selectedSchedule, ...payload } as Schedule
-      setSchedules(prev => prev.map(s => s.id === updated.id ? updated : s))
-      setSelectedSchedule(updated)
-      setEditingSchedule(false)
-    }
+    const { data, error } = await supabase.from('esm_schedules').update(payload).eq('id', selectedSchedule.id).select('id')
+    if (failed(error, data, 'save the schedule')) return
+    const updated = { ...selectedSchedule, ...payload } as Schedule
+    setSchedules(prev => prev.map(s => s.id === updated.id ? updated : s))
+    setSelectedSchedule(updated)
+    setEditingSchedule(false)
+    setNotice({ tone: 'success', text: 'Schedule saved.' })
   }
 
   async function toggleSchedule(s: Schedule) {
-    await supabase.from('esm_schedules').update({ enabled: !s.enabled }).eq('id', s.id)
+    const { data, error } = await supabase.from('esm_schedules').update({ enabled: !s.enabled }).eq('id', s.id).select('id')
+    if (failed(error, data, s.enabled ? 'pause the schedule' : 'enable the schedule')) return
     const updated = { ...s, enabled: !s.enabled }
     setSchedules(prev => prev.map(x => x.id === s.id ? updated : x))
     if (selectedSchedule?.id === s.id) setSelectedSchedule(updated)
@@ -711,22 +757,14 @@ export default function ESMPage() {
 
   async function deleteSchedule(id: string) {
     if (!confirm('Delete this schedule and all its questions?')) return
-    await supabase.from('esm_schedules').delete().eq('id', id)
-    const { data } = await supabase
-      .from('esm_schedules').select('*').eq('study_id', studyId).order('created_at')
-    const list = (data || []) as Schedule[]
-    setSchedules(list)
-    const next = list[0] ?? null
-    setSelectedSchedule(next)
-    if (next) loadQuestions(next.id)
-    else setQuestions([])
-    const counts: Record<string, number> = {}
-    await Promise.all(list.map(async s => {
-      const { count } = await supabase
-        .from('esm_questions').select('*', { count: 'exact', head: true }).eq('schedule_id', s.id)
-      counts[s.id] = count || 0
-    }))
-    setQuestionCounts(counts)
+    const { data: removed, error } = await supabase.from('esm_schedules').delete().eq('id', id).select('id')
+    if (failed(error, removed, 'delete the schedule')) return
+    const res = await fetchSchedules()
+    setSchedules(res.list)
+    setQuestionCounts(res.counts)
+    const next = res.list[0] ?? null
+    selectSchedule(next)
+    if (!next) setQuestions([])
   }
 
   // ── Question actions ───────────────────────────────────────────────────────
@@ -737,10 +775,11 @@ export default function ESMPage() {
     const nextOrder = questions.length > 0
       ? Math.max(...questions.map(q => q.question_order)) + 1
       : 0
-    await supabase.from('esm_questions').insert({
+    const { data, error } = await supabase.from('esm_questions').insert({
       schedule_id: selectedSchedule.id,
       ...buildQuestionPayload(addQuestionForm, nextOrder),
-    })
+    }).select('id')
+    if (failed(error, data, 'add the question')) return
     setShowAddQuestion(false)
     setAddQuestionForm(BLANK_QUESTION_FORM)
     loadQuestions(selectedSchedule.id)
@@ -751,9 +790,10 @@ export default function ESMPage() {
     e.preventDefault()
     const scheduleId = selectedSchedule?.id
     if (!scheduleId) return
-    await supabase.from('esm_questions')
+    const { data, error } = await supabase.from('esm_questions')
       .update(buildQuestionPayload(editQuestionForm, q.question_order))
-      .eq('id', q.id)
+      .eq('id', q.id).select('id')
+    if (failed(error, data, 'save the question')) return
     setEditingQuestionId(null)
     loadQuestions(scheduleId)
   }
@@ -761,7 +801,8 @@ export default function ESMPage() {
   async function deleteQuestion(qId: string) {
     const scheduleId = selectedSchedule?.id
     if (!scheduleId) return
-    await supabase.from('esm_questions').delete().eq('id', qId)
+    const { data, error } = await supabase.from('esm_questions').delete().eq('id', qId).select('id')
+    if (failed(error, data, 'delete the question')) return
     loadQuestions(scheduleId)
     setQuestionCounts(c => ({
       ...c,
@@ -781,7 +822,7 @@ export default function ESMPage() {
             <h1 className="text-2xl font-bold text-gray-900">Survey Setup</h1>
             <p className="text-gray-500 text-sm mt-0.5">Experience sampling schedules and survey questions</p>
           </div>
-          {!showCreateSchedule && (
+          {canEdit && !showCreateSchedule && (
             <button
               onClick={() => { setShowCreateSchedule(true); setCreateScheduleForm(BLANK_SCHEDULE_FORM) }}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm"
@@ -792,8 +833,11 @@ export default function ESMPage() {
         </div>
       </div>
 
+      {!access.loading && !canEdit && <ReadOnlyBanner />}
+      <Notice notice={notice} onClose={() => setNotice(null)} />
+
       {/* Create schedule panel */}
-      {showCreateSchedule && (
+      {canEdit && showCreateSchedule && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <h2 className="font-semibold text-gray-900">New Schedule</h2>
@@ -838,12 +882,12 @@ export default function ESMPage() {
             <div className="bg-white border border-dashed border-gray-200 rounded-xl py-10 text-center">
               <ClipboardList size={28} className="mx-auto text-gray-300 mb-2" />
               <p className="text-gray-400 text-sm font-medium">No schedules yet</p>
-              <button
+              {canEdit && <button
                 onClick={() => setShowCreateSchedule(true)}
                 className="mt-2 text-blue-600 text-sm font-semibold hover:text-blue-700 transition-colors"
               >
                 + Create one
-              </button>
+              </button>}
             </div>
           ) : schedules.map(s => {
             const typeInfo = SCHEDULE_TYPES.find(t => t.key === s.schedule_type)!
@@ -851,7 +895,7 @@ export default function ESMPage() {
             return (
               <div
                 key={s.id}
-                onClick={() => { setSelectedSchedule(s); setEditingSchedule(false) }}
+                onClick={() => { if (selectedSchedule?.id !== s.id) selectSchedule(s) }}
                 className={`group bg-white rounded-xl border cursor-pointer transition-all overflow-hidden ${
                   isSelected
                     ? 'border-blue-400 ring-1 ring-blue-100 shadow-sm'
@@ -875,13 +919,13 @@ export default function ESMPage() {
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-2 shrink-0 mt-0.5">
-                      <Toggle checked={s.enabled} onChange={e => { e; toggleSchedule(s) }} />
-                      <button
+                      <Toggle checked={s.enabled} disabled={!canEdit} onChange={() => toggleSchedule(s)} />
+                      {canEdit && <button
                         onClick={e => { e.stopPropagation(); deleteSchedule(s.id) }}
                         className="text-gray-200 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
                       >
                         <Trash2 size={13} />
-                      </button>
+                      </button>}
                     </div>
                   </div>
                 </div>
@@ -965,9 +1009,10 @@ export default function ESMPage() {
                 <div className="flex items-center gap-2 shrink-0">
                   <Toggle
                     checked={selectedSchedule.enabled}
+                    disabled={!canEdit}
                     onChange={() => toggleSchedule(selectedSchedule)}
                   />
-                  <button
+                  {canEdit && <button
                     onClick={() => {
                       setEditScheduleForm(scheduleToForm(selectedSchedule))
                       setEditingSchedule(true)
@@ -975,7 +1020,7 @@ export default function ESMPage() {
                     className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition-all"
                   >
                     <Pencil size={12} /> Edit
-                  </button>
+                  </button>}
                 </div>
               </div>
 
@@ -1020,7 +1065,7 @@ export default function ESMPage() {
                 <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                   Questions · {questions.length}
                 </p>
-                {!showAddQuestion && !editingQuestionId && (
+                {canEdit && !showAddQuestion && !editingQuestionId && (
                   <button
                     onClick={() => { setShowAddQuestion(true); setAddQuestionForm(BLANK_QUESTION_FORM) }}
                     className="flex items-center gap-1.5 text-blue-600 hover:text-blue-700 text-sm font-semibold transition-colors"
@@ -1035,12 +1080,12 @@ export default function ESMPage() {
                   <ClipboardList size={28} className="mx-auto text-gray-300 mb-2" />
                   <p className="text-gray-500 text-sm font-medium">No questions yet</p>
                   <p className="text-gray-400 text-xs mt-1">Add questions participants will answer</p>
-                  <button
+                  {canEdit && <button
                     onClick={() => setShowAddQuestion(true)}
                     className="mt-3 text-blue-600 text-sm font-semibold hover:text-blue-700 transition-colors"
                   >
                     + Add the first question
-                  </button>
+                  </button>}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -1120,15 +1165,15 @@ export default function ESMPage() {
                             <div className="mt-2">
                               <div className="flex items-center gap-1 flex-wrap">
                                 {Array.from(
-                                  { length: Math.min(Math.ceil((q.config.max - q.config.min) / (q.config.step || 1)) + 1, 10) },
-                                  (_, idx) => q.config.min + idx * (q.config.step || 1)
+                                  { length: Math.min(Math.ceil(((q.config.max ?? 0) - (q.config.min ?? 0)) / (q.config.step || 1)) + 1, 10) },
+                                  (_, idx) => (q.config.min ?? 0) + idx * (q.config.step || 1)
                                 ).map(v => (
                                   <span key={v} className="w-6 h-6 rounded border border-gray-200 bg-gray-50 flex items-center justify-center text-[10px] font-semibold text-gray-500">
                                     {v}
                                   </span>
                                 ))}
-                                {Math.ceil((q.config.max - q.config.min) / (q.config.step || 1)) >= 10 && (
-                                  <span className="text-[10px] text-gray-400">…{q.config.max}</span>
+                                {Math.ceil(((q.config.max ?? 0) - (q.config.min ?? 0)) / (q.config.step || 1)) >= 10 && (
+                                  <span className="text-[10px] text-gray-400">…{(q.config.max ?? 0)}</span>
                                 )}
                               </div>
                               {(q.config.label_min || q.config.label_max) && (
@@ -1156,7 +1201,7 @@ export default function ESMPage() {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5">
+                        {canEdit && <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 mt-0.5">
                           <button
                             onClick={() => {
                               setEditingQuestionId(q.id)
@@ -1173,7 +1218,7 @@ export default function ESMPage() {
                           >
                             <Trash2 size={13} />
                           </button>
-                        </div>
+                        </div>}
                       </div>
                     )
                   })}

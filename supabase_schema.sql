@@ -14,8 +14,11 @@
 --     configuration, INSERT data rows for its own (canonical, active)
 --     participant, and call the device_* RPCs. It cannot read, insert or
 --     update participants directly.
---   * Dashboard = Supabase Auth users listed in public.researchers.
---     Every researcher policy is is_researcher(); being merely
+--   * Dashboard = Supabase Auth users with an ACTIVE row in
+--     public.researchers (role admin | researcher). Admins see and manage
+--     everything. Other researchers see only studies they are members of
+--     (study_members: owner | editor | viewer), through can_view_study(),
+--     can_edit_study() and can_manage_study(). Being merely
 --     "authenticated" grants nothing.
 -- ============================================================
 
@@ -40,7 +43,7 @@ CREATE TABLE studies (
     description TEXT,
     app_description TEXT, -- shown in the mobile app
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'paused', 'completed')),
-    created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    created_by UUID DEFAULT auth.uid() REFERENCES auth.users(id) ON DELETE SET NULL,
     config JSONB DEFAULT '{}', -- general study config
     sync_interval_minutes INT NOT NULL DEFAULT 30,
     -- Optional 4-digit enrolment PIN. The hash lives in study_pins (never
@@ -69,17 +72,57 @@ CREATE TABLE participants (
     merged_into UUID REFERENCES participants(id),
     merged_at TIMESTAMPTZ,
     merge_adopted_at TIMESTAMPTZ,
+    -- Version of the consent text the participant accepted in the app, and
+    -- when (set by enroll_participant; NULL for an app that did not send it).
+    consent_version TEXT,
+    consent_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(study_id, device_id)
 );
 
--- Dashboard users allowed to see and manage study data. Add one with:
---   INSERT INTO researchers(user_id) SELECT id FROM auth.users WHERE email = '...';
+-- Dashboard users. Rows are created by the dashboard's server-side admin API
+-- (service role) when an admin invites someone, or by seed_studies.sql.
+--   role admin      : sees and manages every study, researcher and the audit log
+--   role researcher : sees only studies they are a member of (study_members)
+--   active = false  : no access at all (deactivated), row kept for the audit trail
+-- email is copied at invite time for display (auth.users is not client-readable).
 CREATE TABLE researchers (
     user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    added_at TIMESTAMPTZ DEFAULT now()
+    email TEXT,
+    display_name TEXT,
+    role TEXT NOT NULL DEFAULT 'researcher' CHECK (role IN ('admin', 'researcher')),
+    active BOOLEAN NOT NULL DEFAULT true,
+    added_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Per-study access for non-admin researchers.
+--   owner  : everything an editor can do + manage members, delete participants
+--   editor : edit study settings, sensors, surveys, PIN, participants (label/status, merge)
+--   viewer : read-only
+CREATE TABLE study_members (
+    study_id UUID NOT NULL REFERENCES studies(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+    added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (study_id, user_id)
+);
+CREATE INDEX idx_study_members_user ON study_members(user_id);
+
+-- Append-only record of sensitive actions. Admin-readable only. Written by
+-- SECURITY DEFINER functions/triggers and by the dashboard's admin API.
+CREATE TABLE audit_log (
+    id BIGSERIAL PRIMARY KEY,
+    actor UUID DEFAULT auth.uid(),
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_audit_log_at ON audit_log(at DESC);
+CREATE INDEX idx_audit_log_action ON audit_log(action, at DESC);
 
 -- ============================================================
 -- SENSOR CONFIGURATION (configurable from dashboard)
@@ -399,19 +442,110 @@ CREATE TRIGGER tr_participants_updated_at BEFORE UPDATE ON participants FOR EACH
 CREATE TRIGGER tr_sensor_configs_updated_at BEFORE UPDATE ON sensor_configs FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE TRIGGER tr_esm_schedules_updated_at BEFORE UPDATE ON esm_schedules FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE TRIGGER tr_esm_questions_updated_at BEFORE UPDATE ON esm_questions FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER tr_researchers_updated_at BEFORE UPDATE ON researchers FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================
 -- IDENTITY HELPERS (used by RLS policies, so defined before them)
 -- ============================================================
 
--- True when the signed-in Supabase Auth user is listed in researchers.
+-- True when the signed-in Supabase Auth user has an ACTIVE researchers row.
 CREATE OR REPLACE FUNCTION is_researcher()
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
     SELECT auth.uid() IS NOT NULL
-       AND EXISTS (SELECT 1 FROM public.researchers r WHERE r.user_id = auth.uid());
+       AND EXISTS (SELECT 1 FROM public.researchers r
+                    WHERE r.user_id = auth.uid() AND r.active);
+$$;
+
+-- True for an active researcher with role admin.
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT auth.uid() IS NOT NULL
+       AND EXISTS (SELECT 1 FROM public.researchers r
+                    WHERE r.user_id = auth.uid() AND r.active AND r.role = 'admin');
+$$;
+
+-- The caller's study role (owner | editor | viewer), or NULL. Only for active
+-- researchers; admins get NULL here and are handled by the can_* functions.
+CREATE OR REPLACE FUNCTION study_role(p_study UUID)
+RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT m.role
+      FROM public.study_members m
+      JOIN public.researchers r ON r.user_id = m.user_id AND r.active
+     WHERE m.study_id = p_study AND m.user_id = auth.uid();
+$$;
+
+CREATE OR REPLACE FUNCTION can_view_study(p_study UUID)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT is_admin() OR study_role(p_study) IS NOT NULL;
+$$;
+
+CREATE OR REPLACE FUNCTION can_edit_study(p_study UUID)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT is_admin() OR COALESCE(study_role(p_study) IN ('owner', 'editor'), false);
+$$;
+
+CREATE OR REPLACE FUNCTION can_manage_study(p_study UUID)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT is_admin() OR COALESCE(study_role(p_study) = 'owner', false);
+$$;
+
+-- Set-returning forms of can_view_study / can_edit_study for RLS policies.
+-- Policies call them as (SELECT ...) so they are evaluated once per statement
+-- instead of once per row (dashboard reads of large data tables).
+CREATE OR REPLACE FUNCTION viewable_study_ids()
+RETURNS uuid[]
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT CASE
+        WHEN is_admin() THEN COALESCE((SELECT array_agg(s.id) FROM public.studies s), '{}')
+        ELSE COALESCE((SELECT array_agg(m.study_id)
+                         FROM public.study_members m
+                         JOIN public.researchers r ON r.user_id = m.user_id AND r.active
+                        WHERE m.user_id = auth.uid()), '{}')
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION editable_study_ids()
+RETURNS uuid[]
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    SELECT CASE
+        WHEN is_admin() THEN COALESCE((SELECT array_agg(s.id) FROM public.studies s), '{}')
+        ELSE COALESCE((SELECT array_agg(m.study_id)
+                         FROM public.study_members m
+                         JOIN public.researchers r ON r.user_id = m.user_id AND r.active
+                        WHERE m.user_id = auth.uid() AND m.role IN ('owner', 'editor')), '{}')
+    END;
+$$;
+
+-- Internal: append an audit_log row (not executable by clients).
+CREATE OR REPLACE FUNCTION write_audit(p_action TEXT, p_target_type TEXT, p_target_id TEXT, p_details JSONB)
+RETURNS void
+LANGUAGE sql SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+    INSERT INTO public.audit_log(actor, action, target_type, target_id, details)
+    VALUES (auth.uid(), p_action, p_target_type, p_target_id, COALESCE(p_details, '{}'::jsonb));
 $$;
 
 -- The participants row whose device_token_hash matches sha256 of the
@@ -504,6 +638,134 @@ END;
 $$;
 
 -- ============================================================
+-- ACCESS-CONTROL TRIGGERS (study ownership, membership guards, audit)
+-- ============================================================
+
+-- The researcher who creates a study becomes its owner. SECURITY DEFINER
+-- because the creator cannot insert into study_members yet (they are not an
+-- owner until this row exists). No-op when there is no signed-in user (seed).
+CREATE OR REPLACE FUNCTION tr_study_creator_owner()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF auth.uid() IS NOT NULL
+       AND EXISTS (SELECT 1 FROM researchers r WHERE r.user_id = auth.uid() AND r.active) THEN
+        INSERT INTO study_members(study_id, user_id, role)
+        VALUES (NEW.id, auth.uid(), 'owner')
+        ON CONFLICT (study_id, user_id) DO NOTHING;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER tr_studies_creator_owner AFTER INSERT ON studies
+    FOR EACH ROW EXECUTE FUNCTION tr_study_creator_owner();
+
+-- Membership rules:
+--   * members must be researchers;
+--   * a membership cannot be moved to another study or user (delete + add);
+--   * a study always keeps at least one owner. Removals caused by deleting
+--     the study itself, or the auth user, are allowed.
+CREATE OR REPLACE FUNCTION tr_study_members_guard()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF TG_OP IN ('INSERT', 'UPDATE') THEN
+        IF NOT EXISTS (SELECT 1 FROM researchers r WHERE r.user_id = NEW.user_id) THEN
+            RAISE EXCEPTION 'Only researchers can be added to a study' USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    IF TG_OP = 'UPDATE' AND (NEW.study_id <> OLD.study_id OR NEW.user_id <> OLD.user_id) THEN
+        RAISE EXCEPTION 'A membership cannot be moved; remove it and add a new one' USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP IN ('UPDATE', 'DELETE') AND OLD.role = 'owner'
+       AND (TG_OP = 'DELETE' OR NEW.role <> 'owner') THEN
+        -- Serialise concurrent owner changes on the same study.
+        PERFORM 1 FROM studies WHERE id = OLD.study_id FOR UPDATE;
+        IF FOUND
+           AND EXISTS (SELECT 1 FROM auth.users u WHERE u.id = OLD.user_id)
+           AND NOT EXISTS (SELECT 1 FROM study_members m
+                            WHERE m.study_id = OLD.study_id AND m.role = 'owner'
+                              AND m.user_id <> OLD.user_id) THEN
+            RAISE EXCEPTION 'A study must keep at least one owner. Make someone else owner first.'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER tr_study_members_guard BEFORE INSERT OR UPDATE OR DELETE ON study_members
+    FOR EACH ROW EXECUTE FUNCTION tr_study_members_guard();
+
+CREATE OR REPLACE FUNCTION tr_study_members_audit()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM write_audit('study_member_added', 'study', NEW.study_id::text,
+            jsonb_build_object('user_id', NEW.user_id, 'role', NEW.role,
+                               'email', (SELECT email FROM researchers WHERE user_id = NEW.user_id)));
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.role IS DISTINCT FROM OLD.role THEN
+            PERFORM write_audit('study_member_changed', 'study', NEW.study_id::text,
+                jsonb_build_object('user_id', NEW.user_id, 'from', OLD.role, 'to', NEW.role,
+                                   'email', (SELECT email FROM researchers WHERE user_id = NEW.user_id)));
+        END IF;
+    ELSIF EXISTS (SELECT 1 FROM studies WHERE id = OLD.study_id) THEN
+        -- Not logged when the whole study is being deleted.
+        PERFORM write_audit('study_member_removed', 'study', OLD.study_id::text,
+            jsonb_build_object('user_id', OLD.user_id, 'role', OLD.role,
+                               'email', (SELECT email FROM researchers WHERE user_id = OLD.user_id)));
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER tr_study_members_audit AFTER INSERT OR UPDATE OR DELETE ON study_members
+    FOR EACH ROW EXECUTE FUNCTION tr_study_members_audit();
+
+-- Researchers: user_id/email are fixed, and the last active admin cannot be
+-- demoted, deactivated or deleted (that would lock everyone out of admin).
+CREATE OR REPLACE FUNCTION tr_researchers_guard()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' AND NEW.user_id <> OLD.user_id THEN
+        RAISE EXCEPTION 'researchers.user_id cannot change' USING ERRCODE = '23514';
+    END IF;
+    IF OLD.role = 'admin' AND OLD.active
+       AND (TG_OP = 'DELETE' OR NEW.role <> 'admin' OR NOT NEW.active)
+       AND EXISTS (SELECT 1 FROM auth.users u WHERE u.id = OLD.user_id)
+       AND NOT EXISTS (SELECT 1 FROM researchers r
+                        WHERE r.role = 'admin' AND r.active AND r.user_id <> OLD.user_id) THEN
+        RAISE EXCEPTION 'This is the last active admin. Make another researcher admin first.'
+            USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER tr_researchers_guard BEFORE UPDATE OR DELETE ON researchers
+    FOR EACH ROW EXECUTE FUNCTION tr_researchers_guard();
+
+CREATE OR REPLACE FUNCTION tr_researchers_audit()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF NEW.role IS DISTINCT FROM OLD.role THEN
+        PERFORM write_audit('researcher_role_changed', 'researcher', NEW.user_id::text,
+            jsonb_build_object('email', NEW.email, 'from', OLD.role, 'to', NEW.role));
+    END IF;
+    IF NEW.active IS DISTINCT FROM OLD.active THEN
+        PERFORM write_audit(CASE WHEN NEW.active THEN 'researcher_reactivated' ELSE 'researcher_deactivated' END,
+            'researcher', NEW.user_id::text, jsonb_build_object('email', NEW.email));
+    END IF;
+    RETURN NULL;
+END;
+$$;
+CREATE TRIGGER tr_researchers_audit AFTER UPDATE ON researchers
+    FOR EACH ROW EXECUTE FUNCTION tr_researchers_audit();
+
+-- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
 -- Policy functions are wrapped in (SELECT ...) so Postgres evaluates them once
@@ -533,34 +795,119 @@ ALTER TABLE sync_log                ENABLE ROW LEVEL SECURITY;
 ALTER TABLE participant_merge_audit ENABLE ROW LEVEL SECURITY;
 ALTER TABLE study_pins              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pin_attempts            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE study_members           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log               ENABLE ROW LEVEL SECURITY;
 
 -- ── Researchers (dashboard) ─────────────────────────────────────────────────
--- Full read/write on study tables, but only for users in researchers.
+-- Admins: everything. Other active researchers: only studies they are members
+-- of, at the level of their study role. Inactive researchers and signed-in
+-- users without a researchers row match no policy, so they see nothing.
+
+-- Studies: any active researcher may create one (they become its owner).
+CREATE POLICY "Members read studies" ON studies FOR SELECT TO authenticated
+    USING (id = ANY ((SELECT viewable_study_ids())::uuid[]));
+CREATE POLICY "Researchers create studies" ON studies FOR INSERT TO authenticated
+    WITH CHECK ((SELECT is_researcher()));
+CREATE POLICY "Editors update studies" ON studies FOR UPDATE TO authenticated
+    USING (id = ANY ((SELECT editable_study_ids())::uuid[]))
+    WITH CHECK (id = ANY ((SELECT editable_study_ids())::uuid[]));
+CREATE POLICY "Owners delete studies" ON studies FOR DELETE TO authenticated
+    USING (can_manage_study(id));
+
+-- Study configuration: read for members, write for owners/editors.
+DO $$
+DECLARE
+    t TEXT;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['sensor_configs', 'esm_schedules'] LOOP
+        EXECUTE format(
+            'CREATE POLICY "Members read" ON public.%I FOR SELECT TO authenticated '
+            'USING (study_id = ANY ((SELECT public.viewable_study_ids())::uuid[]))', t);
+        EXECUTE format(
+            'CREATE POLICY "Editors insert" ON public.%I FOR INSERT TO authenticated '
+            'WITH CHECK (study_id = ANY ((SELECT public.editable_study_ids())::uuid[]))', t);
+        EXECUTE format(
+            'CREATE POLICY "Editors update" ON public.%I FOR UPDATE TO authenticated '
+            'USING (study_id = ANY ((SELECT public.editable_study_ids())::uuid[])) '
+            'WITH CHECK (study_id = ANY ((SELECT public.editable_study_ids())::uuid[]))', t);
+        EXECUTE format(
+            'CREATE POLICY "Editors delete" ON public.%I FOR DELETE TO authenticated '
+            'USING (study_id = ANY ((SELECT public.editable_study_ids())::uuid[]))', t);
+    END LOOP;
+END $$;
+
+CREATE POLICY "Members read" ON esm_questions FOR SELECT TO authenticated
+    USING (schedule_id IN (SELECT es.id FROM esm_schedules es
+                            WHERE es.study_id = ANY ((SELECT viewable_study_ids())::uuid[])));
+CREATE POLICY "Editors insert" ON esm_questions FOR INSERT TO authenticated
+    WITH CHECK (schedule_id IN (SELECT es.id FROM esm_schedules es
+                                 WHERE es.study_id = ANY ((SELECT editable_study_ids())::uuid[])));
+CREATE POLICY "Editors update" ON esm_questions FOR UPDATE TO authenticated
+    USING (schedule_id IN (SELECT es.id FROM esm_schedules es
+                            WHERE es.study_id = ANY ((SELECT editable_study_ids())::uuid[])))
+    WITH CHECK (schedule_id IN (SELECT es.id FROM esm_schedules es
+                                 WHERE es.study_id = ANY ((SELECT editable_study_ids())::uuid[])));
+CREATE POLICY "Editors delete" ON esm_questions FOR DELETE TO authenticated
+    USING (schedule_id IN (SELECT es.id FROM esm_schedules es
+                            WHERE es.study_id = ANY ((SELECT editable_study_ids())::uuid[])));
+
+-- Participants: read for members, update (label/status) for owners/editors.
+-- Created only by enroll_participant(); deleted only by delete_participant().
+CREATE POLICY "Members read participants" ON participants FOR SELECT TO authenticated
+    USING (study_id = ANY ((SELECT viewable_study_ids())::uuid[]));
+CREATE POLICY "Editors update participants" ON participants FOR UPDATE TO authenticated
+    USING (study_id = ANY ((SELECT editable_study_ids())::uuid[]))
+    WITH CHECK (study_id = ANY ((SELECT editable_study_ids())::uuid[]));
+
+-- Collected data and sync health: read-only for members of the study.
 DO $$
 DECLARE
     t TEXT;
 BEGIN
     FOREACH t IN ARRAY ARRAY[
-        'studies', 'participants', 'sensor_configs', 'esm_schedules', 'esm_questions',
         'data_app_usage', 'data_notifications', 'data_battery', 'data_calls', 'data_sms',
         'data_esm_responses', 'data_location', 'data_light', 'data_screen_state',
         'data_gestures', 'data_steps', 'data_proximity', 'data_gesture_pauses',
-        'data_permission_events', 'sync_log', 'study_pins', 'pin_attempts'
+        'data_permission_events', 'sync_log'
     ] LOOP
         EXECUTE format(
-            'CREATE POLICY "Researchers full access" ON public.%I FOR ALL TO authenticated '
-            'USING ((SELECT public.is_researcher())) WITH CHECK ((SELECT public.is_researcher()))',
-            t);
+            'CREATE POLICY "Members read data" ON public.%I FOR SELECT TO authenticated '
+            'USING (participant_id IN (SELECT p.id FROM public.participants p '
+            'WHERE p.study_id = ANY ((SELECT public.viewable_study_ids())::uuid[])))', t);
     END LOOP;
 END $$;
 
-CREATE POLICY "Researchers read researchers" ON researchers
-    FOR SELECT TO authenticated USING ((SELECT is_researcher()));
+-- Merge history: read for members (written by merge_participants()).
+CREATE POLICY "Members read merge audit" ON participant_merge_audit FOR SELECT TO authenticated
+    USING (study_id = ANY ((SELECT viewable_study_ids())::uuid[]));
 
-CREATE POLICY "Researchers read merge audit" ON participant_merge_audit
-    FOR SELECT TO authenticated USING ((SELECT is_researcher()));
-CREATE POLICY "Researchers create merge audit" ON participant_merge_audit
-    FOR INSERT TO authenticated WITH CHECK ((SELECT is_researcher()));
+-- PIN lockouts: read for members, clear for owners/editors. study_pins has no
+-- client policy at all: the hash is only touched by set_study_pin().
+CREATE POLICY "Members read pin attempts" ON pin_attempts FOR SELECT TO authenticated
+    USING (study_id = ANY ((SELECT viewable_study_ids())::uuid[]));
+CREATE POLICY "Editors clear pin attempts" ON pin_attempts FOR DELETE TO authenticated
+    USING (study_id = ANY ((SELECT editable_study_ids())::uuid[]));
+
+-- Team: members see the team; owners (and admins) manage it.
+CREATE POLICY "Members read team" ON study_members FOR SELECT TO authenticated
+    USING (study_id = ANY ((SELECT viewable_study_ids())::uuid[]));
+CREATE POLICY "Owners add members" ON study_members FOR INSERT TO authenticated
+    WITH CHECK (can_manage_study(study_id));
+CREATE POLICY "Owners change members" ON study_members FOR UPDATE TO authenticated
+    USING (can_manage_study(study_id)) WITH CHECK (can_manage_study(study_id));
+CREATE POLICY "Owners remove members" ON study_members FOR DELETE TO authenticated
+    USING (can_manage_study(study_id));
+
+-- Researchers: everyone reads their own row (role/active, for the UI); admins
+-- read and update all. Rows are inserted by the server admin API or the seed.
+CREATE POLICY "Read own researcher row" ON researchers FOR SELECT TO authenticated
+    USING (user_id = (SELECT auth.uid()) OR (SELECT is_admin()));
+CREATE POLICY "Admins update researchers" ON researchers FOR UPDATE TO authenticated
+    USING ((SELECT is_admin())) WITH CHECK ((SELECT is_admin()));
+
+-- Audit log: admins only, read-only.
+CREATE POLICY "Admins read audit log" ON audit_log FOR SELECT TO authenticated
+    USING ((SELECT is_admin()));
 
 -- ── Android app (anon key + x-device-token) ─────────────────────────────────
 -- Study configuration: readable for non-draft studies.
@@ -957,15 +1304,15 @@ FROM g
 GROUP BY participant_id, usage_date, app_name;
 
 -- ============================================================
--- PARTICIPANT MERGE (researchers only)
+-- PARTICIPANT MERGE (study owners/editors and admins)
 -- ============================================================
--- SECURITY INVOKER so it runs under the caller's RLS; additionally refuses any
--- caller that is not a researcher. All re-points happen in one transaction;
+-- SECURITY DEFINER so it can write audit_log; it checks can_edit_study() on
+-- the participants' study itself. All re-points happen in one transaction;
 -- any failure rolls the whole thing back (no partial merges).
 CREATE OR REPLACE FUNCTION merge_participants(p_primary UUID, p_duplicate UUID)
 RETURNS jsonb
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
 DECLARE
@@ -985,6 +1332,10 @@ BEGIN
     SELECT study_id INTO v_study_duplicate FROM participants WHERE id = p_duplicate FOR UPDATE;
     IF v_study_primary IS NULL OR v_study_duplicate IS NULL THEN
         RAISE EXCEPTION 'Participant not found';
+    END IF;
+    IF NOT can_edit_study(v_study_primary) THEN
+        RAISE EXCEPTION 'You need editor or owner access to this study to merge participants'
+            USING ERRCODE = '42501';
     END IF;
     IF v_study_primary <> v_study_duplicate THEN
         RAISE EXCEPTION 'Participants are in different studies';
@@ -1036,8 +1387,11 @@ BEGIN
            updated_at = now()
      WHERE id = p_duplicate;
 
-    INSERT INTO participant_merge_audit(study_id, primary_participant_id, duplicate_participant_id)
-    VALUES(v_study_primary, p_primary, p_duplicate);
+    INSERT INTO participant_merge_audit(study_id, primary_participant_id, duplicate_participant_id, merged_by)
+    VALUES(v_study_primary, p_primary, p_duplicate, auth.uid());
+
+    PERFORM write_audit('participant_merged', 'participant', p_primary::text,
+        jsonb_build_object('study_id', v_study_primary, 'duplicate', p_duplicate, 'moved', v_moved));
 
     RETURN jsonb_build_object(
         'primary', p_primary,
@@ -1057,19 +1411,21 @@ $$;
 -- STUDY PIN (optional 4-digit enrolment gate)
 -- ============================================================
 
--- Researcher sets/clears a study PIN (NULL/'' clears it). SECURITY DEFINER so
--- it does not depend on the caller's access to pgcrypto in the extensions
--- schema; it refuses anyone who is not a researcher.
+-- Owner/editor (or admin) sets/clears a study PIN (NULL/'' clears it).
+-- SECURITY DEFINER so it does not depend on the caller's access to pgcrypto
+-- in the extensions schema; it checks can_edit_study() itself.
 CREATE OR REPLACE FUNCTION set_study_pin(p_study UUID, p_pin TEXT)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, extensions AS $$
 BEGIN
-    IF NOT is_researcher() THEN
-        RAISE EXCEPTION 'Not authorised as a researcher' USING ERRCODE = '42501';
+    IF NOT can_edit_study(p_study) THEN
+        RAISE EXCEPTION 'You need editor or owner access to this study to change its PIN'
+            USING ERRCODE = '42501';
     END IF;
     IF p_pin IS NULL OR length(trim(p_pin)) = 0 THEN
         DELETE FROM study_pins WHERE study_id = p_study;
         UPDATE studies SET pin_required = false, updated_at = now() WHERE id = p_study;
+        PERFORM write_audit('study_pin_changed', 'study', p_study::text, jsonb_build_object('pin_required', false));
     ELSIF p_pin !~ '^[0-9]{4}$' THEN
         RAISE EXCEPTION 'PIN must be exactly 4 digits';
     ELSIF NOT EXISTS (SELECT 1 FROM studies WHERE id = p_study) THEN
@@ -1079,6 +1435,7 @@ BEGIN
         VALUES (p_study, crypt(p_pin, gen_salt('bf')), now())
         ON CONFLICT (study_id) DO UPDATE SET pin_hash = EXCLUDED.pin_hash, updated_at = now();
         UPDATE studies SET pin_required = true, updated_at = now() WHERE id = p_study;
+        PERFORM write_audit('study_pin_changed', 'study', p_study::text, jsonb_build_object('pin_required', true));
     END IF;
 END;
 $$;
@@ -1100,7 +1457,8 @@ $$;
 
 CREATE FUNCTION enroll_participant(
     p_study UUID, p_device_id TEXT, p_pin TEXT DEFAULT NULL, p_device_info JSONB DEFAULT '{}'::jsonb,
-    p_request_id UUID DEFAULT NULL, p_device_token TEXT DEFAULT NULL
+    p_request_id UUID DEFAULT NULL, p_device_token TEXT DEFAULT NULL,
+    p_consent_version TEXT DEFAULT NULL
 )
 RETURNS TABLE (participant_id UUID, device_id TEXT, error_message TEXT)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions AS $$
@@ -1187,11 +1545,113 @@ BEGIN
         v_resolved := p_device_id || '_' || v_suffix; v_suffix := v_suffix + 1;
     END LOOP;
     INSERT INTO participants (study_id, device_id, label, status, device_info, enrolled_at,
-                              enrollment_request_id, device_token_hash)
+                              enrollment_request_id, device_token_hash, consent_version, consent_at)
     VALUES (p_study, v_resolved, 'Device ' || v_resolved, 'active', COALESCE(p_device_info, '{}'::jsonb), now(),
-            p_request_id, v_token_hash)
+            p_request_id, v_token_hash,
+            NULLIF(left(trim(p_consent_version), 64), ''),
+            CASE WHEN NULLIF(trim(p_consent_version), '') IS NOT NULL THEN now() END)
     RETURNING id INTO v_id;
     participant_id := v_id; device_id := v_resolved; error_message := NULL; RETURN NEXT;
+END;
+$$;
+
+-- ============================================================
+-- PARTICIPANT DELETION (study owners and admins)
+-- ============================================================
+-- Permanently removes a participant and everything collected from them.
+-- Refuses while other participants are merged into this one (delete those
+-- first, so no data is orphaned or silently re-homed). Returns and audits the
+-- number of rows removed per table.
+CREATE OR REPLACE FUNCTION delete_participant(p_id UUID)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+DECLARE
+    v_p       participants%ROWTYPE;
+    v_counts  jsonb := '{}'::jsonb;
+    v_n       bigint;
+    v_merged  TEXT;
+    t         TEXT;
+BEGIN
+    SELECT * INTO v_p FROM participants WHERE id = p_id FOR UPDATE;
+    IF v_p.id IS NULL THEN
+        RAISE EXCEPTION 'Participant not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF NOT can_manage_study(v_p.study_id) THEN
+        RAISE EXCEPTION 'Only a study owner or an admin can delete participants' USING ERRCODE = '42501';
+    END IF;
+    SELECT string_agg(COALESCE(label, device_id), ', ') INTO v_merged
+      FROM participants WHERE merged_into = p_id;
+    IF v_merged IS NOT NULL THEN
+        RAISE EXCEPTION 'Other participants are merged into this one (%). Delete them first.', v_merged
+            USING ERRCODE = '23503';
+    END IF;
+
+    FOREACH t IN ARRAY ARRAY[
+        'data_app_usage', 'data_notifications', 'data_battery', 'data_calls', 'data_sms',
+        'data_esm_responses', 'data_location', 'data_light', 'data_screen_state',
+        'data_gestures', 'data_steps', 'data_proximity', 'data_gesture_pauses',
+        'data_permission_events', 'sync_log'
+    ] LOOP
+        EXECUTE format('DELETE FROM public.%I WHERE participant_id = $1', t) USING p_id;
+        GET DIAGNOSTICS v_n = ROW_COUNT;
+        v_counts := v_counts || jsonb_build_object(t, v_n);
+    END LOOP;
+
+    DELETE FROM participant_merge_audit
+     WHERE primary_participant_id = p_id OR duplicate_participant_id = p_id;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    v_counts := v_counts || jsonb_build_object('participant_merge_audit', v_n);
+
+    DELETE FROM participants WHERE id = p_id;
+
+    PERFORM write_audit('participant_deleted', 'participant', p_id::text,
+        jsonb_build_object('study_id', v_p.study_id, 'device_id', v_p.device_id,
+                           'label', v_p.label, 'counts', v_counts));
+
+    RETURN jsonb_build_object('participant_id', p_id, 'study_id', v_p.study_id, 'counts', v_counts);
+END;
+$$;
+
+-- ============================================================
+-- TEAM HELPERS (dashboard)
+-- ============================================================
+-- researchers is only readable row-by-row (own row) for non-admins, so these
+-- return just the display fields the Team tab needs.
+
+-- The team of a study, with each member's email. Members of the study only.
+CREATE OR REPLACE FUNCTION study_team(p_study UUID)
+RETURNS TABLE (user_id UUID, email TEXT, display_name TEXT, member_role TEXT,
+               researcher_active BOOLEAN, added_at TIMESTAMPTZ)
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF NOT can_view_study(p_study) THEN
+        RAISE EXCEPTION 'Not a member of this study' USING ERRCODE = '42501';
+    END IF;
+    RETURN QUERY
+        SELECT m.user_id, r.email, r.display_name, m.role, COALESCE(r.active, false), m.added_at
+          FROM study_members m
+          LEFT JOIN researchers r ON r.user_id = m.user_id
+         WHERE m.study_id = p_study
+         ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, r.email;
+END;
+$$;
+
+-- Active researchers that can be added to a study. Admins and study owners only.
+CREATE OR REPLACE FUNCTION researcher_directory()
+RETURNS TABLE (user_id UUID, email TEXT, display_name TEXT)
+LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF NOT (is_admin()
+            OR (is_researcher() AND EXISTS (SELECT 1 FROM study_members m
+                                             WHERE m.user_id = auth.uid() AND m.role = 'owner'))) THEN
+        RAISE EXCEPTION 'Only admins and study owners can list researchers' USING ERRCODE = '42501';
+    END IF;
+    RETURN QUERY
+        SELECT r.user_id, r.email, r.display_name FROM researchers r
+         WHERE r.active ORDER BY r.email;
 END;
 $$;
 
@@ -1317,15 +1777,39 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
 
 -- authenticated: table privileges for every table and view; RLS limits rows
--- to researchers (is_researcher()). researchers itself is read-only.
+-- to admins and study members (see ROW LEVEL SECURITY).
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
-REVOKE INSERT, UPDATE, DELETE ON researchers FROM authenticated;
+-- Tables the dashboard only reads (writes go through SECURITY DEFINER
+-- functions, the device, or the server admin API). Belt and braces on top of RLS.
+REVOKE INSERT, UPDATE, DELETE ON
+    researchers, audit_log, study_pins, participant_merge_audit,
+    data_app_usage, data_notifications, data_battery, data_calls, data_sms,
+    data_esm_responses, data_location, data_light, data_screen_state,
+    data_gestures, data_steps, data_proximity, data_gesture_pauses,
+    data_permission_events, sync_log
+FROM authenticated;
+REVOKE INSERT, DELETE ON participants FROM authenticated;    -- enroll_/delete_participant()
+REVOKE INSERT, UPDATE ON pin_attempts FROM authenticated;    -- clear (DELETE) only
+REVOKE SELECT ON study_pins FROM authenticated;              -- the hash is never client-readable
+GRANT UPDATE (display_name, role, active) ON researchers TO authenticated;  -- admins only (RLS)
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
-GRANT EXECUTE ON FUNCTION is_researcher() TO authenticated;          -- used by RLS policies
+-- Used by RLS policies (the caller needs EXECUTE):
+GRANT EXECUTE ON FUNCTION is_researcher() TO authenticated;
+GRANT EXECUTE ON FUNCTION is_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION study_role(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION can_view_study(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION can_edit_study(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION can_manage_study(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION viewable_study_ids() TO authenticated;
+GRANT EXECUTE ON FUNCTION editable_study_ids() TO authenticated;
 GRANT EXECUTE ON FUNCTION app_tz() TO authenticated;                 -- used by the processed views (security_invoker)
+-- Dashboard RPCs (each checks the caller's study permission itself):
 GRANT EXECUTE ON FUNCTION merge_participants(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION set_study_pin(UUID, TEXT) TO authenticated;
-GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID, TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION delete_participant(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION study_team(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION researcher_directory() TO authenticated;
+GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID, TEXT, TEXT) TO authenticated;
 
 -- anon (Android app): read non-draft config, insert own data, device RPCs.
 GRANT SELECT ON studies, sensor_configs, esm_schedules, esm_questions TO anon;
@@ -1351,7 +1835,7 @@ GRANT USAGE ON SEQUENCE
     data_gestures_id_seq, data_steps_id_seq, data_proximity_id_seq,
     data_gesture_pauses_id_seq, data_permission_events_id_seq, sync_log_id_seq
 TO anon;
-GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID, TEXT) TO anon;
+GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID, TEXT, TEXT) TO anon;
 GRANT EXECUTE ON FUNCTION device_get_participant() TO anon;
 GRANT EXECUTE ON FUNCTION device_heartbeat(TIMESTAMPTZ, JSONB, JSONB) TO anon;
 GRANT EXECUTE ON FUNCTION device_withdraw() TO anon;

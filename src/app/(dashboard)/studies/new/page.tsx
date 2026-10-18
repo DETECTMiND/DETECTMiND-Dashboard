@@ -1,6 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
+import { Notice, errorText } from '@/components/feedback'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -23,6 +24,14 @@ interface SensorOption {
   category: 'behavioral' | 'physical' | 'device'
 }
 
+// sensor_configs.config JSON (location: movement_threshold; gestures: interaction settings).
+interface SensorConfigJson {
+  movement_threshold?: number
+  interaction_types?: Record<string, boolean>
+  skip_rules?: Record<string, boolean>
+  [key: string]: unknown
+}
+
 interface WizardState {
   // Step 1 – Basic Info
   name: string
@@ -34,7 +43,7 @@ interface WizardState {
   pin: string            // optional 4-digit PIN; empty = no PIN
 
   // Step 2 – Data to Collect
-  sensors: Record<string, { enabled: boolean; interval_seconds: number | null; config: Record<string, any> }>
+  sensors: Record<string, { enabled: boolean; interval_seconds: number | null; config: SensorConfigJson }>
 
   // Step 3 – ESM/EMA
   enableEsm: boolean
@@ -168,7 +177,7 @@ const SCREEN_INTERACTION_DEFAULTS = {
 const defaultSensors = (): WizardState['sensors'] => {
   const s: WizardState['sensors'] = {}
   SENSOR_OPTIONS.forEach(opt => {
-    let config: Record<string, any> = {}
+    let config: SensorConfigJson = {}
     if (opt.key === 'location') config = { movement_threshold: 50 }
     if (opt.key === 'gestures') config = SCREEN_INTERACTION_DEFAULTS
     s[opt.key] = {
@@ -338,8 +347,8 @@ function SensorCard({
   sensor: SensorOption
   enabled: boolean
   interval: number | null
-  config: Record<string, any>
-  onChange: (patch: { enabled?: boolean; interval_seconds?: number | null; config?: Record<string, any> }) => void
+  config: SensorConfigJson
+  onChange: (patch: { enabled?: boolean; interval_seconds?: number | null; config?: SensorConfigJson }) => void
 }) {
   const Icon = sensor.icon
   return (
@@ -468,7 +477,7 @@ function SensorCard({
 function StepDataCollection({ state, setState }: { state: WizardState; setState: (s: WizardState) => void }) {
   const enabledCount = Object.values(state.sensors).filter(s => s.enabled).length
 
-  function updateSensor(key: string, patch: { enabled?: boolean; interval_seconds?: number | null; config?: Record<string, any> }) {
+  function updateSensor(key: string, patch: { enabled?: boolean; interval_seconds?: number | null; config?: SensorConfigJson }) {
     setState({
       ...state,
       sensors: {
@@ -498,7 +507,6 @@ function StepDataCollection({ state, setState }: { state: WizardState; setState:
 
       {CATEGORIES.map(cat => {
         const sensors = SENSOR_OPTIONS.filter(s => s.category === cat.key)
-        const catEnabled = sensors.every(s => state.sensors[s.key]?.enabled)
         const catAny = sensors.some(s => state.sensors[s.key]?.enabled)
 
         return (
@@ -711,6 +719,7 @@ export default function NewStudyPage() {
   const supabase = createClient()
   const [step, setStep] = useState(1)
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [state, setState] = useState<WizardState>({
     name: '',
     description: '',
@@ -730,11 +739,13 @@ export default function NewStudyPage() {
 
   async function handleSubmit() {
     setSubmitting(true)
+    setSubmitError(null)
     try {
-      const { data: { user } } = await supabase.auth.getUser()
-
-      // 1. Create study
-      const config: Record<string, any> = {}
+      // 1. Create study. The id is generated here rather than read back with
+      // RETURNING: the creator only becomes the study's owner (and so able to
+      // read it) once the insert has finished.
+      const studyId = crypto.randomUUID()
+      const config: Record<string, unknown> = {}
       if (state.guidedPermissions) config.guided_permissions = true
       if (state.autoParticipantId) config.auto_participant_id = true
       config.banking_pause = {
@@ -751,28 +762,27 @@ export default function NewStudyPage() {
         escalation_minutes: 120,
       }
 
-      const { data: study, error: studyError } = await supabase
+      const { error: studyError } = await supabase
         .from('studies')
         .insert({
+          id: studyId,
           name: state.name.trim(),
           description: state.description.trim() || null,
           app_description: state.appDescription.trim() || null,
           sync_interval_minutes: state.syncInterval,
           config,
           status: 'draft',
-          created_by: user?.id ?? null,
         })
-        .select()
-        .single()
 
-      if (studyError || !study) {
-        console.error(studyError)
+      if (studyError) {
+        setSubmitError(`Could not create the study: ${errorText(studyError)}`)
         setSubmitting(false)
         return
       }
+      const study = { id: studyId }
 
       // 2. Create sensor configs for all sensors (enabled or not)
-      await supabase.from('sensor_configs').insert(
+      const { error: sensorError } = await supabase.from('sensor_configs').insert(
         SENSOR_OPTIONS.map(s => ({
           study_id: study.id,
           sensor_type: s.key,
@@ -781,10 +791,17 @@ export default function NewStudyPage() {
           config: state.sensors[s.key]?.config ?? {},
         }))
       )
+      const problems: string[] = []
+      if (sensorError) problems.push(`sensor settings were not saved (${errorText(sensorError)})`)
 
       // 2b. Set the study PIN if one was entered (hashed server-side).
       if (/^\d{4}$/.test(state.pin)) {
-        await supabase.rpc('set_study_pin', { p_study: study.id, p_pin: state.pin })
+        const { error: pinError } = await supabase.rpc('set_study_pin', { p_study: study.id, p_pin: state.pin })
+        if (pinError) problems.push(`the PIN was not set (${errorText(pinError)})`)
+      }
+      if (problems.length) {
+        // The study exists; send the researcher to fix the rest there.
+        window.alert(`The study was created, but ${problems.join(' and ')}. Please check its settings.`)
       }
 
       // 3. Navigate
@@ -794,7 +811,7 @@ export default function NewStudyPage() {
         router.push(`/studies/${study.id}`)
       }
     } catch (e) {
-      console.error(e)
+      setSubmitError(`Could not create the study: ${e instanceof Error ? e.message : 'unknown error'}`)
       setSubmitting(false)
     }
   }
@@ -865,6 +882,7 @@ export default function NewStudyPage() {
         </div>
         <div className="px-6 py-6">
           {stepContent[step]}
+          {submitError && <div className="mt-4"><Notice notice={{ tone: 'error', text: submitError }} onClose={() => setSubmitError(null)} /></div>}
         </div>
         <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-3">
           <button

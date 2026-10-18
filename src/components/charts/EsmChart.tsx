@@ -5,20 +5,19 @@ import {
   ComposedChart, BarChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
+import type { ChartParticipant as Participant, EsmResponseRow } from './types'
 
-interface Participant { id: string; label: string | null; device_id: string }
 interface Props {
-  data: any[]
+  data: EsmResponseRow[]
   participants: Participant[]
   showParticipant: boolean
 }
 
 function pName(p: Participant) { return p.label || p.device_id }
 
-const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
 const LATENCY_LABELS = ['<1 min', '1–5 min', '5–15 min', '15–30 min', '30–60 min', '>60 min']
 
-export default function EsmChart({ data, participants, showParticipant }: Props) {
+export default function EsmChart({ data, participants }: Props) {
   const pMap = useMemo(() => Object.fromEntries(participants.map(p => [p.id, p])), [participants])
   const pIds = useMemo(() => [...new Set(data.map(r => r.participant_id as string))], [data])
 
@@ -31,9 +30,8 @@ export default function EsmChart({ data, participants, showParticipant }: Props)
       if (!map.has(date)) map.set(date, { responded: 0, expired: 0, pending: 0, total: 0 })
       const entry = map.get(date)!
       entry.total++
-      const status = (r.status ?? '').toLowerCase()
-      if (status === 'responded' || r.responded_at) entry.responded++
-      else if (status === 'expired' || r.expired_at) entry.expired++
+      if (r.responded_at && !r.expired) entry.responded++
+      else if (r.expired) entry.expired++
       else entry.pending++
     }
     return Array.from(map.entries())
@@ -102,10 +100,9 @@ export default function EsmChart({ data, participants, showParticipant }: Props)
     return bounds
   }, [timelineRows])
 
-  function statusColor(r: any): string {
-    const s = (r.status ?? '').toLowerCase()
-    if (s === 'responded' || r.responded_at) return '#10b981'
-    if (s === 'expired' || r.expired_at) return '#ef4444'
+  function statusColor(r: EsmResponseRow): string {
+    if (r.responded_at && !r.expired) return '#10b981'
+    if (r.expired) return '#ef4444'
     return '#f59e0b'
   }
 
@@ -171,7 +168,7 @@ export default function EsmChart({ data, participants, showParticipant }: Props)
                     const color = statusColor(r)
                     return (
                       <circle key={i} cx={x} cy={y + ROW_H / 2} r={5} fill={color} opacity={0.85}>
-                        <title>{`${new Date(r.triggered_at).toLocaleString()} — ${r.status ?? 'pending'}`}</title>
+                        <title>{`${new Date(r.triggered_at).toLocaleString()} — ${r.responded_at && !r.expired ? 'responded' : r.expired ? 'expired' : 'pending'}`}</title>
                       </circle>
                     )
                   })}

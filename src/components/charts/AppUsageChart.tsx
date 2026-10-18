@@ -11,17 +11,18 @@ import {
   CartesianGrid,
   Legend,
 } from 'recharts'
+import type { AppUsageRow, ChartPoint } from './types'
 
 interface Props {
-  data: any[]
+  data: AppUsageRow[]
   participants: { id: string; label: string | null; device_id: string }[]
   showParticipant: boolean
 }
 
 const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#f97316', '#84cc16']
 
-function getDurationMs(row: any): number {
-  if (row.duration_ms != null) return Number(row.duration_ms)
+function getDurationMs(row: AppUsageRow): number {
+  if (row.duration_seconds != null) return Number(row.duration_seconds) * 1000
   if (row.start_time && row.end_time) {
     return new Date(row.end_time).getTime() - new Date(row.start_time).getTime()
   }
@@ -36,7 +37,7 @@ function getHour(iso: string): number {
   return new Date(iso).getHours()
 }
 
-export default function AppUsageChart({ data, participants, showParticipant }: Props) {
+export default function AppUsageChart({ data }: Props) {
   const appTotals = useMemo(() => {
     const map = new Map<string, number>()
     for (const row of data) {
@@ -72,7 +73,7 @@ export default function AppUsageChart({ data, participants, showParticipant }: P
     return Array.from(dateAppMap.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, inner]) => {
-        const entry: Record<string, any> = { date }
+        const entry: ChartPoint = { date }
         for (const app of [...top8Apps, 'Other']) {
           entry[app] = Math.round((inner.get(app) ?? 0) / 60000)
         }
@@ -141,9 +142,10 @@ export default function AppUsageChart({ data, participants, showParticipant }: P
               tickFormatter={(v: string) => (v.length > 18 ? v.slice(0, 17) + '…' : v)}
             />
             <Tooltip
-              formatter={(value: any, _name: any, entry: any) => {
-                const pct = totalMinutes > 0 ? ((entry.payload.minutes / totalMinutes) * 100).toFixed(1) : '0'
-                return [`${value} min (${pct}%)`, entry.payload.app]
+              formatter={(value, _name, entry) => {
+                const point = entry.payload as { minutes: number; app: string }
+                const pct = totalMinutes > 0 ? ((point.minutes / totalMinutes) * 100).toFixed(1) : '0'
+                return [`${value} min (${pct}%)`, point.app]
               }}
             />
             <Bar dataKey="minutes" fill="#3b82f6" radius={[0, 3, 3, 0]} />
@@ -158,7 +160,7 @@ export default function AppUsageChart({ data, participants, showParticipant }: P
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}m`} />
-            <Tooltip formatter={(v: any) => [`${v} min`]} />
+            <Tooltip formatter={v => [`${v} min`]} />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             {[...top8Apps, 'Other'].map((app, i) => (
               <Bar

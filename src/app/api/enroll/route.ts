@@ -8,6 +8,7 @@ type EnrollBody = {
   device_info?: unknown
   request_id?: unknown
   device_token?: unknown
+  consent_version?: unknown
 }
 
 type EnrollResult = {
@@ -27,8 +28,8 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const { data: researcher } = await supabase
-    .from('researchers').select('user_id').eq('user_id', user.id).maybeSingle()
-  if (!researcher) return NextResponse.json({ error: 'Your account is not authorised as a researcher' }, { status: 403 })
+    .from('researchers').select('active').eq('user_id', user.id).maybeSingle()
+  if (!researcher?.active) return NextResponse.json({ error: 'Your account is not authorised as a researcher' }, { status: 403 })
 
   let body: EnrollBody
   try {
@@ -42,6 +43,8 @@ export async function POST(req: NextRequest) {
   const pin = typeof body.pin === 'string' ? body.pin : null
   const deviceToken = typeof body.device_token === 'string' ? body.device_token.trim() : ''
   const requestId = typeof body.request_id === 'string' && UUID.test(body.request_id) ? body.request_id : null
+  const consentVersion = typeof body.consent_version === 'string' && body.consent_version.trim()
+    ? body.consent_version.trim().slice(0, 64) : null
   const deviceInfo = body.device_info && typeof body.device_info === 'object' && !Array.isArray(body.device_info)
     ? body.device_info
     : {}
@@ -63,6 +66,7 @@ export async function POST(req: NextRequest) {
       p_device_info: deviceInfo,
       p_request_id: requestId,
       p_device_token: deviceToken,
+      p_consent_version: consentVersion,
     })
 
   if (error) {

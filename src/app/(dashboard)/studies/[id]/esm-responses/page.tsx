@@ -1,7 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useRef, useState, Suspense } from 'react'
+import { useEffect, useRef, useState, Suspense, useMemo } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import {
   Download, Users, Search, Check, X, ChevronDown,
@@ -401,7 +401,9 @@ function ESMResponsesInner() {
   const { id: studyId } = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
+  // Read once on mount: the participant filter is then driven by the picker.
+  const [initialParticipant] = useState(() => searchParams.get('participant'))
 
   const [participants, setParticipants] = useState<Participant[]>([])
   const [schedules, setSchedules] = useState<Schedule[]>([])
@@ -429,13 +431,12 @@ function ESMResponsesInner() {
       setSchedules((sData || []) as Schedule[])
       setQuestions((qData || []) as Question[])
 
-      const urlParticipant = searchParams.get('participant')
-      if (urlParticipant && pList.some(p => p.id === urlParticipant)) {
-        setSelectedParticipant(urlParticipant)
+      if (initialParticipant && pList.some(p => p.id === initialParticipant)) {
+        setSelectedParticipant(initialParticipant)
       }
     }
     load()
-  }, [studyId])
+  }, [studyId, supabase, initialParticipant])
 
   // Load counts per status
   useEffect(() => {
@@ -466,7 +467,7 @@ function ESMResponsesInner() {
       setCountsLoading(false)
     }
     loadCounts()
-  }, [selectedParticipant, selectedSchedule, participants])
+  }, [supabase, selectedParticipant, selectedSchedule, participants])
 
   // Load rows
   useEffect(() => {
@@ -497,7 +498,7 @@ function ESMResponsesInner() {
       setLoading(false)
     }
     loadData()
-  }, [selectedParticipant, selectedSchedule, statusFilter, participants])
+  }, [supabase, selectedParticipant, selectedSchedule, statusFilter, participants])
 
   function handleParticipantChange(id: string) {
     setSelectedParticipant(id)

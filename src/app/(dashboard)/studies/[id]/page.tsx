@@ -1,10 +1,13 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock, Lock } from 'lucide-react'
+import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock, Lock, Download, UsersRound } from 'lucide-react'
+import { useStudyAccess, STUDY_ROLE_LABEL } from '@/lib/access'
+import { Notice, errorText, type NoticeState } from '@/components/feedback'
+import { downloadBlob, exportStudyZip } from '@/lib/export-study'
 
 interface Study {
   id: string
@@ -13,9 +16,23 @@ interface Study {
   app_description: string | null
   status: string
   sync_interval_minutes: number
-  config: Record<string, any> | null
+  config: StudyConfig | null
   pin_required?: boolean
   created_at: string
+}
+
+interface BankingPause {
+  enabled: boolean
+  apps: string[]
+  reminder_minutes: number
+  escalation_minutes: number
+}
+
+interface StudyConfig {
+  guided_permissions?: boolean
+  auto_participant_id?: boolean
+  banking_pause?: Partial<BankingPause>
+  [key: string]: unknown
 }
 
 const DEFAULT_BANKING_APPS = [
@@ -37,9 +54,14 @@ const STATUS_STYLES: Record<string, string> = {
 const statusOptions = ['draft', 'active', 'paused', 'completed']
 
 export default function StudyDetailPage() {
-  const { id } = useParams()
+  const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
+  const access = useStudyAccess(id)
+  const [notice, setNotice] = useState<NoticeState>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [exportStatus, setExportStatus] = useState<string | null>(null)
   const [study, setStudy] = useState<Study | null>(null)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<Partial<Study>>({})
@@ -51,12 +73,7 @@ export default function StudyDetailPage() {
   const [pinRequired, setPinRequired] = useState(false)
   const [pinInput, setPinInput] = useState('')
   const [pinError, setPinError] = useState<string | null>(null)
-  const [bankingPause, setBankingPause] = useState<{
-    enabled: boolean
-    apps: string[]
-    reminder_minutes: number
-    escalation_minutes: number
-  }>({
+  const [bankingPause, setBankingPause] = useState<BankingPause>({
     enabled: true,
     apps: [
       'uk.co.hsbc.hsbcukmobilebanking',
@@ -84,7 +101,11 @@ export default function StudyDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase.from('studies').select('*').eq('id', id).single()
+      const { data, error } = await supabase.from('studies').select('*').eq('id', id).maybeSingle()
+      if (error || !data) {
+        setLoadError(error ? errorText(error) : 'This study does not exist or you do not have access to it.')
+        return
+      }
       if (data) {
         setStudy(data)
         setForm(data)
@@ -103,8 +124,8 @@ export default function StudyDetailPage() {
       const { count } = await supabase.from('participants').select('*', { count: 'exact', head: true }).eq('study_id', id)
       setParticipantCount(count || 0)
     }
-    load()
-  }, [id])
+    void load()
+  }, [id, supabase])
 
   async function handleSave() {
     if (!study) return
@@ -120,41 +141,77 @@ export default function StudyDetailPage() {
       return
     }
     setPinError(null)
-    const { error } = await supabase.from('studies').update({
+    setSaving(true)
+    setNotice(null)
+    const { data: saved, error } = await supabase.from('studies').update({
       name: form.name || study.name,
       description: form.description ?? study.description,
       app_description: form.app_description ?? study.app_description,
       status: form.status || study.status,
       sync_interval_minutes: form.sync_interval_minutes ?? study.sync_interval_minutes,
       config: updatedConfig,
-    }).eq('id', id)
-    if (error) return
+    }).eq('id', id).select('id')
+    if (error || !saved?.length) {
+      setSaving(false)
+      setNotice({ tone: 'error', text: `Could not save the study: ${error ? errorText(error) : 'you do not have permission to edit it.'}` })
+      return
+    }
     // Apply PIN changes via the server function (hashes it; never stored in plain text).
     // - pinRequired off  -> clear any PIN
     // - pinInput set      -> set/replace the PIN
     // - pinRequired on but no new input -> leave the existing PIN unchanged
-    if (!pinRequired) {
-      await supabase.rpc('set_study_pin', { p_study: id, p_pin: null })
-    } else if (pinInput) {
+    if (!pinRequired && study.pin_required) {
+      const { error: pinErr } = await supabase.rpc('set_study_pin', { p_study: id, p_pin: null })
+      if (pinErr) { setSaving(false); setPinError(errorText(pinErr)); return }
+    } else if (pinRequired && pinInput) {
       const { error: pinErr } = await supabase.rpc('set_study_pin', { p_study: id, p_pin: pinInput })
-      if (pinErr) { setPinError(pinErr.message); return }
+      if (pinErr) { setSaving(false); setPinError(errorText(pinErr)); return }
+    } else if (pinRequired && !study.pin_required) {
+      setSaving(false)
+      setPinError('Enter a 4-digit PIN to turn the PIN on')
+      return
     }
+    setSaving(false)
     setPinInput('')
     setStudy({ ...study, ...form, config: updatedConfig, pin_required: pinRequired } as Study)
     setEditing(false)
+    setNotice({ tone: 'success', text: 'Study saved.' })
+  }
+
+  async function handleExport() {
+    if (!study) return
+    setNotice(null)
+    setExportStatus('Starting…')
+    try {
+      const { blob, filename, counts } = await exportStudyZip(supabase, study, setExportStatus)
+      downloadBlob(blob, filename)
+      const rows = Object.entries(counts).filter(([t]) => t.startsWith('data_')).reduce((a, [, n]) => a + n, 0)
+      setNotice({ tone: 'success', text: `Exported ${counts.participants ?? 0} participants and ${rows.toLocaleString()} data rows to ${filename}.` })
+    } catch (e) {
+      setNotice({ tone: 'error', text: `Export failed: ${e instanceof Error ? e.message : 'unknown error'}` })
+    } finally {
+      setExportStatus(null)
+    }
   }
 
   async function handleDelete() {
     if (!study || deleteText !== study.name) return
     setDeleting(true)
     setDeleteError(null)
-    const { error } = await supabase.from('studies').delete().eq('id', id)
-    if (error) {
-      setDeleteError(error.message)
+    const { data: removed, error } = await supabase.from('studies').delete().eq('id', id).select('id')
+    if (error || !removed?.length) {
+      setDeleteError(error ? errorText(error) : 'Only a study owner or an admin can delete this study.')
       setDeleting(false)
       return
     }
     router.push('/studies')
+  }
+
+  if (loadError) {
+    return <div className="space-y-4">
+      <Link href="/studies" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors"><ArrowLeft size={15} /> Back to Studies</Link>
+      <Notice notice={{ tone: 'error', text: loadError }} />
+    </div>
   }
 
   if (!study) {
@@ -176,6 +233,7 @@ export default function StudyDetailPage() {
     { href: `/studies/${id}/esm-responses`, label: 'ESM Responses',    icon: MessageSquare, description: 'Survey responses' },
     { href: `/studies/${id}/esm`,           label: 'ESM / EMA Config', icon: ClipboardList, description: 'Survey schedules' },
     { href: `/studies/${id}/config`,        label: 'Sensor Config',   icon: Settings,      description: 'Collection settings' },
+    { href: `/studies/${id}/team`,          label: 'Team',            icon: UsersRound,    description: access.role ? `You: ${STUDY_ROLE_LABEL[access.role]}` : 'Members & roles' },
   ]
 
   return (
@@ -183,6 +241,8 @@ export default function StudyDetailPage() {
       <Link href="/studies" className="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-700 text-sm transition-colors">
         <ArrowLeft size={15} /> Back to Studies
       </Link>
+
+      <Notice notice={notice} onClose={() => setNotice(null)} />
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         {editing ? (
@@ -433,8 +493,8 @@ export default function StudyDetailPage() {
             </div>
 
             <div className="flex items-center gap-3 pt-1">
-              <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors">
-                Save Changes
+              <button onClick={handleSave} disabled={saving} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-semibold transition-colors">
+                {saving ? 'Saving…' : 'Save Changes'}
               </button>
               <button onClick={() => {
                 setEditing(false)
@@ -448,9 +508,9 @@ export default function StudyDetailPage() {
               }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
-              <button onClick={() => { setDeleteText(''); setDeleteError(null); setDeleteOpen(true) }} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
+              {access.canManage && <button onClick={() => { setDeleteText(''); setDeleteError(null); setDeleteOpen(true) }} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
                 <Trash2 size={14} /> Delete Study
-              </button>
+              </button>}
             </div>
           </div>
         ) : (
@@ -489,12 +549,24 @@ export default function StudyDetailPage() {
                   )}
                 </div>
               </div>
-              <button
-                onClick={() => setEditing(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors shrink-0"
-              >
-                <Edit2 size={13} /> Edit
-              </button>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                <button
+                  onClick={handleExport}
+                  disabled={!!exportStatus}
+                  title="Download every table for this study as CSV files in a zip"
+                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+                >
+                  <Download size={13} /> {exportStatus ? `Exporting: ${exportStatus}` : 'Export all study data'}
+                </button>
+                {access.canEdit && (
+                  <button
+                    onClick={() => setEditing(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    <Edit2 size={13} /> Edit
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}

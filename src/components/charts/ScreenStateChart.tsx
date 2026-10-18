@@ -11,9 +11,10 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
+import type { ScreenStateRow } from './types'
 
 interface Props {
-  data: any[]
+  data: ScreenStateRow[]
   participants: { id: string; label: string | null; device_id: string }[]
   showParticipant: boolean
 }
@@ -29,7 +30,7 @@ function toDateStr(iso: string) {
 }
 
 function computeDailyScreenOn(
-  data: any[],
+  data: ScreenStateRow[],
   participants: Props['participants'],
 ): { date: string; [pid: string]: number | string }[] {
   const byParticipantDate: Record<string, Record<string, { time: number; state: string }[]>> = {}
@@ -99,7 +100,7 @@ function CustomTooltip({ active, payload, label, participants }: CustomTooltipPr
   )
 }
 
-function ActogramStrip({ data, participants }: { data: any[]; participants: Props['participants'] }) {
+function ActogramStrip({ data, participants }: { data: ScreenStateRow[]; participants: Props['participants'] }) {
   const SVG_WIDTH = 900
   const ROW_HEIGHT = 48
   const LABEL_WIDTH = 110
@@ -112,8 +113,9 @@ function ActogramStrip({ data, participants }: { data: any[]; participants: Prop
   )
 
   const times = sorted.map(r => new Date(r.recorded_at).getTime())
-  const minTime = times.length > 0 ? Math.min(...times) : Date.now()
-  const maxTime = times.length > 0 ? Math.max(...times) : Date.now() + 86400000
+  // Empty data never reaches here in practice; fall back to a fixed 24 h span.
+  const minTime = times.length > 0 ? Math.min(...times) : 0
+  const maxTime = times.length > 0 ? Math.max(...times) : 86400000
 
   const range = maxTime - minTime || 1
 

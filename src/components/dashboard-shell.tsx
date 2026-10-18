@@ -4,9 +4,11 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
+import { MeProvider, type Me } from '@/lib/access'
 import {
-  BarChart3, Check, ChevronDown, Database, FlaskConical, LayoutDashboard,
-  LogOut, Menu, MessageSquare, Settings, ShieldAlert, SlidersHorizontal, TableProperties, Users, X,
+  BarChart3, Check, ChevronDown, Database, FlaskConical, LayoutDashboard, Loader2,
+  LogOut, Menu, MessageSquare, ScrollText, Settings, ShieldAlert, SlidersHorizontal, TableProperties,
+  UserCog, UserRound, Users, UsersRound, X,
 } from 'lucide-react'
 
 interface Study { id: string; name: string; status: string }
@@ -26,8 +28,18 @@ function navFor(studyId: string | null) {
     { label: 'Survey Setup', href: `/studies/${studyId}/esm`, icon: SlidersHorizontal, group: 'Surveys', match: (p: string) => p === `/studies/${studyId}/esm` },
     { label: 'General', href: `/studies/${studyId}`, icon: Settings, group: 'Settings', match: (p: string) => p === `/studies/${studyId}` },
     { label: 'Sensors', href: `/studies/${studyId}/config`, icon: SlidersHorizontal, group: 'Settings', match: (p: string) => p === `/studies/${studyId}/config` },
+    { label: 'Team', href: `/studies/${studyId}/team`, icon: UsersRound, group: 'Settings', match: (p: string) => p === `/studies/${studyId}/team` },
   ]
 }
+
+const ADMIN_NAV = [
+  { label: 'Researchers', href: '/admin/researchers', icon: UserCog, group: 'Admin', match: (p: string) => p === '/admin/researchers' },
+  { label: 'Audit log', href: '/admin/audit', icon: ScrollText, group: 'Admin', match: (p: string) => p === '/admin/audit' },
+]
+
+type ResearcherCheck =
+  | { status: 'ok'; me: Me }
+  | { status: 'missing' | 'inactive' | 'error'; email: string | null; message?: string }
 
 export default function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
@@ -39,20 +51,30 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const [mobileOpen, setMobileOpen] = useState(false)
   const [studyOpen, setStudyOpen] = useState(false)
   const switcherRef = useRef<HTMLDivElement>(null)
-  // null = still checking. Row-level security only returns study data to users
-  // listed in public.researchers, so a signed-in non-researcher would otherwise
-  // see an empty dashboard with no explanation.
-  const [researcher, setResearcher] = useState<{ ok: boolean; email: string | null } | null>(null)
+  // null = still checking. Row-level security only returns study data to
+  // active researchers, so a signed-in user without (or with a deactivated)
+  // researchers row would otherwise see an empty dashboard with no explanation.
+  const [researcher, setResearcher] = useState<ResearcherCheck | null>(null)
 
   useEffect(() => {
     let cancelled = false
     supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) { if (!cancelled) setResearcher({ ok: false, email: null }); return }
-      const { data } = await supabase.from('researchers').select('user_id').eq('user_id', user.id).maybeSingle()
-      if (!cancelled) setResearcher({ ok: !!data, email: user.email ?? null })
+      if (!user) { if (!cancelled) setResearcher({ status: 'missing', email: null }); return }
+      const { data, error } = await supabase.from('researchers')
+        .select('role, active, email, display_name').eq('user_id', user.id).maybeSingle()
+      if (cancelled) return
+      const email = user.email ?? null
+      if (error) setResearcher({ status: 'error', email, message: error.message })
+      else if (!data) setResearcher({ status: 'missing', email })
+      else if (!data.active) setResearcher({ status: 'inactive', email })
+      else setResearcher({
+        status: 'ok',
+        me: { userId: user.id, email: email ?? data.email, displayName: data.display_name, role: data.role },
+      })
     })
     return () => { cancelled = true }
   }, [supabase])
+  const isAdmin = researcher?.status === 'ok' && researcher.me.role === 'admin'
 
   const routeStudy = pathname.match(/^\/studies\/([^/]+)/)?.[1]
   const queryStudy = searchParams.get('study')
@@ -81,10 +103,10 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const routeSelectedId = routeStudy && routeStudy !== 'new' ? routeStudy : queryStudy
   const effectiveId = routeSelectedId && studies.some(s => s.id === routeSelectedId) ? routeSelectedId : selectedId
   const selected = studies.find(s => s.id === effectiveId)
-  const navigation = navFor(effectiveId)
+  const navigation = [...navFor(effectiveId), ...(isAdmin ? ADMIN_NAV : [])]
   const activeNavigation = navigation.find(item => item.match(pathname))
 
-  const section = pathname === '/studies' ? 'All Studies' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
+  const section = pathname === '/studies' ? 'All Studies' : pathname === '/settings/account' ? 'Account' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
   const pageTitle = `${section.replace(/\b\w/g, c => c.toUpperCase())}${selected ? ` · ${selected.name}` : ''} | DETECTMiND`
 
   function switchStudy(id: string) {
@@ -92,7 +114,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     setStudyOpen(false)
     localStorage.setItem('pinnedStudyId', id)
     const current = navigation.find(item => item.match(pathname))
-    if (!current || current.label === 'Overview') router.push(`/?study=${id}`)
+    if (!current || current.label === 'Overview' || current.group === 'Admin') router.push(`/?study=${id}`)
     else {
       const suffix = pathname.replace(/^\/studies\/[^/]+/, '')
       router.push(`/studies/${id}${suffix}`)
@@ -105,15 +127,31 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     router.refresh()
   }
 
-  if (researcher && !researcher.ok) {
+  if (!researcher) {
+    return <div className="flex min-h-dvh items-center justify-center bg-slate-50 text-sm text-slate-500">
+      <Loader2 size={18} className="mr-2 animate-spin" /> Checking your access…
+    </div>
+  }
+
+  if (researcher.status !== 'ok') {
+    const who = researcher.email
+      ? <>You are signed in as <span className="font-medium text-slate-700">{researcher.email}</span>, but </>
+      : 'This account is signed in, but '
     return <div className="flex min-h-dvh items-center justify-center bg-slate-50 px-4">
       <title>Not authorised | DETECTMiND</title>
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-7 text-center shadow-sm">
         <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600"><ShieldAlert size={22} /></span>
-        <h1 className="text-lg font-bold text-slate-900">Your account is not authorised as a researcher</h1>
+        <h1 className="text-lg font-bold text-slate-900">
+          {researcher.status === 'inactive' ? 'Your researcher account has been deactivated'
+            : researcher.status === 'error' ? 'Could not check your access'
+            : 'Your account is not authorised as a researcher'}
+        </h1>
         <p className="mt-2 text-sm text-slate-500">
-          {researcher.email ? <>You are signed in as <span className="font-medium text-slate-700">{researcher.email}</span>, but </> : 'This account is signed in, but '}
-          it has not been granted researcher access, so no study data is visible. Ask the study administrator to add your account to the researchers list.
+          {researcher.status === 'error'
+            ? <>Please try again in a moment. ({researcher.message})</>
+            : researcher.status === 'inactive'
+              ? <>{who}an administrator has deactivated this account, so no study data is visible. Contact them if you need access again.</>
+              : <>{who}it has not been granted researcher access, so no study data is visible. Ask an administrator to invite you from Admin → Researchers.</>}
         </p>
         <button onClick={logout} className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"><LogOut size={16} />Sign out</button>
       </div>
@@ -147,6 +185,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
 
       <div className="border-t border-slate-200 p-3">
         <Link href="/studies" aria-current={pathname === '/studies' ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${pathname === '/studies' ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}><BarChart3 size={17} />All studies</Link>
+        <Link href="/settings/account" aria-current={pathname === '/settings/account' ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${pathname === '/settings/account' ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}><UserRound size={17} /><span className="min-w-0 flex-1 truncate">Account</span>{isAdmin && <span className="rounded-md bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">Admin</span>}</Link>
         <button onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900"><LogOut size={17} />Sign out</button>
       </div>
     </aside>
@@ -159,7 +198,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     <div className="flex min-w-0 flex-1 flex-col lg:pl-64">
       <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-8">
         <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden" aria-label="Open navigation"><Menu size={18} /></button>
-        <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-500">{pathname === '/studies' ? 'All Studies' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replace('-', ' ')}</p></div>
+        <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-500">{section}</p></div>
         {studies.length > 0 && <div className="relative" ref={switcherRef}>
           <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} aria-haspopup="listbox" className="flex max-w-[15rem] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-slate-50">
             <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[selected?.status || 'draft']}`} />
@@ -171,7 +210,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
           </div>}
         </div>}
       </header>
-      <main id="main-content" className="min-w-0 flex-1"><div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</div></main>
+      <main id="main-content" className="min-w-0 flex-1"><div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8"><MeProvider me={researcher.me}>{children}</MeProvider></div></main>
     </div>
   </div>
 }

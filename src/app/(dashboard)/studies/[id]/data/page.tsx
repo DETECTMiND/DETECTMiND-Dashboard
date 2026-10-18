@@ -1,7 +1,12 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useRef, useState, Suspense, lazy } from 'react'
+import { useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react'
+import {
+  asRows,
+  type AppUsageRow, type BatteryRow, type CallSmsRow, type DataRow, type EsmResponseRow,
+  type LightRow, type LocationRow, type NotificationRow, type ScreenStateRow,
+} from '@/components/charts/types'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import {
   Download, Database, Users, Search, Check, X,
@@ -162,21 +167,21 @@ function ChartView({
   sensorKey, data, participants, showParticipant,
 }: {
   sensorKey: string
-  data: any[]
+  data: DataRow[]
   participants: Participant[]
   showParticipant: boolean
 }) {
-  const props = { data, participants, showParticipant }
+  const props = { participants, showParticipant }
   switch (sensorKey) {
-    case 'data_battery':            return <BatteryChart {...props} />
-    case 'data_light':              return <LightChart {...props} />
-    case 'data_screen_state':       return <ScreenStateChart {...props} />
-    case 'data_notifications':      return <NotificationsChart {...props} />
-    case 'data_app_usage':          return <AppUsageChart {...props} />
-    case 'data_calls':              return <CallsSmsChart {...props} sensorKey="data_calls" />
-    case 'data_sms':                return <CallsSmsChart {...props} sensorKey="data_sms" />
-    case 'data_location':           return <LocationChart {...props} />
-    case 'data_esm_responses':      return <EsmChart {...props} />
+    case 'data_battery':            return <BatteryChart {...props} data={asRows<BatteryRow>(data)} />
+    case 'data_light':              return <LightChart {...props} data={asRows<LightRow>(data)} />
+    case 'data_screen_state':       return <ScreenStateChart {...props} data={asRows<ScreenStateRow>(data)} />
+    case 'data_notifications':      return <NotificationsChart {...props} data={asRows<NotificationRow>(data)} />
+    case 'data_app_usage':          return <AppUsageChart {...props} data={asRows<AppUsageRow>(data)} />
+    case 'data_calls':              return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_calls" />
+    case 'data_sms':                return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_sms" />
+    case 'data_location':           return <LocationChart {...props} data={asRows<LocationRow>(data)} />
+    case 'data_esm_responses':      return <EsmChart {...props} data={asRows<EsmResponseRow>(data)} />
     default:
       return (
         <div className="py-12 text-center text-sm text-gray-400">
@@ -311,14 +316,16 @@ function SensorDataInner() {
   const { id: studyId } = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
+  // Read once on mount: the participant filter is then driven by the picker.
+  const [initialParticipant] = useState(() => searchParams.get('participant'))
 
   const [participants, setParticipants]               = useState<Participant[]>([])
   const [enabledTables, setEnabledTables]             = useState(SENSOR_TABLES)
   const [selectedParticipant, setSelectedParticipant] = useState<string>('all')
   const [selectedTable, setSelectedTable]             = useState(SENSOR_TABLES[0])
-  const [data, setData]                               = useState<any[]>([])
-  const [chartData, setChartData]                     = useState<any[]>([])
+  const [data, setData]                               = useState<DataRow[]>([])
+  const [chartData, setChartData]                     = useState<DataRow[]>([])
   const [counts, setCounts]                           = useState<Record<string, number>>({})
   const [totalCount, setTotalCount]                   = useState<number | null>(null)
   const [loading, setLoading]                         = useState(false)
@@ -345,7 +352,7 @@ function SensorDataInner() {
       const pList = (pData || []) as Participant[]
       setParticipants(pList)
 
-      const enabledTypes = new Set((cfgData || []).map((r: any) => r.sensor_type))
+      const enabledTypes = new Set(((cfgData || []) as { sensor_type: string }[]).map(r => r.sensor_type))
       // Tables to show regardless of whether they're a configured sensor.
       const ALWAYS_SHOW = new Set<string>([])
       const filtered = enabledTypes.size > 0
@@ -358,13 +365,12 @@ function SensorDataInner() {
       setSortDir('desc')
       setPage(0)
 
-      const urlParticipant = searchParams.get('participant')
-      if (urlParticipant && pList.some(p => p.id === urlParticipant)) {
-        setSelectedParticipant(urlParticipant)
+      if (initialParticipant && pList.some(p => p.id === initialParticipant)) {
+        setSelectedParticipant(initialParticipant)
       }
     }
     loadParticipants()
-  }, [studyId])
+  }, [studyId, supabase, initialParticipant])
 
   // Re-fetch per-sensor counts whenever participant changes
   useEffect(() => {
@@ -389,10 +395,7 @@ function SensorDataInner() {
       setCountsLoading(false)
     }
     loadCounts()
-  }, [selectedParticipant, participants, enabledTables])
-
-  // Reset page when sort or page size changes
-  useEffect(() => { setPage(0) }, [sortCol, sortDir, pageSize])
+  }, [supabase, selectedParticipant, participants, enabledTables])
 
   // Load table rows (paginated)
   useEffect(() => {
@@ -426,7 +429,7 @@ function SensorDataInner() {
           .in('participant_id', pIds),
       ])
 
-      let rows = rowsRes.data || []
+      let rows = (rowsRes.data || []) as DataRow[]
 
       // Client-side sort for datetime columns (ensures correct temporal ordering)
       if (isDatetimeCol && rows.length > 0) {
@@ -436,15 +439,15 @@ function SensorDataInner() {
           if (aVal == null && bVal == null) return 0
           if (aVal === null || aVal === undefined) return 1  // nulls last (matches the server)
           if (bVal === null || bVal === undefined) return -1
-          const aTime = new Date(aVal).getTime()
-          const bTime = new Date(bVal).getTime()
+          const aTime = new Date(aVal as string).getTime()
+          const bTime = new Date(bVal as string).getTime()
           return sortDir === 'asc' ? aTime - bTime : bTime - aTime
         })
       } else if (!isDatetimeCol && rows.length > 0) {
         // Client-side sort for non-datetime columns too (to respect sortDir)
         rows = [...rows].sort((a, b) => {
-          const aVal = a[effectiveSortCol]
-          const bVal = b[effectiveSortCol]
+          const aVal = a[effectiveSortCol] as string | number | boolean | null | undefined
+          const bVal = b[effectiveSortCol] as string | number | boolean | null | undefined
           if (aVal == null && bVal == null) return 0
           if (aVal === null || aVal === undefined) return 1  // nulls last (matches the server)
           if (bVal === null || bVal === undefined) return -1
@@ -459,7 +462,7 @@ function SensorDataInner() {
       setLoading(false)
     }
     loadData()
-  }, [selectedTable, selectedParticipant, participants, sortCol, sortDir, page, pageSize])
+  }, [supabase, selectedTable, selectedParticipant, participants, sortCol, sortDir, page, pageSize])
 
   // Load chart data — only when chart view active, with cache guard
   useEffect(() => {
@@ -483,11 +486,11 @@ function SensorDataInner() {
       if (since) q = q.gte(selectedTable.timeCol, since)
 
       const { data: rows } = await q
-      setChartData(rows || [])
+      setChartData((rows || []) as DataRow[])
       setChartLoading(false)
     }
     loadChartData()
-  }, [selectedTable, selectedParticipant, participants, viewMode, chartRange])
+  }, [supabase, selectedTable, selectedParticipant, participants, viewMode, chartRange])
 
   function handleParticipantChange(id: string) {
     setSelectedParticipant(id)
@@ -506,9 +509,10 @@ function SensorDataInner() {
       setSortCol(col)
       setSortDir('asc')
     }
+    setPage(0)
   }
 
-  function buildCSV(rows: any[]) {
+  function buildCSV(rows: DataRow[]) {
     if (rows.length === 0) return ''
     const headers = Object.keys(rows[0])
     return [headers.join(','), ...rows.map(row => headers.map(h => JSON.stringify(row[h] ?? '')).join(','))].join('\n')
@@ -680,7 +684,7 @@ function SensorDataInner() {
               <span className="text-xs text-gray-400">Rows</span>
               <select
                 value={pageSize}
-                onChange={e => setPageSize(Number(e.target.value))}
+                onChange={e => { setPageSize(Number(e.target.value)); setPage(0) }}
                 className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-300 cursor-pointer"
               >
                 {PAGE_SIZE_OPTIONS.map(s => (
@@ -794,8 +798,9 @@ function SensorDataInner() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {data.map((row, i) => {
-                      const p = pMap[row.participant_id]
-                      const name = p ? participantName(p) : row.participant_id
+                      const pid = String(row.participant_id ?? '')
+                      const p = pMap[pid]
+                      const name = p ? participantName(p) : pid
                       return (
                         <tr key={i} className="hover:bg-blue-50/30 transition-colors">
                           {showParticipantCol && (

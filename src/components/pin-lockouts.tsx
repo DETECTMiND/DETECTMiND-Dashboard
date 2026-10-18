@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { KeyRound, Unlock } from 'lucide-react'
 
@@ -12,26 +12,31 @@ type Attempt = {
   locked_until: string | null
 }
 
-export function PinLockouts({ studyId }: { studyId: string }) {
-  const supabase = createClient()
+export function PinLockouts({ studyId, canEdit = true }: { studyId: string; canEdit?: boolean }) {
+  const supabase = useMemo(() => createClient(), [])
   const [attempts, setAttempts] = useState<Attempt[]>([])
   const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const fetchAttempts = useCallback(async () => {
     const { data } = await supabase.from('pin_attempts').select('*')
       .eq('study_id', studyId).order('last_fail_at', { ascending: false })
-    setAttempts((data || []) as Attempt[])
-  }, [studyId]) // eslint-disable-line react-hooks/exhaustive-deps
+    return (data || []) as Attempt[]
+  }, [supabase, studyId])
 
-  // The effect starts an external database synchronization; state is updated
-  // asynchronously after the request resolves.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    let cancelled = false
+    fetchAttempts().then(rows => { if (!cancelled) setAttempts(rows) })
+    return () => { cancelled = true }
+  }, [fetchAttempts])
 
   async function unlock(deviceId: string) {
     setBusy(deviceId)
-    await supabase.from('pin_attempts').delete().eq('study_id', studyId).eq('device_id', deviceId)
-    await load()
+    setError(null)
+    const { data, error } = await supabase.from('pin_attempts').delete()
+      .eq('study_id', studyId).eq('device_id', deviceId).select('device_id')
+    if (error || !data?.length) setError(error ? error.message : 'You do not have permission to clear PIN attempts.')
+    setAttempts(await fetchAttempts())
     setBusy(null)
   }
 
@@ -41,6 +46,7 @@ export function PinLockouts({ studyId }: { studyId: string }) {
       <div className="px-4 py-3 border-b border-amber-200 flex items-center gap-2 text-sm font-semibold text-amber-900">
         <KeyRound size={15} /> PIN attempts and lockouts
       </div>
+      {error && <p role="alert" className="border-b border-amber-200 bg-red-50 px-4 py-2 text-xs text-red-700">{error}</p>}
       <div className="divide-y divide-amber-100">
         {attempts.map(a => {
           const locked = !!a.locked_until && new Date(a.locked_until) > new Date()
@@ -53,10 +59,10 @@ export function PinLockouts({ studyId }: { studyId: string }) {
                   : `last attempt ${new Date(a.last_fail_at).toLocaleString()}`}
               </p>
             </div>
-            <button onClick={() => unlock(a.device_id)} disabled={busy === a.device_id}
+            {canEdit && <button onClick={() => unlock(a.device_id)} disabled={busy === a.device_id}
               className="inline-flex items-center gap-1.5 rounded-lg bg-white border border-amber-300 px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50">
               <Unlock size={12} /> {busy === a.device_id ? 'Unlocking…' : 'Clear attempts'}
-            </button>
+            </button>}
           </div>
         })}
       </div>

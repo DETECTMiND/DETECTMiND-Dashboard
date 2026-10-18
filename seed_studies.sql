@@ -1,5 +1,5 @@
 -- ============================================================
--- Seed: researcher access + Digital Habits & Focus Study + Sleep & Wellbeing Study
+-- Seed: admin access + Digital Habits & Focus Study + Sleep & Wellbeing Study
 -- Run in the Supabase SQL editor (as postgres, which bypasses RLS) after
 -- clear_database.sql and supabase_schema.sql. UUIDs are generated inline;
 -- re-running will create duplicate studies.
@@ -8,30 +8,27 @@
 -- ------------------------------------------------------------
 -- 0. RESEARCHER ACCESS
 -- ------------------------------------------------------------
--- Dashboard access requires a row in public.researchers. Every Supabase Auth
--- account that exists right now is granted researcher access (the emails are
--- printed as NOTICEs). To add a researcher later, create the user in
--- Authentication -> Users, then run:
---   INSERT INTO researchers(user_id) SELECT id FROM auth.users WHERE email = 'name@example.org';
--- To revoke:
---   DELETE FROM researchers WHERE user_id = (SELECT id FROM auth.users WHERE email = 'name@example.org');
+-- Dashboard access requires an active row in public.researchers. Every
+-- Supabase Auth account that exists right now becomes an active ADMIN (the
+-- emails are printed as NOTICEs) and, further down, owner of every seeded
+-- study. Invite everyone else from the dashboard: Admin -> Researchers.
 DO $$
 DECLARE
   r RECORD;
   n INT := 0;
 BEGIN
   FOR r IN
-    INSERT INTO public.researchers (user_id)
-    SELECT u.id FROM auth.users u
-    ON CONFLICT (user_id) DO NOTHING
-    RETURNING user_id
+    INSERT INTO public.researchers (user_id, email, role, active)
+    SELECT u.id, u.email, 'admin', true FROM auth.users u
+    ON CONFLICT (user_id) DO UPDATE SET role = 'admin', active = true,
+                                        email = COALESCE(public.researchers.email, EXCLUDED.email)
+    RETURNING user_id, email
   LOOP
     n := n + 1;
-    RAISE NOTICE 'Granted researcher access: %',
-      (SELECT COALESCE(u.email, u.id::text) FROM auth.users u WHERE u.id = r.user_id);
+    RAISE NOTICE 'Granted admin access: %', COALESCE(r.email, r.user_id::text);
   END LOOP;
   IF n = 0 THEN
-    RAISE NOTICE 'No auth.users accounts found: no researchers granted. Create a user, then INSERT INTO researchers(user_id) SELECT id FROM auth.users WHERE email = ''...'';';
+    RAISE NOTICE 'No auth.users accounts found: no admins granted. Create a user in Authentication -> Users, then run: INSERT INTO researchers(user_id, email, role) SELECT id, email, ''admin'' FROM auth.users WHERE email = ''...'';';
   END IF;
 END $$;
 
@@ -346,5 +343,15 @@ VALUES
    'How motivated do you feel to tackle today''s tasks?',
    true, NULL,
    jsonb_build_object('min', 1, 'max', 5, 'label_min', 'Not at all motivated', 'label_max', 'Very motivated'));
+
+-- ============================================================
+-- 3. STUDY OWNERS: every existing account owns both seeded studies
+-- ============================================================
+INSERT INTO study_members (study_id, user_id, role)
+SELECT st.id, r.user_id, 'owner'
+  FROM (VALUES (v_digital_study_id), (v_sleep_study_id)) AS st(id)
+  CROSS JOIN public.researchers r
+  JOIN auth.users u ON u.id = r.user_id
+ON CONFLICT (study_id, user_id) DO UPDATE SET role = 'owner';
 
 END $$;

@@ -14,14 +14,10 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 
-interface Participant {
-  id: string
-  label: string | null
-  device_id: string
-}
+import type { ChartParticipant as Participant, ChartPoint, InjectedTooltipProps, LightRow } from './types'
 
 interface Props {
-  data: any[]
+  data: LightRow[]
   participants: Participant[]
   showParticipant: boolean
 }
@@ -32,12 +28,12 @@ function participantName(p: Participant): string {
   return p.label || p.device_id
 }
 
-function formatTick(v: any): string {
+function formatTick(v: string | number): string {
   if (!v) return ''
   return new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function formatDateTime(v: any): string {
+function formatDateTime(v: string | number | undefined): string {
   if (!v) return ''
   return new Date(v).toLocaleString(undefined, {
     month: 'short',
@@ -45,6 +41,34 @@ function formatDateTime(v: any): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function LuxTooltip({ active, payload, label }: InjectedTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1">
+      <p className="font-semibold text-gray-700 mb-1">{formatDateTime(label)}</p>
+      {payload.map(entry => (
+        <p key={entry.dataKey} style={{ color: entry.color }}>
+          {entry.name}: {entry.value?.toLocaleString()} lux
+        </p>
+      ))}
+    </div>
+  )
+}
+
+function HourTooltip({ active, payload, label }: InjectedTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1">
+      <p className="font-semibold text-gray-700 mb-1">{`Hour ${label}:00`}</p>
+      {payload.map(entry => (
+        <p key={entry.dataKey} style={{ color: entry.fill }}>
+          {entry.name}: {entry.value?.toLocaleString()} lux
+        </p>
+      ))}
+    </div>
+  )
 }
 
 export default function LightChart({ data, participants, showParticipant }: Props) {
@@ -65,11 +89,11 @@ export default function LightChart({ data, participants, showParticipant }: Prop
   )
 
   const luxTimeData = useMemo(() => {
-    const timeMap = new Map<string, any>()
+    const timeMap = new Map<string, ChartPoint>()
     for (const row of sortedData) {
       const key = row.recorded_at
-      if (!timeMap.has(key)) timeMap.set(key, { recorded_at: key })
-      const entry = timeMap.get(key)
+      let entry = timeMap.get(key)
+      if (!entry) { entry = { recorded_at: key }; timeMap.set(key, entry) }
       entry[`lux_${row.participant_id}`] = row.lux
     }
     return Array.from(timeMap.values())
@@ -92,7 +116,7 @@ export default function LightChart({ data, participants, showParticipant }: Prop
       buckets[hour][row.participant_id].count += 1
     }
     return Array.from({ length: 24 }, (_, h) => {
-      const entry: any = { hour: h }
+      const entry: ChartPoint = { hour: h }
       for (const pid of participantIds) {
         const b = buckets[h][pid]
         entry[`avg_lux_${pid}`] = b && b.count > 0 ? Math.round(b.sum / b.count) : 0
@@ -101,33 +125,6 @@ export default function LightChart({ data, participants, showParticipant }: Prop
     })
   }, [data, participantIds])
 
-  const LuxTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload || payload.length === 0) return null
-    return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1">
-        <p className="font-semibold text-gray-700 mb-1">{formatDateTime(label)}</p>
-        {payload.map((entry: any) => (
-          <p key={entry.dataKey} style={{ color: entry.color }}>
-            {entry.name}: {entry.value?.toLocaleString()} lux
-          </p>
-        ))}
-      </div>
-    )
-  }
-
-  const HourTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload || payload.length === 0) return null
-    return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1">
-        <p className="font-semibold text-gray-700 mb-1">{`Hour ${label}:00`}</p>
-        {payload.map((entry: any) => (
-          <p key={entry.dataKey} style={{ color: entry.fill }}>
-            {entry.name}: {entry.value?.toLocaleString()} lux
-          </p>
-        ))}
-      </div>
-    )
-  }
 
   if (data.length === 0) {
     return (

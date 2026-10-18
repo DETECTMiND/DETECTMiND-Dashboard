@@ -12,15 +12,10 @@ import {
   ReferenceArea,
   ResponsiveContainer,
 } from 'recharts'
-
-interface Participant {
-  id: string
-  label: string | null
-  device_id: string
-}
+import type { BatteryRow, ChartParticipant as Participant, ChartPoint, InjectedTooltipProps } from './types'
 
 interface Props {
-  data: any[]
+  data: BatteryRow[]
   participants: Participant[]
   showParticipant: boolean
 }
@@ -31,13 +26,13 @@ function participantName(p: Participant): string {
   return p.label || p.device_id
 }
 
-function formatTick(v: any): string {
+function formatTick(v: string | number): string {
   if (!v) return ''
   const d = new Date(v)
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function formatDateTime(v: any): string {
+function formatDateTime(v: string | number | undefined): string {
   if (!v) return ''
   const d = new Date(v)
   return d.toLocaleString(undefined, {
@@ -48,7 +43,7 @@ function formatDateTime(v: any): string {
   })
 }
 
-function CustomDot(props: any) {
+function CustomDot(props: { cx?: number; cy?: number; payload?: ChartPoint }) {
   const { cx, cy, payload } = props
   if (!payload?.is_charging) return null
   return <circle cx={cx} cy={cy} r={4} fill="#22c55e" stroke="#fff" strokeWidth={1} />
@@ -60,6 +55,44 @@ interface ChargingPeriod {
   x2: string
 }
 
+interface BatteryTooltipProps extends InjectedTooltipProps {
+  participantIds: string[]
+  participantMap: Record<string, Participant>
+  chartData: ChartPoint[]
+  showParticipant: boolean
+}
+
+function BatteryTooltip({ active, payload, label, participantIds, participantMap, chartData, showParticipant }: BatteryTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1 max-w-xs">
+      <p className="font-semibold text-gray-700 mb-1">{formatDateTime(label)}</p>
+      {participantIds.map(pid => {
+        const p = participantMap[pid]
+        const name = p ? participantName(p) : pid
+        const levelEntry = payload.find(e => e.dataKey === `level_${pid}`)
+        const tempEntry = payload.find(e => e.dataKey === `temp_${pid}`)
+        const dataPoint = chartData.find(d => d.recorded_at === label)
+        const isCharging = dataPoint?.[`is_charging_${pid}`]
+        if (levelEntry == null && tempEntry == null) return null
+        return (
+          <div key={pid} className="border-t border-gray-100 pt-1 first:border-0 first:pt-0">
+            <p className="font-medium text-gray-600">{showParticipant ? name : 'Battery'}</p>
+            {levelEntry != null && (
+              <p style={{ color: levelEntry.color }}>
+                Level: {levelEntry.value}%{isCharging ? ' ⚡ charging' : ''}
+              </p>
+            )}
+            {tempEntry != null && (
+              <p className="text-orange-500">Temp: {Number(tempEntry.value).toFixed(1)}°C</p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function BatteryChart({ data, participants, showParticipant }: Props) {
   const participantMap = useMemo(
     () => Object.fromEntries(participants.map((p, i) => [p.id, { ...p, color: PALETTE[i % PALETTE.length] }])),
@@ -67,7 +100,7 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
   )
 
   const hasTemperature = useMemo(
-    () => data.some(row => row.temperature != null && row.temperature !== ''),
+    () => data.some(row => row.temperature != null),
     [data]
   )
 
@@ -84,7 +117,7 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
 
   const chargingPeriods = useMemo<ChargingPeriod[]>(() => {
     const periods: ChargingPeriod[] = []
-    const byParticipant: Record<string, any[]> = {}
+    const byParticipant: Record<string, BatteryRow[]> = {}
     for (const row of sortedData) {
       if (!byParticipant[row.participant_id]) byParticipant[row.participant_id] = []
       byParticipant[row.participant_id].push(row)
@@ -108,13 +141,14 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
   }, [sortedData])
 
   const chartData = useMemo(() => {
-    const timeMap = new Map<string, any>()
+    const timeMap = new Map<string, ChartPoint>()
     for (const row of sortedData) {
       const key = row.recorded_at
-      if (!timeMap.has(key)) {
-        timeMap.set(key, { recorded_at: key })
+      let entry = timeMap.get(key)
+      if (!entry) {
+        entry = { recorded_at: key }
+        timeMap.set(key, entry)
       }
-      const entry = timeMap.get(key)
       entry[`level_${row.participant_id}`] = row.level
       entry[`is_charging_${row.participant_id}`] = row.is_charging
       if (row.temperature != null) {
@@ -123,37 +157,6 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
     }
     return Array.from(timeMap.values())
   }, [sortedData])
-
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload || payload.length === 0) return null
-    return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1 max-w-xs">
-        <p className="font-semibold text-gray-700 mb-1">{formatDateTime(label)}</p>
-        {participantIds.map(pid => {
-          const p = participantMap[pid]
-          const name = p ? participantName(p) : pid
-          const levelEntry = payload.find((e: any) => e.dataKey === `level_${pid}`)
-          const tempEntry = payload.find((e: any) => e.dataKey === `temp_${pid}`)
-          const dataPoint = chartData.find(d => d.recorded_at === label)
-          const isCharging = dataPoint?.[`is_charging_${pid}`]
-          if (levelEntry == null && tempEntry == null) return null
-          return (
-            <div key={pid} className="border-t border-gray-100 pt-1 first:border-0 first:pt-0">
-              <p className="font-medium text-gray-600">{showParticipant ? name : 'Battery'}</p>
-              {levelEntry != null && (
-                <p style={{ color: levelEntry.color }}>
-                  Level: {levelEntry.value}%{isCharging ? ' ⚡ charging' : ''}
-                </p>
-              )}
-              {tempEntry != null && (
-                <p className="text-orange-500">Temp: {tempEntry.value?.toFixed(1)}°C</p>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
 
   if (data.length === 0) {
     return (
@@ -208,12 +211,12 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
           />
         )}
 
-        <Tooltip content={<CustomTooltip />} />
+        <Tooltip content={<BatteryTooltip participantIds={participantIds} participantMap={participantMap} chartData={chartData} showParticipant={showParticipant} />} />
         <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
 
         {participantIds.map((pid, idx) => {
           const p = participantMap[pid]
-          const color = p ? PALETTE[participants.indexOf(p) % PALETTE.length] : PALETTE[idx % PALETTE.length]
+          const color = p ? p.color : PALETTE[idx % PALETTE.length]
           const name = p ? participantName(p) : pid
           return (
             <Line
@@ -231,7 +234,7 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
           )
         })}
 
-        {hasTemperature && participantIds.map((pid, idx) => {
+        {hasTemperature && participantIds.map(pid => {
           const p = participantMap[pid]
           const name = p ? participantName(p) : pid
           return (

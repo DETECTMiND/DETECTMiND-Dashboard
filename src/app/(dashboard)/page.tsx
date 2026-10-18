@@ -1,10 +1,10 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useMemo, useState, Suspense } from 'react'
 import {
   Users, AlertTriangle, CheckCircle2, Wifi,
-  Database, ChevronRight, MessageSquare,
+  Database, MessageSquare,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -101,16 +101,17 @@ function getRangeStart(filter: TimeFilter): string | null {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 function OverviewContent() {
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
   const searchParams = useSearchParams()
   const studyParam = searchParams.get('study')
 
   // Resolve selected study: prefer URL param, fall back to localStorage
-  const [selectedStudyId, setSelectedStudyId] = useState<string | null>(() => {
+  const [pickedStudyId, setSelectedStudyId] = useState<string | null>(() => {
     if (studyParam) return studyParam
     if (typeof window !== 'undefined') return localStorage.getItem('pinnedStudyId')
     return null
   })
+  const selectedStudyId = studyParam ?? pickedStudyId
 
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all')
   const [allParticipants, setAllParticipants] = useState<ParticipantRow[]>([])
@@ -122,11 +123,6 @@ function OverviewContent() {
   const [esmResponseTimes, setEsmResponseTimes] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [renderedAt] = useState(() => Date.now())
-
-  // Sync selectedStudyId when URL param changes
-  useEffect(() => {
-    if (studyParam) setSelectedStudyId(studyParam)
-  }, [studyParam])
 
   // ── Load base data (doesn't change with time filter) ──────────────────────
   useEffect(() => {
@@ -150,7 +146,7 @@ function OverviewContent() {
       setAllParticipants(allP)
     }
     load()
-  }, [])
+  }, [supabase])
 
   // ── Load time-filtered data ───────────────────────────────────────────────
   useEffect(() => {
@@ -178,7 +174,7 @@ function OverviewContent() {
       // Sensor counts
       const countResults = await Promise.all(
         SENSOR_TABLES.map(tbl => {
-          let q = supabase.from(tbl as any).select('*', { count: 'exact', head: true })
+          let q = supabase.from(tbl).select('*', { count: 'exact', head: true })
           if (since) q = q.gte(SENSOR_TIME_COLS[tbl], since)
           q = q.in('participant_id', studyParticipantIds)
           return q
@@ -229,12 +225,12 @@ function OverviewContent() {
         .in('participant_id', studyParticipantIds)
       if (since) rq = rq.gte('triggered_at', since)
       const { data: rtData } = await rq
-      setEsmResponseTimes((rtData || []).map((r: any) => r.responded_at as string))
+      setEsmResponseTimes(((rtData || []) as { responded_at: string }[]).map(r => r.responded_at))
 
       setLoading(false)
     }
     load()
-  }, [timeFilter, selectedStudyId, allParticipants])
+  }, [supabase, timeFilter, selectedStudyId, allParticipants])
 
   // ── Derived ───────────────────────────────────────────────────────────────
 

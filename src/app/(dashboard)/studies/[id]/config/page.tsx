@@ -1,10 +1,12 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { Save, ClipboardList, CheckCircle, AlertCircle } from 'lucide-react'
+import { useStudyAccess } from '@/lib/access'
+import { LoadingBlock, Notice, ReadOnlyBanner, errorText } from '@/components/feedback'
 
 const SENSOR_TYPES = [
   { key: 'app_usage', label: 'App Usage', hasInterval: false, description: 'Tracks foreground app usage with start/end times' },
@@ -74,12 +76,24 @@ interface SensorConfig {
   sensor_type: string
   enabled: boolean
   interval_seconds: number | null
-  config: Record<string, any>
+  config: SensorConfigJson
+}
+
+// sensor_configs.config: location uses movement_threshold; gestures uses the
+// interaction/skip/scroll settings. Other sensors keep it empty.
+interface SensorConfigJson {
+  movement_threshold?: number
+  interaction_types?: Record<string, boolean>
+  skip_rules?: Record<string, boolean>
+  scroll_tracking?: Partial<ScrollTracking>
+  [key: string]: unknown
 }
 
 export default function SensorConfigPage() {
-  const { id: studyId } = useParams()
-  const supabase = createClient()
+  const { id: studyId } = useParams<{ id: string }>()
+  const supabase = useMemo(() => createClient(), [])
+  const access = useStudyAccess(studyId)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [configs, setConfigs] = useState<Record<string, SensorConfig>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -95,12 +109,13 @@ export default function SensorConfigPage() {
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase.from('sensor_configs').select('*').eq('study_id', studyId)
+      const { data, error } = await supabase.from('sensor_configs').select('*').eq('study_id', studyId)
+      if (error) { setLoadError(`Could not load sensor settings: ${errorText(error)}`); return }
       const map: Record<string, SensorConfig> = {}
       SENSOR_TYPES.forEach(t => {
-        const existing = (data || []).find(d => d.sensor_type === t.key)
+        const existing = ((data || []) as SensorConfig[]).find(d => d.sensor_type === t.key)
         if (existing) {
-          if (t.key === 'location' && existing.config && (existing.config as any).movement_threshold === undefined) {
+          if (t.key === 'location' && existing.config && existing.config.movement_threshold === undefined) {
             existing.config = { ...existing.config, movement_threshold: 50 }
           }
           if (t.key === 'gestures') {
@@ -113,7 +128,7 @@ export default function SensorConfigPage() {
           }
           map[t.key] = existing
         } else {
-          let defaultConfig: Record<string, any> = {}
+          let defaultConfig: SensorConfigJson = {}
           if (t.key === 'location') defaultConfig = { movement_threshold: 50 }
           if (t.key === 'gestures') defaultConfig = SCREEN_INTERACTION_DEFAULTS
           map[t.key] = { sensor_type: t.key, enabled: true, interval_seconds: t.hasInterval ? 300 : null, config: defaultConfig }
@@ -121,10 +136,10 @@ export default function SensorConfigPage() {
       })
       setConfigs(map)
     }
-    load()
-  }, [studyId])
+    void load()
+  }, [studyId, supabase])
 
-  function updateConfig(key: string, field: string, value: any) {
+  function updateConfig<K extends keyof SensorConfig>(key: string, field: K, value: SensorConfig[K]) {
     setConfigs(prev => ({
       ...prev,
       [key]: { ...prev[key], [field]: value },
@@ -143,7 +158,7 @@ export default function SensorConfigPage() {
           config: {
             ...cfg.config,
             [section]: {
-              ...(cfg.config as any)[section],
+              ...cfg.config[section],
               [subKey]: value,
             },
           },
@@ -192,13 +207,13 @@ export default function SensorConfigPage() {
     setSaving(false)
 
     if (error) {
-      setSaveError(error.message)
+      setSaveError(errorText(error))
       return
     }
 
     if (data) {
       const idMap: Record<string, string> = {}
-      data.forEach((r: any) => { idMap[r.sensor_type] = r.id })
+      data.forEach((r: { sensor_type: string; id: string }) => { idMap[r.sensor_type] = r.id })
       setConfigs(prev => {
         const next = { ...prev }
         Object.keys(next).forEach(k => {
@@ -221,16 +236,16 @@ export default function SensorConfigPage() {
             <h1 className="text-2xl font-bold text-gray-900">Sensor Configuration</h1>
             <p className="text-gray-500 text-sm mt-0.5">Enable or disable sensors and set collection intervals</p>
           </div>
-          <button
+          {access.canEdit && <button
             onClick={saveAll}
-            disabled={saving}
+            disabled={saving || Object.keys(configs).length === 0}
             className={`flex items-center gap-2 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-sm ${
               saveError ? 'bg-red-500 hover:bg-red-400' : 'bg-blue-600 hover:bg-blue-500'
             }`}
           >
             {saveError ? <AlertCircle size={15} /> : saved ? <CheckCircle size={15} /> : <Save size={15} />}
             {saving ? 'Saving…' : saveError ? 'Error' : saved ? 'Saved!' : 'Save Changes'}
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -243,6 +258,10 @@ export default function SensorConfigPage() {
           </div>
         </div>
       )}
+
+      {!access.loading && !access.canEdit && <ReadOnlyBanner />}
+      {loadError && <Notice notice={{ tone: 'error', text: loadError }} />}
+      {!loadError && Object.keys(configs).length === 0 && <LoadingBlock label="Loading sensor settings…" />}
 
       {/* ESM/EMA note */}
       <div className="flex items-start gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
@@ -257,7 +276,7 @@ export default function SensorConfigPage() {
         </div>
       </div>
 
-      <div className="space-y-3">
+      <fieldset disabled={!access.canEdit} className="space-y-3 min-w-0">
         {SENSOR_TYPES.map(sensor => {
           const cfg = configs[sensor.key]
           if (!cfg) return null
@@ -307,8 +326,8 @@ export default function SensorConfigPage() {
                       <label className="block text-xs font-medium text-gray-500 mb-1">Movement threshold (meters)</label>
                       <input
                         type="number"
-                        key={`location-threshold-${(cfg.config as any)?.movement_threshold ?? 50}`}
-                        defaultValue={(cfg.config as any)?.movement_threshold ?? 50}
+                        key={`location-threshold-${cfg.config?.movement_threshold ?? 50}`}
+                        defaultValue={cfg.config?.movement_threshold ?? 50}
                         onBlur={e => {
                           const val = parseInt(e.target.value)
                           updateConfig(sensor.key, 'config', { ...cfg.config, movement_threshold: isNaN(val) ? 0 : val })
@@ -419,7 +438,7 @@ export default function SensorConfigPage() {
             </div>
           )
         })}
-      </div>
+      </fieldset>
     </div>
   )
 }
