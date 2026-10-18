@@ -20,6 +20,10 @@
 --     (study_members: owner | editor | viewer), through can_view_study(),
 --     can_edit_study() and can_manage_study(). Being merely
 --     "authenticated" grants nothing.
+--   * Admin-only: approving a study (draft -> anything), deleting a study,
+--     assigning / removing study owners, researchers and the audit log.
+--     Owners: pause / complete an approved study, manage editors and viewers,
+--     delete participants. Editors: edit everything else in the study.
 -- ============================================================
 
 -- Supabase keeps extension-owned objects outside public so resetting the
@@ -49,9 +53,15 @@ CREATE TABLE studies (
     -- Optional 4-digit enrolment PIN. The hash lives in study_pins (never
     -- readable by anon); this flag tells the app whether to prompt.
     pin_required BOOLEAN NOT NULL DEFAULT false,
+    -- Admin approval. A study created by a non-admin starts as 'draft' with
+    -- approved_at NULL ("pending approval"); only an admin can move it out of
+    -- draft, which stamps these. Set only by tr_studies_status_guard().
+    approved_at TIMESTAMPTZ,
+    approved_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX idx_studies_pending ON studies(created_at DESC) WHERE status = 'draft' AND approved_at IS NULL;
 
 -- Participants (devices enrolled in studies). Created only through
 -- enroll_participant(); the app never touches this table directly.
@@ -98,7 +108,9 @@ CREATE TABLE researchers (
 );
 
 -- Per-study access for non-admin researchers.
---   owner  : everything an editor can do + manage members, delete participants
+--   owner  : everything an editor can do + pause/complete an approved study,
+--            add/change/remove editors and viewers, delete participants.
+--            Owners are assigned and removed by admins only.
 --   editor : edit study settings, sensors, surveys, PIN, participants (label/status, merge)
 --   viewer : read-only
 CREATE TABLE study_members (
@@ -660,6 +672,126 @@ $$;
 CREATE TRIGGER tr_studies_creator_owner AFTER INSERT ON studies
     FOR EACH ROW EXECUTE FUNCTION tr_study_creator_owner();
 
+-- True when the current statement comes straight from a client role
+-- (PostgREST anon / authenticated) whose user is NOT an active admin. False
+-- for admins and for trusted server-side contexts: the SQL editor and the
+-- seed (postgres), the service role (dashboard admin API), and statements run
+-- inside SECURITY DEFINER functions or FK cascades (those run as the table
+-- owner and do their own permission checks). Only meaningful when called
+-- from a SECURITY INVOKER function, so current_user is the caller's role.
+CREATE OR REPLACE FUNCTION is_client_non_admin()
+RETURNS boolean
+LANGUAGE sql STABLE
+SET search_path = public, extensions
+AS $$
+    SELECT current_user IN ('anon', 'authenticated') AND NOT is_admin();
+$$;
+
+-- Study approval and status rules (SECURITY INVOKER, see is_client_non_admin):
+--   INSERT  non-admin: forced to status 'draft', approved_* NULL, created_by =
+--           the caller ("pending approval"). Admin / server: a non-draft study
+--           counts as approved (approved_at = now(), approved_by = caller); a
+--           draft one is pending like any other.
+--   UPDATE  * approved_at / approved_by: admins and the server only.
+--           * leaving 'draft' (approval) or returning to 'draft': admins only.
+--             Leaving draft stamps approved_at / approved_by if not set yet.
+--           * active / paused / completed among themselves: owners and admins
+--             (editors may edit every other column, but not status).
+CREATE OR REPLACE FUNCTION tr_studies_status_guard()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public, extensions AS $$
+DECLARE
+    v_limited BOOLEAN := is_client_non_admin();
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF v_limited THEN
+            NEW.status      := 'draft';
+            NEW.approved_at := NULL;
+            NEW.approved_by := NULL;
+            NEW.created_by  := auth.uid();
+        ELSIF NEW.status = 'draft' THEN
+            NEW.approved_at := NULL;
+            NEW.approved_by := NULL;
+        ELSE
+            NEW.approved_at := COALESCE(NEW.approved_at, now());
+            NEW.approved_by := COALESCE(NEW.approved_by, auth.uid());
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF v_limited AND (NEW.approved_at IS DISTINCT FROM OLD.approved_at
+                      OR NEW.approved_by IS DISTINCT FROM OLD.approved_by) THEN
+        RAISE EXCEPTION 'Only an admin can change a study''s approval' USING ERRCODE = '42501';
+    END IF;
+    IF NEW.status IS NOT DISTINCT FROM OLD.status THEN
+        RETURN NEW;
+    END IF;
+    IF OLD.status = 'draft' THEN
+        IF v_limited THEN
+            RAISE EXCEPTION 'This study is waiting for admin approval. Only an admin can approve it.'
+                USING ERRCODE = '42501';
+        END IF;
+        IF OLD.approved_at IS NULL THEN
+            NEW.approved_at := COALESCE(NEW.approved_at, now());
+            NEW.approved_by := COALESCE(NEW.approved_by, auth.uid());
+        END IF;
+    ELSIF NEW.status = 'draft' THEN
+        IF v_limited THEN
+            RAISE EXCEPTION 'Only an admin can move a study back to draft' USING ERRCODE = '42501';
+        END IF;
+    ELSIF v_limited AND NOT can_manage_study(NEW.id) THEN
+        RAISE EXCEPTION 'Only a study owner or an admin can change the study status' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER tr_studies_status_guard BEFORE INSERT OR UPDATE ON studies
+    FOR EACH ROW EXECUTE FUNCTION tr_studies_status_guard();
+
+-- Study audit: study_created, study_approved (first move out of draft),
+-- study_status_changed (any other status change) and study_deleted (BEFORE
+-- DELETE, so the name, owners and participant count are still readable; the
+-- optional reason comes from delete_study()).
+CREATE OR REPLACE FUNCTION tr_studies_audit()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM write_audit('study_created', 'study', NEW.id::text,
+            jsonb_build_object('study_name', NEW.name, 'status', NEW.status,
+                               'approved', NEW.approved_at IS NOT NULL,
+                               'created_by', NEW.created_by,
+                               'email', (SELECT email FROM researchers WHERE user_id = NEW.created_by)));
+        RETURN NULL;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF NEW.status IS DISTINCT FROM OLD.status THEN
+            PERFORM write_audit(
+                CASE WHEN OLD.status = 'draft' AND OLD.approved_at IS NULL AND NEW.approved_at IS NOT NULL
+                     THEN 'study_approved' ELSE 'study_status_changed' END,
+                'study', NEW.id::text,
+                jsonb_build_object('study_name', NEW.name, 'from', OLD.status, 'to', NEW.status));
+        END IF;
+        RETURN NULL;
+    END IF;
+    -- DELETE
+    PERFORM write_audit('study_deleted', 'study', OLD.id::text,
+        jsonb_build_object(
+            'study_name', OLD.name,
+            'status', OLD.status,
+            'approved', OLD.approved_at IS NOT NULL,
+            'participant_count', (SELECT count(*) FROM participants p WHERE p.study_id = OLD.id),
+            'owners', COALESCE((SELECT jsonb_agg(r.email ORDER BY r.email)
+                                  FROM study_members m JOIN researchers r ON r.user_id = m.user_id
+                                 WHERE m.study_id = OLD.id AND m.role = 'owner'), '[]'::jsonb),
+            'reason', NULLIF(current_setting('detectmind.study_delete_reason', true), '')));
+    RETURN OLD;
+END;
+$$;
+CREATE TRIGGER tr_studies_audit AFTER INSERT OR UPDATE ON studies
+    FOR EACH ROW EXECUTE FUNCTION tr_studies_audit();
+CREATE TRIGGER tr_studies_audit_delete BEFORE DELETE ON studies
+    FOR EACH ROW EXECUTE FUNCTION tr_studies_audit();
+
 -- Membership rules:
 --   * members must be researchers;
 --   * a membership cannot be moved to another study or user (delete + add);
@@ -697,25 +829,60 @@ $$;
 CREATE TRIGGER tr_study_members_guard BEFORE INSERT OR UPDATE OR DELETE ON study_members
     FOR EACH ROW EXECUTE FUNCTION tr_study_members_guard();
 
+-- Owner rows are admin-only: a study owner (or any other non-admin client) may
+-- add, change and remove only editor / viewer memberships, so they can neither
+-- create, promote to, demote nor remove an owner. SECURITY INVOKER (see
+-- is_client_non_admin): the creator-becomes-owner trigger, FK cascades, the
+-- seed and the service role are not affected. Paired with the WITH CHECK of
+-- the study_members policies.
+CREATE OR REPLACE FUNCTION tr_study_members_owner_guard()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = public, extensions AS $$
+BEGIN
+    IF is_client_non_admin()
+       AND ((TG_OP IN ('UPDATE', 'DELETE') AND OLD.role = 'owner')
+            OR (TG_OP IN ('INSERT', 'UPDATE') AND NEW.role = 'owner')) THEN
+        RAISE EXCEPTION 'Only an admin can add, change or remove study owners' USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER tr_study_members_auth_guard BEFORE INSERT OR UPDATE OR DELETE ON study_members
+    FOR EACH ROW EXECUTE FUNCTION tr_study_members_owner_guard();
+
+-- Membership audit. Rows with role owner on either side are logged as
+-- study_owner_assigned / study_owner_removed; editor / viewer changes as
+-- study_member_added / _changed / _removed. Nothing is logged for rows removed
+-- because the whole study is being deleted (study_deleted covers that).
 CREATE OR REPLACE FUNCTION tr_study_members_audit()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, extensions AS $$
+DECLARE
+    v_study UUID := CASE WHEN TG_OP = 'DELETE' THEN OLD.study_id ELSE NEW.study_id END;
+    v_user  UUID := CASE WHEN TG_OP = 'DELETE' THEN OLD.user_id ELSE NEW.user_id END;
+    v_name  TEXT;
+    v_base  JSONB;
 BEGIN
+    SELECT s.name INTO v_name FROM studies s WHERE s.id = v_study;
+    IF NOT FOUND THEN
+        RETURN NULL;  -- study is being deleted
+    END IF;
+    v_base := jsonb_build_object('user_id', v_user, 'study_name', v_name,
+                                 'email', (SELECT email FROM researchers WHERE user_id = v_user));
     IF TG_OP = 'INSERT' THEN
-        PERFORM write_audit('study_member_added', 'study', NEW.study_id::text,
-            jsonb_build_object('user_id', NEW.user_id, 'role', NEW.role,
-                               'email', (SELECT email FROM researchers WHERE user_id = NEW.user_id)));
+        PERFORM write_audit(CASE WHEN NEW.role = 'owner' THEN 'study_owner_assigned' ELSE 'study_member_added' END,
+            'study', v_study::text, v_base || jsonb_build_object('role', NEW.role));
     ELSIF TG_OP = 'UPDATE' THEN
         IF NEW.role IS DISTINCT FROM OLD.role THEN
-            PERFORM write_audit('study_member_changed', 'study', NEW.study_id::text,
-                jsonb_build_object('user_id', NEW.user_id, 'from', OLD.role, 'to', NEW.role,
-                                   'email', (SELECT email FROM researchers WHERE user_id = NEW.user_id)));
+            PERFORM write_audit(CASE WHEN NEW.role = 'owner' THEN 'study_owner_assigned'
+                                     WHEN OLD.role = 'owner' THEN 'study_owner_removed'
+                                     ELSE 'study_member_changed' END,
+                'study', v_study::text, v_base || jsonb_build_object('from', OLD.role, 'to', NEW.role));
         END IF;
-    ELSIF EXISTS (SELECT 1 FROM studies WHERE id = OLD.study_id) THEN
-        -- Not logged when the whole study is being deleted.
-        PERFORM write_audit('study_member_removed', 'study', OLD.study_id::text,
-            jsonb_build_object('user_id', OLD.user_id, 'role', OLD.role,
-                               'email', (SELECT email FROM researchers WHERE user_id = OLD.user_id)));
+    ELSE
+        PERFORM write_audit(CASE WHEN OLD.role = 'owner' THEN 'study_owner_removed' ELSE 'study_member_removed' END,
+            'study', v_study::text, v_base || jsonb_build_object('role', OLD.role));
     END IF;
     RETURN NULL;
 END;
@@ -803,7 +970,11 @@ ALTER TABLE audit_log               ENABLE ROW LEVEL SECURITY;
 -- of, at the level of their study role. Inactive researchers and signed-in
 -- users without a researchers row match no policy, so they see nothing.
 
--- Studies: any active researcher may create one (they become its owner).
+-- Studies: any active researcher may create one (they become its owner; a
+-- non-admin's study starts as a draft pending admin approval, see
+-- tr_studies_status_guard). Owners/editors update; status changes are further
+-- limited by that trigger. Only admins delete. Admins see every study,
+-- including pending ones (status 'draft' AND approved_at IS NULL).
 CREATE POLICY "Members read studies" ON studies FOR SELECT TO authenticated
     USING (id = ANY ((SELECT viewable_study_ids())::uuid[]));
 CREATE POLICY "Researchers create studies" ON studies FOR INSERT TO authenticated
@@ -811,8 +982,8 @@ CREATE POLICY "Researchers create studies" ON studies FOR INSERT TO authenticate
 CREATE POLICY "Editors update studies" ON studies FOR UPDATE TO authenticated
     USING (id = ANY ((SELECT editable_study_ids())::uuid[]))
     WITH CHECK (id = ANY ((SELECT editable_study_ids())::uuid[]));
-CREATE POLICY "Owners delete studies" ON studies FOR DELETE TO authenticated
-    USING (can_manage_study(id));
+CREATE POLICY "Admins delete studies" ON studies FOR DELETE TO authenticated
+    USING ((SELECT is_admin()));
 
 -- Study configuration: read for members, write for owners/editors.
 DO $$
@@ -888,13 +1059,18 @@ CREATE POLICY "Members read pin attempts" ON pin_attempts FOR SELECT TO authenti
 CREATE POLICY "Editors clear pin attempts" ON pin_attempts FOR DELETE TO authenticated
     USING (study_id = ANY ((SELECT editable_study_ids())::uuid[]));
 
--- Team: members see the team; owners (and admins) manage it.
+-- Team: members see the team. Admins manage every membership; an owner
+-- manages only editor / viewer memberships of their own study. The policies
+-- check the NEW role; tr_study_members_owner_guard also checks the OLD role
+-- (UPDATE/DELETE of an owner row) and raises a clear error instead of
+-- silently matching no rows.
 CREATE POLICY "Members read team" ON study_members FOR SELECT TO authenticated
     USING (study_id = ANY ((SELECT viewable_study_ids())::uuid[]));
 CREATE POLICY "Owners add members" ON study_members FOR INSERT TO authenticated
-    WITH CHECK (can_manage_study(study_id));
+    WITH CHECK ((SELECT is_admin()) OR (role IN ('editor', 'viewer') AND can_manage_study(study_id)));
 CREATE POLICY "Owners change members" ON study_members FOR UPDATE TO authenticated
-    USING (can_manage_study(study_id)) WITH CHECK (can_manage_study(study_id));
+    USING (can_manage_study(study_id))
+    WITH CHECK ((SELECT is_admin()) OR (role IN ('editor', 'viewer') AND can_manage_study(study_id)));
 CREATE POLICY "Owners remove members" ON study_members FOR DELETE TO authenticated
     USING (can_manage_study(study_id));
 
@@ -1638,20 +1814,53 @@ BEGIN
 END;
 $$;
 
--- Active researchers that can be added to a study. Admins and study owners only.
-CREATE OR REPLACE FUNCTION researcher_directory()
+-- Active researchers that can be added to study p_study: callable by an
+-- admin, or by an owner of that study. p_study NULL is the legacy form
+-- (admin, or owner of any study); kept for older dashboard builds.
+CREATE OR REPLACE FUNCTION researcher_directory(p_study UUID DEFAULT NULL)
 RETURNS TABLE (user_id UUID, email TEXT, display_name TEXT)
 LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = public, extensions AS $$
 BEGIN
     IF NOT (is_admin()
-            OR (is_researcher() AND EXISTS (SELECT 1 FROM study_members m
-                                             WHERE m.user_id = auth.uid() AND m.role = 'owner'))) THEN
-        RAISE EXCEPTION 'Only admins and study owners can list researchers' USING ERRCODE = '42501';
+            OR (p_study IS NOT NULL AND COALESCE(study_role(p_study) = 'owner', false))
+            OR (p_study IS NULL AND is_researcher()
+                AND EXISTS (SELECT 1 FROM study_members m
+                             WHERE m.user_id = auth.uid() AND m.role = 'owner'))) THEN
+        RAISE EXCEPTION 'Only admins and owners of this study can list researchers' USING ERRCODE = '42501';
     END IF;
     RETURN QUERY
         SELECT r.user_id, r.email, r.display_name FROM researchers r
          WHERE r.active ORDER BY r.email;
+END;
+$$;
+
+-- ============================================================
+-- STUDY DELETION (admins only)
+-- ============================================================
+-- Same as DELETE FROM studies (admin RLS policy) but records an optional
+-- reason, e.g. when rejecting a pending study, in the study_deleted audit row.
+CREATE OR REPLACE FUNCTION delete_study(p_study UUID, p_reason TEXT DEFAULT NULL)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, extensions AS $$
+DECLARE
+    v_name TEXT;
+    v_participants BIGINT;
+BEGIN
+    IF NOT is_admin() THEN
+        RAISE EXCEPTION 'Only an admin can delete a study' USING ERRCODE = '42501';
+    END IF;
+    SELECT s.name INTO v_name FROM studies s WHERE s.id = p_study FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Study not found' USING ERRCODE = 'P0002';
+    END IF;
+    SELECT count(*) INTO v_participants FROM participants WHERE study_id = p_study;
+    PERFORM set_config('detectmind.study_delete_reason', COALESCE(left(p_reason, 1000), ''), true);
+    DELETE FROM studies WHERE id = p_study;
+    PERFORM set_config('detectmind.study_delete_reason', '', true);
+    RETURN jsonb_build_object('study_id', p_study, 'study_name', v_name,
+                              'participant_count', v_participants);
 END;
 $$;
 
@@ -1802,13 +2011,15 @@ GRANT EXECUTE ON FUNCTION can_edit_study(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION can_manage_study(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION viewable_study_ids() TO authenticated;
 GRANT EXECUTE ON FUNCTION editable_study_ids() TO authenticated;
+GRANT EXECUTE ON FUNCTION is_client_non_admin() TO authenticated;      -- used by SECURITY INVOKER guard triggers
 GRANT EXECUTE ON FUNCTION app_tz() TO authenticated;                 -- used by the processed views (security_invoker)
 -- Dashboard RPCs (each checks the caller's study permission itself):
 GRANT EXECUTE ON FUNCTION merge_participants(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION set_study_pin(UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION delete_participant(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION study_team(UUID) TO authenticated;
-GRANT EXECUTE ON FUNCTION researcher_directory() TO authenticated;
+GRANT EXECUTE ON FUNCTION researcher_directory(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION delete_study(UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION enroll_participant(UUID, TEXT, TEXT, JSONB, UUID, TEXT, TEXT) TO authenticated;
 
 -- anon (Android app): read non-draft config, insert own data, device RPCs.

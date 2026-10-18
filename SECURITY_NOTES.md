@@ -42,11 +42,50 @@ own: every policy goes through the helpers below.
 
 | Level | Where | Can do |
 | --- | --- | --- |
-| `admin` | `researchers.role` | Everything, in every study: researchers, the audit log, all study data and settings. |
-| `researcher` | `researchers.role` | Only studies they are a member of, at their study role. Any active researcher may create a study and becomes its owner. |
-| `owner` | `study_members.role` | Editor rights + manage the study team, delete participants, delete the study. |
-| `editor` | `study_members.role` | Edit study settings, sensors, surveys, PIN; rename/withdraw/merge participants; clear PIN lockouts. |
+| `admin` | `researchers.role` | Everything, in every study: approve and delete studies, assign owners, researchers, the audit log, all study data and settings. |
+| `researcher` | `researchers.role` | Only studies they are a member of, at their study role. Any active researcher may create a study; it starts as a draft pending admin approval and the creator becomes its owner. |
+| `owner` | `study_members.role` | Editor rights + pause / complete / reactivate an approved study, add / change / remove editors and viewers, delete participants. |
+| `editor` | `study_members.role` | Edit study settings, sensors, surveys, PIN; rename/withdraw/merge participants; clear PIN lockouts. Cannot change the study status. |
 | `viewer` | `study_members.role` | Read-only: study, participants, data, processed views, team list. |
+
+Permission table (enforced in the database; the dashboard only mirrors it):
+
+| Action | Admin | Owner | Editor | Viewer |
+| --- | --- | --- | --- | --- |
+| Create a study | yes, active immediately | yes, as a draft pending approval | same | same |
+| Approve a pending study (draft -> active/paused/completed) | yes | no | no | no |
+| Move a study back to draft | yes | no | no | no |
+| Pause / complete / reactivate an approved study | yes | yes | no | no |
+| Delete a study | yes | no | no | no |
+| Assign / remove / promote / demote **owners** | yes | no | no | no |
+| Add / change / remove **editors and viewers** | yes | yes (own study) | no | no |
+| Edit study settings, sensors, surveys, PIN, labels | yes | yes | yes | no |
+| Delete a participant | yes | yes | no | no |
+| View the study and its data | yes | yes | yes | yes |
+| Researchers, roles, audit log | yes | no | no | no |
+
+### Study approval
+
+`studies.approved_at` / `approved_by` record the approval. A study is
+**pending** while `status = 'draft' AND approved_at IS NULL`. The trigger
+`tr_studies_status_guard` (BEFORE INSERT/UPDATE, `SECURITY INVOKER`):
+
+- forces a non-admin's new study to `draft` (approval cleared, `created_by` =
+  the caller). An admin's (or the server's) new non-draft study is approved at
+  once; a new draft is pending like any other;
+- lets only admins leave `draft` (stamping `approved_at` / `approved_by` the
+  first time) or return a study to `draft` (which keeps `approved_at`);
+- lets only owners and admins move an approved study between active, paused
+  and completed. Editors may still save every other column;
+- refuses client changes to `approved_at` / `approved_by` by non-admins.
+
+The app never sees a draft study (anon policies) and `enroll_participant()`
+only accepts active or paused studies, so pending studies cannot recruit.
+
+"Server" means the SQL editor / seed (postgres) and the service role: both
+have no `auth.uid()` and are treated like an admin by the guard triggers
+(`is_client_non_admin()` is false for them, and for statements run inside
+`SECURITY DEFINER` functions and FK cascades).
 
 `researchers.active = false` (deactivated) removes all access immediately,
 whatever the roles; the row is kept for the audit trail.
@@ -62,16 +101,20 @@ whatever the roles; the row is kept for the audit trail.
 
 ### What RLS allows (role `authenticated`)
 
-- `studies`: read if viewable; insert by any active researcher (a trigger adds
-  the creator as owner); update if editable; delete if manageable.
+- `studies`: read if viewable (admins: all, including pending); insert by any
+  active researcher (a trigger adds the creator as owner); update if editable,
+  with status changes limited as above; delete by admins only.
 - `sensor_configs`, `esm_schedules`, `esm_questions`: read if viewable, write if editable.
 - `participants`: read if viewable, update (label/status) if editable. No
   client insert/delete: enrolment is `enroll_participant()`, deletion is
   `delete_participant()`.
 - `data_*`, `sync_log`: read-only for members (table privileges for writes are revoked).
-- `study_members`: read if viewable; insert/update/delete if manageable.
-  Triggers make sure members are researchers and that a study always keeps at
-  least one owner.
+- `study_members`: read if viewable. Admins insert/update/delete any row; an
+  owner only rows whose old and new role are `editor` or `viewer` (policy
+  WITH CHECK on the new role, plus the `tr_study_members_auth_guard` trigger,
+  which raises "Only an admin can add, change or remove study owners"). Other
+  triggers make sure members are researchers and that a study always keeps at
+  least one owner (admins included; deleting the study is the exception).
 - `researchers`: everyone reads their own row; admins read all and may update
   `role`, `active`, `display_name`. A trigger refuses demoting or
   deactivating the last active admin. Rows are inserted only by the server
@@ -93,13 +136,20 @@ empty dashboard.
   every row collected from them (all `data_*` tables, `sync_log`, merge
   records), refuses while other participants are still merged into it, and
   returns + audits per-table counts.
-- `study_team(study)`: team with emails, for members. `researcher_directory()`:
-  active researchers' emails, for admins and study owners (to add people).
+- `study_team(study)`: team with emails, for members.
+  `researcher_directory(p_study)`: active researchers' emails, for admins and
+  owners of that study (to add people). Called without an argument it keeps
+  the old behaviour (admin, or owner of any study) for older dashboard builds.
+- `delete_study(p_study, p_reason)`: admins only; deletes the study and puts
+  the optional reason (e.g. rejecting a pending study) in the audit row.
 
 ### Audit log
 
 `audit_log` records `participant_deleted`, `participant_merged`,
-`study_pin_changed`, `study_member_added/changed/removed` (written by the
+`study_pin_changed`, `study_created`, `study_approved`,
+`study_status_changed`, `study_deleted` (name, owners, participant count,
+reason), `study_owner_assigned/removed` (owner rows),
+`study_member_added/changed/removed` (editor and viewer rows) (written by the
 functions/triggers above, actor = `auth.uid()`), `researcher_role_changed`,
 `researcher_deactivated`, `researcher_reactivated` (trigger on
 `researchers`), and `researcher_invited` (server admin API). Admins browse it
@@ -133,8 +183,12 @@ SELECT id, email, 'admin' FROM auth.users WHERE email = 'name@example.org'
 ON CONFLICT (user_id) DO UPDATE SET role = 'admin', active = true;
 ```
 
-`seed_studies.sql` makes every account that exists when it runs an active
-**admin** and owner of the seeded studies, and prints each email as a NOTICE.
+`seed_studies.sql` has an explicit admin list at the top
+(`v_admin_emails`, currently `binoybkp@gmail.com`). Existing accounts in that
+list become active **admins**; every other existing account becomes an active
+researcher. All of them own both seeded studies, which are active and
+pre-approved. Each account and its role is printed as a NOTICE, and a WARNING
+explains what to do if no listed email matches an account.
 
 ### Consent
 
@@ -161,7 +215,8 @@ Run in the Supabase SQL editor, in this order:
 2. `supabase_schema.sql`: tables, RLS, views, functions and grants. All
    earlier `migration_*.sql` files have been folded into it.
 3. `seed_studies.sql`: example studies (the Digital Habits study has the test
-   PIN `1234`); every existing account becomes an admin and owner of them.
+   PIN `1234`); accounts in its `v_admin_emails` list become admins, every
+   other existing account a researcher, and all of them owners of the studies.
 
 If you add a function later, re-run the PRIVILEGES section at the end of
 `supabase_schema.sql`, or revoke `EXECUTE ... FROM PUBLIC, anon` and grant it

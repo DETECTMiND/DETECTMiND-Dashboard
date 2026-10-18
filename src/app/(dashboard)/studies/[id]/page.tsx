@@ -7,6 +7,8 @@ import Link from 'next/link'
 import { ArrowLeft, Users, Database, ClipboardList, Settings, Edit2, Trash2, ChevronRight, MessageSquare, ShieldCheck, BadgeCheck, X, Plus, CreditCard, Clock, Lock, Download, UsersRound } from 'lucide-react'
 import { useStudyAccess, STUDY_ROLE_LABEL } from '@/lib/access'
 import { Notice, errorText, type NoticeState } from '@/components/feedback'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { isPendingApproval, statusOptionsFor } from '@/lib/pending-studies'
 import { downloadBlob, exportStudyZip } from '@/lib/export-study'
 
 interface Study {
@@ -18,6 +20,7 @@ interface Study {
   sync_interval_minutes: number
   config: StudyConfig | null
   pin_required?: boolean
+  approved_at?: string | null
   created_at: string
 }
 
@@ -50,8 +53,6 @@ const STATUS_STYLES: Record<string, string> = {
   paused:    'bg-amber-50 text-amber-700 border border-amber-200',
   completed: 'bg-blue-50 text-blue-700 border border-blue-200',
 }
-
-const statusOptions = ['draft', 'active', 'paused', 'completed']
 
 export default function StudyDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -87,10 +88,13 @@ export default function StudyDetailPage() {
     escalation_minutes: 120,
   })
   const [newAppId, setNewAppId] = useState('')
-  const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleteText, setDeleteText] = useState('')
+  // Admin-only: delete (typed name) or reject a pending study (reason), both via delete_study().
+  const [deleteMode, setDeleteMode] = useState<'delete' | 'reject' | null>(null)
+  const [deleteReason, setDeleteReason] = useState('')
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const isAdmin = access.role === 'admin'
 
   useEffect(() => {
     if (!editing) return
@@ -143,11 +147,13 @@ export default function StudyDetailPage() {
     setPinError(null)
     setSaving(true)
     setNotice(null)
+    // Only send status when it changed: the DB decides who may change it.
+    const nextStatus = form.status || study.status
     const { data: saved, error } = await supabase.from('studies').update({
       name: form.name || study.name,
       description: form.description ?? study.description,
       app_description: form.app_description ?? study.app_description,
-      status: form.status || study.status,
+      ...(nextStatus !== study.status ? { status: nextStatus } : {}),
       sync_interval_minutes: form.sync_interval_minutes ?? study.sync_interval_minutes,
       config: updatedConfig,
     }).eq('id', id).select('id')
@@ -176,6 +182,33 @@ export default function StudyDetailPage() {
     setStudy({ ...study, ...form, config: updatedConfig, pin_required: pinRequired } as Study)
     setEditing(false)
     setNotice({ tone: 'success', text: 'Study saved.' })
+    if (nextStatus !== study.status) await reloadStudy()
+  }
+
+  /** Re-reads the study (status / approval are set by the database). */
+  async function reloadStudy() {
+    const { data } = await supabase.from('studies').select('*').eq('id', id).maybeSingle()
+    if (data) { setStudy(data); setForm(data) }
+  }
+
+  async function handleApprove() {
+    if (!study) return
+    setApproving(true)
+    setNotice(null)
+    const { data, error } = await supabase.from('studies').update({ status: 'active' }).eq('id', id).select('id')
+    setApproving(false)
+    if (error || !data?.length) {
+      setNotice({ tone: 'error', text: `Could not approve the study: ${error ? errorText(error) : 'only an admin can approve it.'}` })
+      return
+    }
+    await reloadStudy()
+    setNotice({ tone: 'success', text: `${study.name} is approved and active. Participants can now join.` })
+  }
+
+  function openDelete(mode: 'delete' | 'reject') {
+    setDeleteReason('')
+    setDeleteError(null)
+    setDeleteMode(mode)
   }
 
   async function handleExport() {
@@ -195,12 +228,17 @@ export default function StudyDetailPage() {
   }
 
   async function handleDelete() {
-    if (!study || deleteText !== study.name) return
+    if (!study || !deleteMode) return
+    const reason = deleteReason.trim()
+    if (deleteMode === 'reject' && !reason) { setDeleteError('Enter a reason for rejecting this study.'); return }
     setDeleting(true)
     setDeleteError(null)
-    const { data: removed, error } = await supabase.from('studies').delete().eq('id', id).select('id')
-    if (error || !removed?.length) {
-      setDeleteError(error ? errorText(error) : 'Only a study owner or an admin can delete this study.')
+    const { error } = await supabase.rpc('delete_study', {
+      p_study: id,
+      p_reason: reason ? (deleteMode === 'reject' ? `Rejected: ${reason}` : reason) : null,
+    })
+    if (error) {
+      setDeleteError(errorText(error))
       setDeleting(false)
       return
     }
@@ -226,6 +264,12 @@ export default function StudyDetailPage() {
     )
   }
 
+  const pending = isPendingApproval(study)
+  const statusRule = statusOptionsFor(access.role, study)
+  const statusChoices = statusRule.options.includes(form.status ?? study.status)
+    ? statusRule.options
+    : [form.status ?? study.status, ...statusRule.options]
+
   const tabs = [
     { href: `/studies/${id}/participants`,  label: 'Participants',    icon: Users,         description: `${participantCount} enrolled` },
     { href: `/studies/${id}/data`,          label: 'Sensor Data',     icon: Database,      description: 'Browse & export' },
@@ -243,6 +287,32 @@ export default function StudyDetailPage() {
       </Link>
 
       <Notice notice={notice} onClose={() => setNotice(null)} />
+
+      {pending && (
+        <div role="status" aria-label="Pending approval" className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center">
+          <Clock size={18} className="hidden shrink-0 text-amber-600 sm:block" aria-hidden="true" />
+          <div className="min-w-0 flex-1 text-sm text-amber-900">
+            <p className="font-semibold">Pending approval</p>
+            <p className="mt-0.5 text-amber-800">
+              {isAdmin
+                ? 'This study is waiting for an admin to review it. Participants cannot join until it is approved.'
+                : 'An admin will review this study before participants can join. You can set it up in the meantime.'}
+            </p>
+          </div>
+          {isAdmin && (
+            <div className="flex shrink-0 gap-2">
+              <button type="button" onClick={handleApprove} disabled={approving}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                {approving ? 'Approving…' : 'Approve'}
+              </button>
+              <button type="button" onClick={() => openDelete('reject')} disabled={approving}
+                className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50">
+                Reject
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
         {editing ? (
@@ -278,12 +348,15 @@ export default function StudyDetailPage() {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Status</label>
                 <select
+                  aria-label="Status"
                   value={form.status}
+                  disabled={!statusRule.editable}
                   onChange={e => setForm({ ...form, status: e.target.value })}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all"
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all disabled:bg-gray-50 disabled:text-gray-500"
                 >
-                  {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                  {statusChoices.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
+                {statusRule.reason && <p className="mt-1 text-xs text-gray-400">{statusRule.reason}</p>}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">Sync Interval (minutes)</label>
@@ -508,8 +581,8 @@ export default function StudyDetailPage() {
               }} className="px-4 py-2 border border-gray-200 rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition-colors">
                 Cancel
               </button>
-              {access.canManage && <button onClick={() => { setDeleteText(''); setDeleteError(null); setDeleteOpen(true) }} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
-                <Trash2 size={14} /> Delete Study
+              {isAdmin && <button type="button" onClick={() => openDelete('delete')} className="ml-auto flex items-center gap-1.5 px-4 py-2 text-red-500 hover:bg-red-50 border border-red-200 rounded-lg text-sm transition-colors">
+                <Trash2 size={14} /> Delete study
               </button>}
             </div>
           </div>
@@ -591,15 +664,27 @@ export default function StudyDetailPage() {
         ))}
       </div>
 
-      {deleteOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="delete-study-title">
-        <button className="absolute inset-0 bg-slate-950/45" onClick={() => !deleting && setDeleteOpen(false)} aria-label="Cancel deletion" />
-        <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-          <div className="flex items-start justify-between gap-4"><div><h2 id="delete-study-title" className="text-lg font-bold text-gray-900">Delete study?</h2><p className="mt-2 text-sm text-gray-600">This permanently deletes the study and its data. Type <strong>{study.name}</strong> to confirm.</p></div><button onClick={() => setDeleteOpen(false)} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100" aria-label="Close confirmation"><X size={18} /></button></div>
-          <label className="mt-5 block text-sm font-medium text-gray-700">Study name<input autoFocus value={deleteText} onChange={e => setDeleteText(e.target.value)} className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" /></label>
-          {deleteError && <p role="alert" className="mt-3 text-sm text-red-600">{deleteError}</p>}
-          <div className="mt-6 flex justify-end gap-2"><button onClick={() => setDeleteOpen(false)} disabled={deleting} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">Cancel</button><button onClick={handleDelete} disabled={deleteText !== study.name || deleting} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">{deleting ? 'Deleting…' : 'Delete permanently'}</button></div>
-        </div>
-      </div>}
+      <ConfirmDialog
+        open={deleteMode !== null}
+        tone="danger"
+        title={deleteMode === 'reject' ? `Reject ${study.name}?` : `Delete ${study.name}?`}
+        body={deleteMode === 'reject'
+          ? <p>Rejecting deletes this pending study and its setup. The reason is kept in the audit log.</p>
+          : <p>This permanently deletes the study, its {participantCount} participant{participantCount === 1 ? '' : 's'} and all collected data. This cannot be undone.</p>}
+        confirmLabel={deleteMode === 'reject' ? 'Reject study' : 'Delete permanently'}
+        requireText={deleteMode === 'delete' ? study.name : undefined}
+        busy={deleting}
+        error={deleteError}
+        onConfirm={handleDelete}
+        onCancel={() => { if (!deleting) setDeleteMode(null) }}
+      >
+        <label className="block text-sm font-medium text-gray-700">
+          Reason{deleteMode === 'delete' && <span className="font-normal text-gray-400"> (optional)</span>}
+          <textarea value={deleteReason} onChange={e => setDeleteReason(e.target.value)} rows={2} maxLength={1000}
+            required={deleteMode === 'reject'}
+            className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+        </label>
+      </ConfirmDialog>
     </div>
   )
 }

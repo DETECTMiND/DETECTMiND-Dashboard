@@ -1,5 +1,5 @@
 -- ============================================================
--- Seed: admin access + Digital Habits & Focus Study + Sleep & Wellbeing Study
+-- Seed: researcher access + Digital Habits & Focus Study + Sleep & Wellbeing Study
 -- Run in the Supabase SQL editor (as postgres, which bypasses RLS) after
 -- clear_database.sql and supabase_schema.sql. UUIDs are generated inline;
 -- re-running will create duplicate studies.
@@ -9,26 +9,40 @@
 -- 0. RESEARCHER ACCESS
 -- ------------------------------------------------------------
 -- Dashboard access requires an active row in public.researchers. Every
--- Supabase Auth account that exists right now becomes an active ADMIN (the
--- emails are printed as NOTICEs) and, further down, owner of every seeded
--- study. Invite everyone else from the dashboard: Admin -> Researchers.
+-- Supabase Auth account that exists right now gets one:
+--   * emails listed in v_admin_emails  -> active ADMIN
+--   * every other existing account     -> active researcher
+-- and, further down, every one of them becomes OWNER of both seeded studies.
+-- Edit v_admin_emails below before running. Invite everyone else from the
+-- dashboard (Admin -> Researchers, or a study's Team tab).
 DO $$
 DECLARE
+  v_admin_emails TEXT[] := ARRAY['binoybkp@gmail.com'];
   r RECORD;
   n INT := 0;
+  n_admin INT := 0;
 BEGIN
   FOR r IN
     INSERT INTO public.researchers (user_id, email, role, active)
-    SELECT u.id, u.email, 'admin', true FROM auth.users u
-    ON CONFLICT (user_id) DO UPDATE SET role = 'admin', active = true,
+    SELECT u.id, u.email,
+           CASE WHEN lower(u.email) = ANY (SELECT lower(e) FROM unnest(v_admin_emails) AS e)
+                THEN 'admin' ELSE 'researcher' END,
+           true
+      FROM auth.users u
+     -- admins first, so a re-run never demotes the last admin before the new one exists
+     ORDER BY 3   -- 'admin' sorts before 'researcher'
+    ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role, active = true,
                                         email = COALESCE(public.researchers.email, EXCLUDED.email)
-    RETURNING user_id, email
+    RETURNING user_id, email, role
   LOOP
     n := n + 1;
-    RAISE NOTICE 'Granted admin access: %', COALESCE(r.email, r.user_id::text);
+    IF r.role = 'admin' THEN n_admin := n_admin + 1; END IF;
+    RAISE NOTICE 'Account %: % (owner of both seeded studies)', COALESCE(r.email, r.user_id::text), r.role;
   END LOOP;
   IF n = 0 THEN
-    RAISE NOTICE 'No auth.users accounts found: no admins granted. Create a user in Authentication -> Users, then run: INSERT INTO researchers(user_id, email, role) SELECT id, email, ''admin'' FROM auth.users WHERE email = ''...'';';
+    RAISE WARNING 'No auth.users accounts found: no researchers or admins granted. Create a user in Authentication -> Users, add its email to v_admin_emails in seed_studies.sql, and re-run clear_database.sql, supabase_schema.sql and seed_studies.sql (or run: INSERT INTO researchers(user_id, email, role) SELECT id, email, ''admin'' FROM auth.users WHERE email = ''...'';).';
+  ELSIF n_admin = 0 THEN
+    RAISE WARNING 'None of v_admin_emails (%) matches an existing account, so there is NO admin. Create that account in Authentication -> Users (or fix the list in seed_studies.sql) and re-run the seed after clear_database.sql and supabase_schema.sql, or promote someone now: UPDATE researchers SET role = ''admin'' WHERE email = ''...'';', array_to_string(v_admin_emails, ', ');
   END IF;
 END $$;
 
@@ -347,6 +361,9 @@ VALUES
 -- ============================================================
 -- 3. STUDY OWNERS: every existing account owns both seeded studies
 -- ============================================================
+-- Both studies are inserted as 'active' by postgres (no signed-in user), which
+-- tr_studies_status_guard treats as an admin: they are pre-approved
+-- (approved_at = now(), approved_by NULL).
 INSERT INTO study_members (study_id, user_id, role)
 SELECT st.id, r.user_id, 'owner'
   FROM (VALUES (v_digital_study_id), (v_sleep_study_id)) AS st(id)

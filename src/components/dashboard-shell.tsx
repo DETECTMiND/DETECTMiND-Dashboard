@@ -5,8 +5,9 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
 import { MeProvider, type Me } from '@/lib/access'
+import { fetchPendingStudyCount, PENDING_STUDIES_CHANGED_EVENT } from '@/lib/pending-studies'
 import {
-  BarChart3, Check, ChevronDown, Database, FlaskConical, LayoutDashboard, Loader2,
+  BarChart3, Check, ChevronDown, ClipboardCheck, Database, FlaskConical, Gauge, LayoutDashboard, Loader2,
   LogOut, Menu, MessageSquare, ScrollText, Settings, ShieldAlert, SlidersHorizontal, TableProperties,
   UserCog, UserRound, Users, UsersRound, X,
 } from 'lucide-react'
@@ -17,7 +18,7 @@ const STATUS_DOT: Record<string, string> = {
   draft: 'bg-gray-400', active: 'bg-emerald-500', paused: 'bg-amber-400', completed: 'bg-blue-500',
 }
 
-function navFor(studyId: string | null) {
+function navFor(studyId: string | null): NavItem[] {
   if (!studyId) return []
   return [
     { label: 'Overview', href: `/?study=${studyId}`, icon: LayoutDashboard, group: 'Workspace', match: (p: string) => p === '/' },
@@ -32,7 +33,18 @@ function navFor(studyId: string | null) {
   ]
 }
 
-const ADMIN_NAV = [
+type NavItem = {
+  label: string
+  href: string
+  icon: typeof Users
+  group: string
+  match: (p: string) => boolean
+  badge?: number
+}
+
+const ADMIN_NAV: NavItem[] = [
+  { label: 'Overview', href: '/admin', icon: Gauge, group: 'Admin', match: (p: string) => p === '/admin' },
+  { label: 'Studies', href: '/admin/studies', icon: ClipboardCheck, group: 'Admin', match: (p: string) => p === '/admin/studies' },
   { label: 'Researchers', href: '/admin/researchers', icon: UserCog, group: 'Admin', match: (p: string) => p === '/admin/researchers' },
   { label: 'Audit log', href: '/admin/audit', icon: ScrollText, group: 'Admin', match: (p: string) => p === '/admin/audit' },
 ]
@@ -75,6 +87,18 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     return () => { cancelled = true }
   }, [supabase])
   const isAdmin = researcher?.status === 'ok' && researcher.me.role === 'admin'
+  const [pendingCount, setPendingCount] = useState(0)
+
+  // Pending-approval badge for admins; refreshed on navigation so it drops
+  // right after an approval.
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    const refresh = () => { fetchPendingStudyCount(supabase).then(n => { if (!cancelled) setPendingCount(n) }) }
+    refresh()
+    window.addEventListener(PENDING_STUDIES_CHANGED_EVENT, refresh)
+    return () => { cancelled = true; window.removeEventListener(PENDING_STUDIES_CHANGED_EVENT, refresh) }
+  }, [isAdmin, supabase, pathname])
 
   const routeStudy = pathname.match(/^\/studies\/([^/]+)/)?.[1]
   const queryStudy = searchParams.get('study')
@@ -103,10 +127,11 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const routeSelectedId = routeStudy && routeStudy !== 'new' ? routeStudy : queryStudy
   const effectiveId = routeSelectedId && studies.some(s => s.id === routeSelectedId) ? routeSelectedId : selectedId
   const selected = studies.find(s => s.id === effectiveId)
-  const navigation = [...navFor(effectiveId), ...(isAdmin ? ADMIN_NAV : [])]
+  const adminNav = ADMIN_NAV.map(item => item.href === '/admin/studies' ? { ...item, badge: pendingCount } : item)
+  const navigation: NavItem[] = [...navFor(effectiveId), ...(isAdmin ? adminNav : [])]
   const activeNavigation = navigation.find(item => item.match(pathname))
 
-  const section = pathname === '/studies' ? 'All Studies' : pathname === '/settings/account' ? 'Account' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
+  const section = pathname === '/studies' ? 'All Studies' : pathname === '/admin' ? 'Admin overview' : pathname === '/settings/account' ? 'Account' : activeNavigation?.label || pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-', ' ') || 'Dashboard'
   const pageTitle = `${section.replace(/\b\w/g, c => c.toUpperCase())}${selected ? ` · ${selected.name}` : ''} | DETECTMiND`
 
   function switchStudy(id: string) {
@@ -173,10 +198,11 @@ export default function DashboardShell({ children }: { children: React.ReactNode
           {navigation.map((item, index) => {
             const active = item.match(pathname)
             const showGroup = index === 0 || navigation[index - 1].group !== item.group
-            return <div key={item.label}>
+            return <div key={item.href}>
               {showGroup && <p className={`${index === 0 ? 'mb-2' : 'mb-2 mt-5'} px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400`}>{item.group}</p>}
               <Link href={item.href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${active ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
-                <item.icon size={17} /><span>{item.label}</span>
+                <item.icon size={17} /><span className="min-w-0 flex-1">{item.label}</span>
+                {!!item.badge && <span className="rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white" title={`${item.badge} pending approval`}>{item.badge}</span>}
               </Link>
             </div>
           })}
@@ -200,12 +226,12 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 lg:hidden" aria-label="Open navigation"><Menu size={18} /></button>
         <div className="min-w-0 flex-1"><p className="text-xs font-medium text-slate-500">{section}</p></div>
         {studies.length > 0 && <div className="relative" ref={switcherRef}>
-          <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} aria-haspopup="listbox" className="flex max-w-[15rem] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-slate-50">
+          <button onClick={() => setStudyOpen(v => !v)} aria-expanded={studyOpen} aria-haspopup="listbox" className="flex max-w-[11rem] sm:max-w-[15rem] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-slate-50">
             <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[selected?.status || 'draft']}`} />
             <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">{selected?.name || 'Select study'}</span>
             <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform ${studyOpen ? 'rotate-180' : ''}`} />
           </button>
-          {studyOpen && <div className="absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl" role="listbox" aria-label="Select study">
+          {studyOpen && <div className="absolute right-0 top-full z-50 mt-2 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl" role="listbox" aria-label="Select study">
             {studies.map(study => <button role="option" aria-selected={study.id === effectiveId} key={study.id} onClick={() => switchStudy(study.id)} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-slate-700 hover:bg-slate-50"><span className={`h-2 w-2 rounded-full ${STATUS_DOT[study.status] || STATUS_DOT.draft}`} /><span className="min-w-0 flex-1 truncate font-medium">{study.name}</span>{study.id === effectiveId && <Check size={14} className="text-blue-600" />}</button>)}
           </div>}
         </div>}

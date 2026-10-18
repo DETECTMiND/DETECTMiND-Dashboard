@@ -46,6 +46,26 @@ npm run build   # production build
 npm start       # serve the production build
 ```
 
+## End-to-end tests
+
+The Playwright suite runs the dashboard against a **local** Supabase stack in Docker,
+never the hosted project (the setup refuses any non-localhost URL). Test accounts for every
+role (admin, owner, editor, viewer, researcher, outsider) exist only in that local stack.
+
+```bash
+npx supabase start -x realtime,storage-api,imgproxy,edge-runtime,logflare,vector,supavisor,studio,postgres-meta
+npm run test:e2e        # resets the local DB (clear -> schema -> seed), creates test users, runs all flows
+npx supabase stop       # when finished
+```
+
+Invite and password-reset emails are caught by the local Mailpit at http://127.0.0.1:54324.
+`npm run db:local:reset` rebuilds just the local database.
+
+Covered: study approval, owner/editor/viewer limits (UI and direct database access),
+admin owner assignment and study deletion, owner invites (email link → set password →
+restricted view), change and forgot password, participant deletion, deactivation and the
+last-admin guard, and admin pages at phone width.
+
 ## Project layout
 
 ```

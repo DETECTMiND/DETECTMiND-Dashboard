@@ -3,13 +3,14 @@
 import { createClient } from '@/lib/supabase-browser'
 import { Notice, errorText } from '@/components/feedback'
 import { useState } from 'react'
+import { useMe } from '@/lib/access'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   ArrowLeft, ArrowRight, Check, FlaskConical,
   Smartphone, Phone, MessageSquare, MapPin, BatteryCharging,
   Bell, Monitor, Zap, Sun, MousePointerClick, ClipboardList,
-  Clock, ShieldCheck, BadgeCheck, Footprints, Compass,
+  Clock, ShieldCheck, BadgeCheck, Footprints, Compass, Info,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -198,10 +199,13 @@ function StepBasicInfo({ state, setState }: { state: WizardState; setState: (s: 
   return (
     <div className="space-y-5">
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          Study Name <span className="text-red-500">*</span>
+        <label htmlFor="study-name" className="block text-sm font-medium text-gray-700 mb-1.5">
+          Study name <span className="text-red-500" aria-hidden="true">*</span>
         </label>
         <input
+          id="study-name"
+          aria-label="Study name"
+          required
           value={state.name}
           onChange={e => set({ name: e.target.value })}
           placeholder="e.g. Sleep Pattern Study 2025"
@@ -717,6 +721,10 @@ function StepReview({ state }: { state: WizardState }) {
 export default function NewStudyPage() {
   const router = useRouter()
   const supabase = createClient()
+  const me = useMe()
+  const isAdmin = me?.role === 'admin'
+  // Admins may publish straight away; everyone else always gets a pending draft (enforced by the DB).
+  const [activateNow, setActivateNow] = useState(true)
   const [step, setStep] = useState(1)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
@@ -771,7 +779,7 @@ export default function NewStudyPage() {
           app_description: state.appDescription.trim() || null,
           sync_interval_minutes: state.syncInterval,
           config,
-          status: 'draft',
+          status: isAdmin && activateNow ? 'active' : 'draft',
         })
 
       if (studyError) {
@@ -804,12 +812,8 @@ export default function NewStudyPage() {
         window.alert(`The study was created, but ${problems.join(' and ')}. Please check its settings.`)
       }
 
-      // 3. Navigate
-      if (state.enableEsm) {
-        router.push(`/studies/${study.id}/esm`)
-      } else {
-        router.push(`/studies/${study.id}`)
-      }
+      // 3. Go to the study page (shows the pending-approval banner when relevant).
+      router.push(`/studies/${study.id}`)
     } catch (e) {
       setSubmitError(`Could not create the study: ${e instanceof Error ? e.message : 'unknown error'}`)
       setSubmitting(false)
@@ -843,6 +847,13 @@ export default function NewStudyPage() {
           </div>
         </div>
       </div>
+
+      {me && !isAdmin && (
+        <div role="note" className="mb-6 flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          <Info size={16} className="mt-0.5 shrink-0 text-blue-600" aria-hidden="true" />
+          <p>Your study will be reviewed by an admin before participants can join. You can set up sensors and surveys in the meantime.</p>
+        </div>
+      )}
 
       {/* Step indicator */}
       <div className="flex items-center gap-0 mb-8">
@@ -882,6 +893,21 @@ export default function NewStudyPage() {
         </div>
         <div className="px-6 py-6">
           {stepContent[step]}
+          {step === STEPS.length && isAdmin && (
+            <fieldset className="mt-5 rounded-xl border border-gray-200 bg-white px-4 py-3">
+              <legend className="px-1 text-xs font-semibold uppercase tracking-wider text-gray-500">Status after creation</legend>
+              <div className="mt-1 space-y-2">
+                <label className="flex items-start gap-2.5 text-sm text-gray-700">
+                  <input type="radio" name="initial-status" className="mt-0.5" checked={activateNow} onChange={() => setActivateNow(true)} />
+                  <span><span className="font-semibold">Activate now</span><span className="block text-xs text-gray-500">Approved straight away; participants can join immediately.</span></span>
+                </label>
+                <label className="flex items-start gap-2.5 text-sm text-gray-700">
+                  <input type="radio" name="initial-status" className="mt-0.5" checked={!activateNow} onChange={() => setActivateNow(false)} />
+                  <span><span className="font-semibold">Save as draft</span><span className="block text-xs text-gray-500">Stays pending approval until you approve it.</span></span>
+                </label>
+              </div>
+            </fieldset>
+          )}
           {submitError && <div className="mt-4"><Notice notice={{ tone: 'error', text: submitError }} onClose={() => setSubmitError(null)} /></div>}
         </div>
         <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-3">
@@ -919,7 +945,7 @@ export default function NewStudyPage() {
               ) : (
                 <>
                   <Check size={14} />
-                  Create Study
+                  Create study
                 </>
               )}
             </button>

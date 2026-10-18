@@ -27,11 +27,23 @@ export function useMe(): Me | null {
   return useContext(MeContext)
 }
 
+/** True when the signed-in researcher is a dashboard admin. */
+export function useIsAdmin(): boolean {
+  return useMe()?.role === 'admin'
+}
+
+export function isAdminMe(me: Me | null | undefined): boolean {
+  return me?.role === 'admin'
+}
+
 export interface StudyAccess {
   role: StudyRole | null
   canView: boolean
   canEdit: boolean
+  /** Owner or admin: pause/complete an approved study, manage editors and viewers, delete participants. */
   canManage: boolean
+  /** Dashboard admin: approve and delete studies, assign or remove owners. */
+  isAdmin: boolean
   loading: boolean
 }
 
@@ -41,6 +53,7 @@ export function accessFor(role: StudyRole | null): Omit<StudyAccess, 'loading'> 
     canView: role !== null,
     canEdit: role === 'admin' || role === 'owner' || role === 'editor',
     canManage: role === 'admin' || role === 'owner',
+    isAdmin: role === 'admin',
   }
 }
 
@@ -103,7 +116,23 @@ export const STUDY_ROLE_LABEL: Record<StudyRole, string> = {
 }
 
 export const STUDY_ROLE_HELP: Record<Exclude<StudyRole, 'admin'>, string> = {
-  owner: 'Everything an editor can do, plus manage the team and delete participants',
-  editor: 'Edit study settings, sensors, surveys, PIN and participants',
+  owner: 'Everything an editor can do, plus pause or complete the study, manage editors and viewers, and delete participants. Admins approve and delete studies and assign owners',
+  editor: 'Edit study settings, sensors, surveys, PIN and participant labels. Cannot change the study status or the team',
   viewer: 'Read-only access to the study and its data',
 }
+
+/** Dashboard-level roles (Admin → Researchers). */
+export const RESEARCHER_ROLE_HELP: Record<ResearcherRole, string> = {
+  admin: 'Full access to every study. Approves and deletes studies, assigns owners, manages researchers and reads the audit log',
+  researcher: 'Can create studies (an admin approves them first) and work on studies they are a member of, with the role they have there',
+}
+
+/** One line per study role, for "who can do what" panels. */
+export const STUDY_PERMISSIONS: { action: string; admin: boolean; owner: boolean; editor: boolean; viewer: boolean }[] = [
+  { action: 'View the study and its data', admin: true, owner: true, editor: true, viewer: true },
+  { action: 'Edit settings, sensors, surveys, PIN and labels', admin: true, owner: true, editor: true, viewer: false },
+  { action: 'Pause or complete an approved study', admin: true, owner: true, editor: false, viewer: false },
+  { action: 'Invite, add, change or remove editors and viewers', admin: true, owner: true, editor: false, viewer: false },
+  { action: 'Delete participants', admin: true, owner: true, editor: false, viewer: false },
+  { action: 'Approve or delete the study, assign or remove owners', admin: true, owner: false, editor: false, viewer: false },
+]

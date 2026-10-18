@@ -42,3 +42,9 @@ next-env.d.ts
 
 # Keep the template tracked
 !.env.example
+
+# e2e tests
+/e2e-report
+/test-results
+/playwright/.cache
+/e2e-screenshots

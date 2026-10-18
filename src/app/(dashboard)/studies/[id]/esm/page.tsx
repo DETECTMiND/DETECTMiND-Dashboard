@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase-browser'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useStudyAccess } from '@/lib/access'
 import { Notice, ReadOnlyBanner, errorText, type NoticeState } from '@/components/feedback'
+import { useConfirm } from '@/components/confirm-dialog'
 import { useParams } from 'next/navigation'
 import {
   Plus, Trash2, Clock, Shuffle, AlignLeft,
@@ -641,6 +642,7 @@ export default function ESMPage() {
   const access = useStudyAccess(studyId)
   const canEdit = access.canEdit
   const [notice, setNotice] = useState<NoticeState>(null)
+  const { ask, dialog } = useConfirm()
 
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [selectedSchedule, setSelectedSchedule] = useState<Schedule | null>(null)
@@ -755,8 +757,18 @@ export default function ESMPage() {
     if (selectedSchedule?.id === s.id) setSelectedSchedule(updated)
   }
 
-  async function deleteSchedule(id: string) {
-    if (!confirm('Delete this schedule and all its questions?')) return
+  function deleteSchedule(id: string) {
+    const name = schedules.find(s => s.id === id)?.name
+    ask({
+      title: `Delete ${name ? `“${name}”` : 'this schedule'}?`,
+      tone: 'danger',
+      confirmLabel: 'Delete schedule',
+      body: <p>This deletes the schedule and all its questions. Responses already collected are kept.</p>,
+      run: async () => { await removeSchedule(id) },
+    })
+  }
+
+  async function removeSchedule(id: string) {
     const { data: removed, error } = await supabase.from('esm_schedules').delete().eq('id', id).select('id')
     if (failed(error, removed, 'delete the schedule')) return
     const res = await fetchSchedules()
@@ -814,6 +826,7 @@ export default function ESMPage() {
 
   return (
     <div className="space-y-6">
+      {dialog}
 
       {/* Header */}
       <div>

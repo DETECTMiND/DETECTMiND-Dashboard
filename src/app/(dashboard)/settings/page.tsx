@@ -7,6 +7,7 @@ import { FlaskConical, Pencil, X, Check, ChevronRight, UserRound } from 'lucide-
 import { formatDistanceToNow } from 'date-fns'
 import { useMyStudyRoles } from '@/lib/access'
 import { LoadingBlock, Notice, errorText, type NoticeState } from '@/components/feedback'
+import { isPendingApproval, statusOptionsFor } from '@/lib/pending-studies'
 
 interface Study {
   id: string
@@ -14,10 +15,9 @@ interface Study {
   description: string | null
   app_description: string | null
   status: string
+  approved_at?: string | null
   created_at: string
 }
-
-const STATUS_OPTIONS = ['draft', 'active', 'paused', 'completed']
 
 const STATUS_STYLES: Record<string, { pill: string; dot: string }> = {
   draft:     { pill: 'bg-gray-100 text-gray-600 border-gray-200',        dot: 'bg-gray-400' },
@@ -35,6 +35,7 @@ export default function SettingsPage() {
   const [editDesc, setEditDesc] = useState('')
   const [notice, setNotice] = useState<NoticeState>(null)
   const canEdit = (id: string) => isAdmin || roles[id] === 'owner' || roles[id] === 'editor'
+  const statusRuleFor = (study: Study) => statusOptionsFor(isAdmin ? 'admin' : roles[study.id] ?? null, study)
 
   const fetchStudies = useCallback(async () => {
     const { data, error } = await supabase.from('studies').select('*').order('created_at', { ascending: false })
@@ -117,6 +118,8 @@ export default function SettingsPage() {
           <div className="space-y-2">
             {studies.map(study => {
               const style = STATUS_STYLES[study.status] || STATUS_STYLES.draft
+              const statusRule = statusRuleFor(study)
+              const statusChoices = statusRule.options.includes(study.status) ? statusRule.options : [study.status, ...statusRule.options]
               return (
                 <div key={study.id} className="bg-white rounded-xl border border-gray-200 shadow-sm">
                   <div className="px-5 py-4 flex items-start justify-between gap-4">
@@ -143,10 +146,10 @@ export default function SettingsPage() {
                               placeholder="Description (optional)"
                             />
                             <div className="flex items-center gap-2 pt-0.5">
-                              <button onClick={() => saveEdit(study.id)} className="text-blue-600 hover:text-blue-700 transition-colors">
+                              <button onClick={() => saveEdit(study.id)} aria-label="Save study details" className="text-blue-600 hover:text-blue-700 transition-colors">
                                 <Check size={15} />
                               </button>
-                              <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                              <button onClick={() => setEditingId(null)} aria-label="Cancel editing" className="text-gray-400 hover:text-gray-600 transition-colors">
                                 <X size={15} />
                               </button>
                             </div>
@@ -155,8 +158,10 @@ export default function SettingsPage() {
                           <>
                             <div className="flex items-center gap-1.5 mb-0.5">
                               <span className="font-semibold text-gray-900 text-sm">{study.name}</span>
+                              {isPendingApproval(study) && <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">Pending approval</span>}
                               {canEdit(study.id) && <button
                                 onClick={() => { setEditingId(study.id); setEditName(study.name); setEditDesc(study.description || '') }}
+                                aria-label={`Edit ${study.name}`}
                                 className="text-gray-300 hover:text-gray-500 transition-colors"
                               >
                                 <Pencil size={11} />
@@ -175,15 +180,18 @@ export default function SettingsPage() {
 
                     <div className="flex items-center gap-2 shrink-0">
                       <select
+                        aria-label={`Status of ${study.name}`}
+                        title={statusRule.reason ?? undefined}
                         value={study.status}
-                        disabled={!canEdit(study.id)}
+                        disabled={!statusRule.editable}
                         onChange={e => updateStatus(study.id, e.target.value)}
-                        className={`text-xs px-2.5 py-1.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all ${style.pill}`}
+                        className={`text-xs px-2.5 py-1.5 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 transition-all disabled:cursor-not-allowed disabled:opacity-70 ${style.pill}`}
                       >
-                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                        {statusChoices.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                       <Link
                         href={`/studies/${study.id}`}
+                        aria-label={`Open ${study.name}`}
                         className="p-1.5 text-gray-300 hover:text-gray-500 transition-colors"
                       >
                         <ChevronRight size={14} />

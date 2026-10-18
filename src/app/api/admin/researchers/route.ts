@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
 import { audit, EMAIL_RE, jsonError, passwordRedirect, readJson, requireAdmin } from '@/lib/admin-auth'
-import { findAuthUserByEmail, hasSignedIn, listAuthUsers } from './shared'
+import { findResearcherByEmail, hasSignedIn, insertResearcherRow, inviteOrFindAuthUser, listAuthUsers } from './shared'
 
 type ResearcherRow = {
   user_id: string
@@ -70,40 +70,18 @@ export async function POST(req: NextRequest) {
   if (!EMAIL_RE.test(email) || email.length > 254) return jsonError(400, 'Enter a valid email address')
   if (!role) return jsonError(400, "Role must be 'admin' or 'researcher'")
 
-  const { data: existingRow, error: existingError } = await admin
-    .from('researchers').select('user_id').eq('email', email).maybeSingle()
-  if (existingError) return jsonError(500, existingError.message)
-  if (existingRow) return jsonError(409, 'This email is already a researcher. Use "Resend invite" instead.')
+  const existing = await findResearcherByEmail(admin, email)
+  if (!existing.ok) return jsonError(existing.status, existing.error)
+  if (existing.row) return jsonError(409, 'This email is already a researcher. Use "Resend invite" instead.')
 
-  let userId: string
-  let existingAccount = false
-  const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
-    redirectTo: passwordRedirect(req),
-  })
-  if (invited?.user) {
-    userId = invited.user.id
-  } else if (inviteError && /already been registered|already exists|email_exists/i.test(`${inviteError.message} ${inviteError.code ?? ''}`)) {
-    // An auth account already exists (e.g. created by hand): grant it access.
-    let found
-    try {
-      found = await findAuthUserByEmail(admin, email)
-    } catch (e) {
-      return jsonError(500, e instanceof Error ? e.message : 'Could not look up the account')
-    }
-    if (!found) return jsonError(409, 'An account with this email exists but could not be found')
-    userId = found.id
-    existingAccount = true
-  } else {
-    return jsonError(502, `Could not send the invite: ${inviteError?.message ?? 'unknown error'}`)
-  }
+  // Sends the invite, or finds the auth account that already exists (e.g.
+  // created by hand) so it can be granted access.
+  const invite = await inviteOrFindAuthUser(admin, email, passwordRedirect(req))
+  if (!invite.ok) return jsonError(invite.status, invite.error)
+  const { userId, existingAccount } = invite
 
-  const { error: insertError } = await admin.from('researchers').insert({
-    user_id: userId, email, role, active: true, display_name: displayName,
-  })
-  if (insertError) {
-    return jsonError(insertError.code === '23505' ? 409 : 500,
-      insertError.code === '23505' ? 'This account is already a researcher' : insertError.message)
-  }
+  const inserted = await insertResearcherRow(admin, { userId, email, role, displayName })
+  if (!inserted.ok) return jsonError(inserted.status, inserted.error)
 
   await audit(admin, user.id, 'researcher_invited', 'researcher', userId, { email, role, existing_account: existingAccount })
 
