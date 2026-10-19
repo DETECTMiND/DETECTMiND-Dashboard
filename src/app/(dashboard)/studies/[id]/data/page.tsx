@@ -1,19 +1,28 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useMemo, useRef, useState, Suspense, lazy } from 'react'
+import { useMemo, useState, Suspense, lazy } from 'react'
+import Link from 'next/link'
+import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { BarChart2, Database, Download, Table2, Users } from 'lucide-react'
 import {
   asRows,
   type AppUsageRow, type BatteryRow, type CallSmsRow, type DataRow, type EsmResponseRow,
   type LightRow, type LocationRow, type NotificationRow, type ScreenStateRow,
 } from '@/components/charts/types'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import {
-  Download, Database, Users, Search, Check, X,
-  ChevronDown, ChevronUp, ChevronsUpDown, BarChart2, Table2,
-} from 'lucide-react'
+  Button, Card, EmptyState, ErrorState, FilterPills, Notice, Pagination, SectionHeader, SegmentedControl,
+  Skeleton, SkeletonRows, TableWrap, THead, Th, Td, Tr, type NoticeState,
+} from '@/components/ui'
+import { Avatar, ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
+import { JsonCell, columnLabel, formatCellValue } from '@/components/data/cells'
+import { scopedSelect, stripScope, type DataScope } from '@/components/data/scope'
+import { must, mustCount, useAsync } from '@/components/data/use-async'
+import { DATA_TABLES } from '@/lib/sensors'
+import { downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
+import { studyPaths } from '@/lib/nav'
 
-// Lazy-load chart components so they don't bloat initial bundle
+// Lazy-load chart components so they don't bloat the initial bundle
 const BatteryChart       = lazy(() => import('@/components/charts/BatteryChart'))
 const LightChart         = lazy(() => import('@/components/charts/LightChart'))
 const ScreenStateChart   = lazy(() => import('@/components/charts/ScreenStateChart'))
@@ -23,91 +32,38 @@ const CallsSmsChart      = lazy(() => import('@/components/charts/CallsSmsChart'
 const LocationChart      = lazy(() => import('@/components/charts/LocationChart'))
 const EsmChart           = lazy(() => import('@/components/charts/EsmChart'))
 
-const SENSOR_TABLES = [
-  { key: 'data_app_usage',          label: 'App Usage',           timeCol: 'start_time',   hasChart: true  },
-  { key: 'data_notifications',      label: 'Notifications',       timeCol: 'posted_at',    hasChart: true  },
-  { key: 'data_battery',            label: 'Battery',             timeCol: 'recorded_at',  hasChart: true  },
-  { key: 'data_calls',              label: 'Calls',               timeCol: 'event_time',   hasChart: true  },
-  { key: 'data_sms',                label: 'SMS',                 timeCol: 'event_time',   hasChart: true  },
-  { key: 'data_esm_responses',      label: 'ESM Responses',       timeCol: 'triggered_at', hasChart: true  },
-  { key: 'data_location',           label: 'Location',            timeCol: 'recorded_at',  hasChart: true  },
-  { key: 'data_light',              label: 'Light',               timeCol: 'recorded_at',  hasChart: true  },
-  { key: 'data_screen_state',       label: 'Screen State',        timeCol: 'recorded_at',  hasChart: true  },
-  { key: 'data_steps',              label: 'Steps',               timeCol: 'recorded_at',  hasChart: false },
-  { key: 'data_proximity',          label: 'Proximity',           timeCol: 'recorded_at',  hasChart: false },
-  { key: 'data_gestures', label: 'User Gestures',       timeCol: 'recorded_at',  hasChart: false },
-]
-
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
+const CHART_TABLES = new Set([
+  'data_app_usage', 'data_notifications', 'data_battery', 'data_calls', 'data_sms',
+  'data_esm_responses', 'data_location', 'data_light', 'data_screen_state',
+])
+const JSON_COLUMNS = new Set(['responses', 'interaction_data', 'device_info'])
+const HIDDEN_COLUMNS = new Set(['id', 'participant_id', 'client_uuid', 'participants'])
 const CHART_FETCH_LIMIT = 2000
 
 type ChartRange = '7d' | '30d' | '90d' | 'all'
-const CHART_RANGES: { key: ChartRange; label: string }[] = [
-  { key: '7d',  label: '7 days'  },
-  { key: '30d', label: '30 days' },
-  { key: '90d', label: '90 days' },
-  { key: 'all', label: 'All'     },
+const CHART_RANGES: { value: ChartRange; label: string }[] = [
+  { value: '7d', label: '7 days' },
+  { value: '30d', label: '30 days' },
+  { value: '90d', label: '90 days' },
+  { value: 'all', label: 'All' },
 ]
 
 function chartRangeSince(range: ChartRange): string | null {
   if (range === 'all') return null
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90
   const d = new Date()
-  d.setDate(d.getDate() - days)
+  d.setDate(d.getDate() - (range === '7d' ? 7 : range === '30d' ? 30 : 90))
   return d.toISOString()
-}
-
-interface Participant {
-  id: string
-  device_id: string
-  label: string | null
 }
 
 type SortDir = 'asc' | 'desc'
 type ViewMode = 'table' | 'chart'
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function participantName(p: Participant) {
-  return p.label || p.device_id
-}
-
-function formatColHeader(col: string) {
-  if (col === 'voltage') return 'Voltage (V)'
-  if (col === 'temperature') return 'Temperature (°C)'
-  return col.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-}
-
-// The app stores battery voltage in millivolts (e.g. 4371). Display volts; the
-// stored value (and CSV export) is unchanged. Values that already look like
-// volts (< 100) are shown as-is.
-function formatVoltage(value: number): string {
-  const volts = value >= 100 ? value / 1000 : value
-  return volts.toFixed(2)
-}
-
-function formatCellValue(col: string, value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—'
-  if (col === 'voltage' && typeof value === 'number') return formatVoltage(value)
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
-  if (typeof value === 'object') return JSON.stringify(value)
-  if (typeof value === 'string') {
-    const isTimeCol = col.endsWith('_at') || col.endsWith('_time')
-    if (isTimeCol && /^\d{4}-/.test(value)) {
-      try {
-        return new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-      } catch { /* fall through */ }
-    }
-  }
-  return String(value)
-}
 
 // ─── Gesture summaries ────────────────────────────────────────────────────────
 // data_gestures keeps details in interaction_data JSON. For the feed-scroll
 // ('scroll') and pager ('page_swipe', reels/Shorts/stories) types, surface the
 // useful fields as two readable, display-only columns.
 const GESTURE_DERIVED_COLS = ['_direction', '_detail'] as const
-const DERIVED_HEADERS: Record<string, string> = { _direction: 'Direction', _detail: 'Details' }
+const DERIVED = new Set<string>(GESTURE_DERIVED_COLS)
 
 function containerShort(id: unknown): string | null {
   if (typeof id !== 'string' || !id) return null
@@ -138,778 +94,313 @@ function gestureDerived(col: string, row: Record<string, unknown>): string {
   return parts.length ? parts.join(' · ') : '—'
 }
 
-function avatarInitial(name: string) { return name.charAt(0).toUpperCase() }
-
-const AVATAR_COLORS = [
-  'bg-blue-100 text-blue-700', 'bg-violet-100 text-violet-700',
-  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
-  'bg-rose-100 text-rose-700', 'bg-cyan-100 text-cyan-700',
-]
-
-function avatarColor(id: string) {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length]
-}
-
-// ─── Sort icon ────────────────────────────────────────────────────────────────
-
-function SortIcon({ col, sortCol, sortDir }: { col: string; sortCol: string; sortDir: SortDir }) {
-  if (col !== sortCol) return <ChevronsUpDown size={11} className="text-gray-300 shrink-0" />
-  return sortDir === 'asc'
-    ? <ChevronUp size={11} className="text-blue-500 shrink-0" />
-    : <ChevronDown size={11} className="text-blue-500 shrink-0" />
-}
-
 // ─── Chart dispatcher ─────────────────────────────────────────────────────────
 
-function ChartView({
-  sensorKey, data, participants, showParticipant,
-}: {
-  sensorKey: string
-  data: DataRow[]
-  participants: Participant[]
-  showParticipant: boolean
+function ChartView({ table, data, participants, showParticipant }: {
+  table: string; data: DataRow[]; participants: Participant[]; showParticipant: boolean
 }) {
   const props = { participants, showParticipant }
-  switch (sensorKey) {
-    case 'data_battery':            return <BatteryChart {...props} data={asRows<BatteryRow>(data)} />
-    case 'data_light':              return <LightChart {...props} data={asRows<LightRow>(data)} />
-    case 'data_screen_state':       return <ScreenStateChart {...props} data={asRows<ScreenStateRow>(data)} />
-    case 'data_notifications':      return <NotificationsChart {...props} data={asRows<NotificationRow>(data)} />
-    case 'data_app_usage':          return <AppUsageChart {...props} data={asRows<AppUsageRow>(data)} />
-    case 'data_calls':              return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_calls" />
-    case 'data_sms':                return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_sms" />
-    case 'data_location':           return <LocationChart {...props} data={asRows<LocationRow>(data)} />
-    case 'data_esm_responses':      return <EsmChart {...props} data={asRows<EsmResponseRow>(data)} />
-    default:
-      return (
-        <div className="py-12 text-center text-sm text-gray-400">
-          No chart view available for this sensor type.
-        </div>
-      )
+  switch (table) {
+    case 'data_battery':       return <BatteryChart {...props} data={asRows<BatteryRow>(data)} />
+    case 'data_light':         return <LightChart {...props} data={asRows<LightRow>(data)} />
+    case 'data_screen_state':  return <ScreenStateChart {...props} data={asRows<ScreenStateRow>(data)} />
+    case 'data_notifications': return <NotificationsChart {...props} data={asRows<NotificationRow>(data)} />
+    case 'data_app_usage':     return <AppUsageChart {...props} data={asRows<AppUsageRow>(data)} />
+    case 'data_calls':         return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_calls" />
+    case 'data_sms':           return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_sms" />
+    case 'data_location':      return <LocationChart {...props} data={asRows<LocationRow>(data)} />
+    case 'data_esm_responses': return <EsmChart {...props} data={asRows<EsmResponseRow>(data)} />
+    default:                   return <p className="py-12 text-center text-sm text-subtle">No chart is available for this data.</p>
   }
 }
 
-// ─── Participant Picker ───────────────────────────────────────────────────────
+// ─── Page ────────────────────────────────────────────────────────────────────
 
-function ParticipantPicker({
-  participants, value, onChange,
-}: {
-  participants: Participant[]
-  value: string
-  onChange: (v: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false); setQuery('')
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  useEffect(() => { if (open) inputRef.current?.focus() }, [open])
-
-  const filtered = participants.filter(p =>
-    participantName(p).toLowerCase().includes(query.toLowerCase()) ||
-    p.device_id.toLowerCase().includes(query.toLowerCase())
-  )
-
-  const selected = participants.find(p => p.id === value)
-  const label = selected ? participantName(selected) : 'All Participants'
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        onClick={() => { setOpen(o => !o); setQuery('') }}
-        className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-sm bg-white hover:bg-gray-50 focus:outline-none transition-all min-w-56 ${
-          selected ? 'border-blue-300 ring-2 ring-blue-100' : 'border-gray-200 hover:border-gray-300'
-        }`}
-      >
-        {selected ? (
-          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${avatarColor(selected.id)}`}>
-            {avatarInitial(label)}
-          </span>
-        ) : (
-          <Users size={14} className="text-gray-400 shrink-0" />
-        )}
-        <span className="flex-1 text-left text-gray-700 font-medium truncate">{label}</span>
-        {selected && (
-          <span
-            role="button"
-            onClick={e => { e.stopPropagation(); onChange('all'); setOpen(false) }}
-            className="text-gray-300 hover:text-gray-500 transition-colors cursor-pointer shrink-0"
-          >
-            <X size={13} />
-          </span>
-        )}
-        <ChevronDown size={13} className={`text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute top-full left-0 mt-1.5 bg-white rounded-xl border border-gray-200 shadow-xl z-50 w-72 overflow-hidden">
-          <div className="p-2 border-b border-gray-100">
-            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded-lg border border-gray-200">
-              <Search size={12} className="text-gray-400 shrink-0" />
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Search participants…"
-                className="flex-1 text-xs bg-transparent outline-none text-gray-700 placeholder-gray-400"
-              />
-              {query && <button onClick={() => setQuery('')} className="text-gray-400 hover:text-gray-600"><X size={11} /></button>}
-            </div>
-          </div>
-          <div className="max-h-64 overflow-y-auto">
-            {!query && (
-              <button
-                onClick={() => { onChange('all'); setOpen(false); setQuery('') }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${value === 'all' ? 'bg-blue-50' : ''}`}
-              >
-                <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                  <Users size={13} className="text-gray-500" />
-                </div>
-                <span className={`text-sm font-semibold flex-1 ${value === 'all' ? 'text-blue-700' : 'text-gray-700'}`}>All Participants</span>
-                {value === 'all' && <Check size={13} className="text-blue-600 shrink-0" />}
-              </button>
-            )}
-            {filtered.length === 0 ? (
-              <p className="px-3 py-5 text-xs text-gray-400 text-center">No participants match</p>
-            ) : filtered.map(p => {
-              const name = participantName(p)
-              const active = value === p.id
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => { onChange(p.id); setOpen(false); setQuery('') }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${active ? 'bg-blue-50' : ''}`}
-                >
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${avatarColor(p.id)}`}>
-                    {avatarInitial(name)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-medium truncate ${active ? 'text-blue-700' : 'text-gray-700'}`}>{name}</p>
-                    {p.label && <p className="text-[11px] text-gray-400 truncate font-mono">{p.device_id}</p>}
-                  </div>
-                  {active && <Check size={13} className="text-blue-600 shrink-0" />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Inner page (needs useSearchParams) ──────────────────────────────────────
-
-function SensorDataInner() {
-  const { id: studyId } = useParams()
+function RawDataInner() {
+  const { id: studyId } = useParams<{ id: string }>()
   const searchParams = useSearchParams()
   const router = useRouter()
+  const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
-  // Read once on mount: the participant filter is then driven by the picker.
-  const [initialParticipant] = useState(() => searchParams.get('participant'))
 
-  const [participants, setParticipants]               = useState<Participant[]>([])
-  const [enabledTables, setEnabledTables]             = useState(SENSOR_TABLES)
-  const [selectedParticipant, setSelectedParticipant] = useState<string>('all')
-  const [selectedTable, setSelectedTable]             = useState(SENSOR_TABLES[0])
-  const [data, setData]                               = useState<DataRow[]>([])
-  const [chartData, setChartData]                     = useState<DataRow[]>([])
-  const [counts, setCounts]                           = useState<Record<string, number>>({})
-  const [totalCount, setTotalCount]                   = useState<number | null>(null)
-  const [loading, setLoading]                         = useState(false)
-  const [chartLoading, setChartLoading]               = useState(false)
-  const [exporting, setExporting]                     = useState(false)
-  const [countsLoading, setCountsLoading]             = useState(true)
-  const [viewMode, setViewMode]                       = useState<ViewMode>('table')
-  const [chartRange, setChartRange]                   = useState<ChartRange>('30d')
-  const chartCacheKey                                  = useRef('')
-
-  // Sorting & pagination state
-  const [sortCol, setSortCol]   = useState<string>(SENSOR_TABLES[0].timeCol)
-  const [sortDir, setSortDir]   = useState<SortDir>('desc')
-  const [page, setPage]         = useState(0)
+  const [tableChoice, setTableChoice] = useState<string | null>(null)
+  const [viewChoice, setViewMode] = useState<ViewMode>('table')
+  const [chartRange, setChartRange] = useState<ChartRange>('30d')
+  const [sort, setSort] = useState<{ col: string | null; dir: SortDir }>({ col: null, dir: 'desc' })
+  const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(50)
+  const [exporting, setExporting] = useState(false)
+  const [notice, setNotice] = useState<NoticeState>(null)
 
-  // Load participants + enabled sensor configs
-  useEffect(() => {
-    async function loadParticipants() {
-      const [{ data: pData }, { data: cfgData }] = await Promise.all([
-        supabase.from('participants').select('id, label, device_id').eq('study_id', studyId),
-        supabase.from('sensor_configs').select('sensor_type').eq('study_id', studyId).eq('enabled', true),
-      ])
-      const pList = (pData || []) as Participant[]
-      setParticipants(pList)
+  // Participants + enabled sensors
+  const meta = useAsync(`meta:${studyId}`, async () => {
+    const [participants, configs] = await Promise.all([
+      fetchAll<Participant>((from, to) => supabase.from('participants').select('id, label, device_id')
+        .eq('study_id', studyId).order('enrolled_at', { ascending: false }).order('id').range(from, to)),
+      supabase.from('sensor_configs').select('sensor_type').eq('study_id', studyId).eq('enabled', true),
+    ])
+    const enabled = new Set(must(configs).map((r: { sensor_type: string }) => r.sensor_type))
+    return { participants, enabled }
+  })
+  const participants = useMemo(() => meta.data?.participants ?? [], [meta.data])
+  const pMap = useMemo(() => Object.fromEntries(participants.map(p => [p.id, p])), [participants])
+  const hasParticipants = participants.length > 0
 
-      const enabledTypes = new Set(((cfgData || []) as { sensor_type: string }[]).map(r => r.sensor_type))
-      // Tables to show regardless of whether they're a configured sensor.
-      const ALWAYS_SHOW = new Set<string>([])
-      const filtered = enabledTypes.size > 0
-        ? SENSOR_TABLES.filter(t => ALWAYS_SHOW.has(t.key) || enabledTypes.has(t.key.replace(/^data_/, '')))
-        : SENSOR_TABLES
-      setEnabledTables(filtered)
-      const firstTable = filtered[0] ?? SENSOR_TABLES[0]
-      setSelectedTable(firstTable)
-      setSortCol(firstTable.timeCol)
-      setSortDir('desc')
-      setPage(0)
+  // ?participant= drives the filter (deep links from Participants keep working)
+  const requested = searchParams.get('participant')
+  const participant = requested && (!meta.data || pMap[requested]) ? requested : 'all'
+  const scope: DataScope = { studyId, participant }
+  const scopeKey = `${studyId}|${participant}`
 
-      if (initialParticipant && pList.some(p => p.id === initialParticipant)) {
-        setSelectedParticipant(initialParticipant)
-      }
-    }
-    loadParticipants()
-  }, [studyId, supabase, initialParticipant])
+  // Record counts per table (no requests at all when nobody has enrolled)
+  const counts = useAsync(meta.data ? `counts:${scopeKey}` : null, async () => {
+    if (!meta.data?.participants.length) return Object.fromEntries(DATA_TABLES.map(t => [t.table, 0])) as Record<string, number>
+    const results = await Promise.all(DATA_TABLES.map(t =>
+      scopedSelect(supabase, t.table, scope, 'id', { count: 'exact', head: true }).then(mustCount)))
+    return Object.fromEntries(DATA_TABLES.map((t, i) => [t.table, results[i]])) as Record<string, number>
+  })
+  const countMap = counts.data ?? counts.previous
 
-  // Re-fetch per-sensor counts whenever participant changes
-  useEffect(() => {
-    async function loadCounts() {
-      if (participants.length === 0) return
-      setCountsLoading(true)
-      const pIds = selectedParticipant === 'all'
-        ? participants.map(p => p.id)
-        : [selectedParticipant]
+  // Tables: enabled sensors, survey responses, and anything that already has data
+  const visibleTables = useMemo(() => {
+    const enabled = meta.data?.enabled
+    if (!enabled || enabled.size === 0) return DATA_TABLES
+    return DATA_TABLES.filter(t => !t.sensor || enabled.has(t.sensor) || (countMap?.[t.table] ?? 0) > 0)
+  }, [meta.data, countMap])
+  const table = visibleTables.find(t => t.table === tableChoice) ?? visibleTables[0]
+  const canChart = CHART_TABLES.has(table.table)
+  const viewMode: ViewMode = canChart ? viewChoice : 'table'
+  const sortCol = sort.col ?? table.timeCol
+  const showParticipantCol = participant === 'all'
 
-      const countResults: Record<string, number> = {}
-      await Promise.all(
-        enabledTables.map(async t => {
-          const { count } = await supabase
-            .from(t.key)
-            .select('*', { count: 'exact', head: true })
-            .in('participant_id', pIds)
-          countResults[t.key] = count || 0
-        })
-      )
-      setCounts(countResults)
-      setCountsLoading(false)
-    }
-    loadCounts()
-  }, [supabase, selectedParticipant, participants, enabledTables])
+  // Current page of rows (count comes back with the same request)
+  const rowsKey = hasParticipants ? `rows:${scopeKey}|${table.table}|${sortCol}|${sort.dir}|${page}|${pageSize}` : null
+  const rows = useAsync(viewMode === 'table' ? rowsKey : null, async () => {
+    const from = page * pageSize
+    const res = await scopedSelect(supabase, table.table, scope, '*', { count: 'exact' })
+      .order(sortCol, { ascending: sort.dir === 'asc', nullsFirst: false })
+      .order('id', { ascending: sort.dir === 'asc' })
+      .range(from, from + pageSize - 1)
+    return { table: table.table, rows: stripScope(must(res) as DataRow[]), total: res.count ?? 0 }
+  })
 
-  // Load table rows (paginated)
-  useEffect(() => {
-    async function loadData() {
-      if (participants.length === 0) return
-      setLoading(true)
-      const pIds = selectedParticipant === 'all'
-        ? participants.map(p => p.id)
-        : [selectedParticipant]
+  // Chart data: the latest CHART_FETCH_LIMIT rows in the range, oldest first
+  const chartKey = hasParticipants && viewMode === 'chart' ? `chart:${scopeKey}|${table.table}|${chartRange}` : null
+  const chart = useAsync(chartKey, async () => {
+    const since = chartRangeSince(chartRange)
+    let q = scopedSelect(supabase, table.table, scope, '*')
+    if (since) q = q.gte(table.timeCol, since)
+    const res = await q.order(table.timeCol, { ascending: false }).order('id', { ascending: false }).limit(CHART_FETCH_LIMIT)
+    const list = stripScope(must(res) as DataRow[]).reverse()
+    return { rows: list, truncated: list.length >= CHART_FETCH_LIMIT }
+  })
 
-      const effectiveSortCol = sortCol || selectedTable.timeCol
-      const from = page * pageSize
-      const to = from + pageSize - 1
-
-      // Check if sorting by a datetime column (ends with _at or _time)
-      const isDatetimeCol = effectiveSortCol.endsWith('_at') || effectiveSortCol.endsWith('_time')
-
-      const [rowsRes, countRes] = await Promise.all([
-        supabase
-          .from(selectedTable.key)
-          .select('*')
-          .in('participant_id', pIds)
-          // Order on the server in the requested direction so pagination pages
-          // through the right rows (page 1 of a descending sort = newest rows).
-          // The rows are re-sorted on the client below for exact temporal order.
-          .order(effectiveSortCol, { ascending: sortDir === 'asc', nullsFirst: false })
-          .range(from, to),
-        supabase
-          .from(selectedTable.key)
-          .select('*', { count: 'exact', head: true })
-          .in('participant_id', pIds),
-      ])
-
-      let rows = (rowsRes.data || []) as DataRow[]
-
-      // Client-side sort for datetime columns (ensures correct temporal ordering)
-      if (isDatetimeCol && rows.length > 0) {
-        rows = [...rows].sort((a, b) => {
-          const aVal = a[effectiveSortCol]
-          const bVal = b[effectiveSortCol]
-          if (aVal == null && bVal == null) return 0
-          if (aVal === null || aVal === undefined) return 1  // nulls last (matches the server)
-          if (bVal === null || bVal === undefined) return -1
-          const aTime = new Date(aVal as string).getTime()
-          const bTime = new Date(bVal as string).getTime()
-          return sortDir === 'asc' ? aTime - bTime : bTime - aTime
-        })
-      } else if (!isDatetimeCol && rows.length > 0) {
-        // Client-side sort for non-datetime columns too (to respect sortDir)
-        rows = [...rows].sort((a, b) => {
-          const aVal = a[effectiveSortCol] as string | number | boolean | null | undefined
-          const bVal = b[effectiveSortCol] as string | number | boolean | null | undefined
-          if (aVal == null && bVal == null) return 0
-          if (aVal === null || aVal === undefined) return 1  // nulls last (matches the server)
-          if (bVal === null || bVal === undefined) return -1
-          if (aVal < bVal) return sortDir === 'asc' ? -1 : 1
-          if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
-          return 0
-        })
-      }
-
-      setData(rows)
-      setTotalCount(countRes.count ?? 0)
-      setLoading(false)
-    }
-    loadData()
-  }, [supabase, selectedTable, selectedParticipant, participants, sortCol, sortDir, page, pageSize])
-
-  // Load chart data — only when chart view active, with cache guard
-  useEffect(() => {
-    async function loadChartData() {
-      if (participants.length === 0 || viewMode !== 'chart') return
-      const cacheKey = `${selectedTable.key}|${selectedParticipant}|${chartRange}`
-      if (chartCacheKey.current === cacheKey) return
-      chartCacheKey.current = cacheKey
-      setChartLoading(true)
-      const pIds = selectedParticipant === 'all'
-        ? participants.map(p => p.id)
-        : [selectedParticipant]
-
-      const since = chartRangeSince(chartRange)
-      let q = supabase
-        .from(selectedTable.key)
-        .select('*')
-        .in('participant_id', pIds)
-        .order(selectedTable.timeCol, { ascending: true, nullsFirst: false })
-        .limit(CHART_FETCH_LIMIT)
-      if (since) q = q.gte(selectedTable.timeCol, since)
-
-      const { data: rows } = await q
-      setChartData((rows || []) as DataRow[])
-      setChartLoading(false)
-    }
-    loadChartData()
-  }, [supabase, selectedTable, selectedParticipant, participants, viewMode, chartRange])
-
-  function handleParticipantChange(id: string) {
-    setSelectedParticipant(id)
+  function changeParticipant(id: string) {
     setPage(0)
-    chartCacheKey.current = ''
-    const url = new URL(window.location.href)
-    if (id === 'all') url.searchParams.delete('participant')
-    else url.searchParams.set('participant', id)
-    router.replace(url.pathname + url.search, { scroll: false })
+    const params = new URLSearchParams(searchParams.toString())
+    if (id === 'all') params.delete('participant')
+    else params.set('participant', id)
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }
 
-  function handleColSort(col: string) {
-    if (sortCol === col) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortCol(col)
-      setSortDir('asc')
-    }
+  function changeTable(next: string) {
+    setTableChoice(next)
+    setSort({ col: null, dir: 'desc' })
     setPage(0)
   }
 
-  function buildCSV(rows: DataRow[]) {
-    if (rows.length === 0) return ''
-    const headers = Object.keys(rows[0])
-    return [headers.join(','), ...rows.map(row => headers.map(h => JSON.stringify(row[h] ?? '')).join(','))].join('\n')
+  function toggleSort(col: string) {
+    setSort(s => (s.col ?? table.timeCol) === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' })
+    setPage(0)
   }
 
-  function downloadCSV(csv: string, filename: string) {
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = filename; a.click()
-    URL.revokeObjectURL(url)
-  }
+  const who = participant === 'all' ? 'all' : safeFileName(pMap[participant] ? participantName(pMap[participant]) : participant)
+  const fileBase = `${table.table.replace(/^data_/, '')}_${who}_${localDay(new Date())}`
 
   async function exportAll() {
-    const pIds = selectedParticipant === 'all'
-      ? participants.map(p => p.id)
-      : [selectedParticipant]
-    if (pIds.length === 0) return
     setExporting(true)
-    const effectiveSortCol = sortCol || selectedTable.timeCol
-    const { data: allRows } = await supabase
-      .from(selectedTable.key)
-      .select('*')
-      .in('participant_id', pIds)
-      .order(effectiveSortCol, { ascending: sortDir === 'asc', nullsFirst: false })
-    const csv = buildCSV(allRows || [])
-    if (csv) downloadCSV(csv, `${selectedTable.key}_full_export.csv`)
-    setExporting(false)
+    setNotice(null)
+    try {
+      const all = await fetchAll<DataRow>((from, to) => scopedSelect(supabase, table.table, scope, '*')
+        .order(sortCol, { ascending: sort.dir === 'asc', nullsFirst: false })
+        .order('id', { ascending: sort.dir === 'asc' })
+        .range(from, to))
+      const clean = stripScope(all)
+      if (clean.length === 0) setNotice({ tone: 'info', text: 'There are no rows to export.' })
+      else {
+        downloadCsv(clean, fileBase)
+        setNotice({ tone: 'success', text: `Exported ${clean.length.toLocaleString()} rows.` })
+      }
+    } catch (e) {
+      setNotice({ tone: 'error', text: `Export failed: ${e instanceof Error ? e.message : 'unknown error'}` })
+    } finally {
+      setExporting(false)
+    }
   }
 
-  const pMap = Object.fromEntries(participants.map(p => [p.id, p]))
-  const showParticipantCol = selectedParticipant === 'all'
-  const baseCols = data.length > 0
-    ? Object.keys(data[0]).filter(k => k !== 'id' && k !== 'participant_id' && k !== 'client_uuid')
-    : []
+  // While the next page loads, keep showing the current one (same table only)
+  const rowsData = rows.data ?? (rows.previous?.table === table.table ? rows.previous : undefined)
+  const pageRows = rowsData?.rows ?? []
+  const total = rowsData?.total ?? countMap?.[table.table] ?? 0
+  const baseCols = pageRows.length > 0 ? Object.keys(pageRows[0]).filter(k => !HIDDEN_COLUMNS.has(k)) : []
   // Gestures: put the readable summary columns just before the raw JSON.
-  const cols: string[] = selectedTable.key === 'data_gestures' && baseCols.includes('interaction_data')
+  const cols: string[] = table.table === 'data_gestures' && baseCols.includes('interaction_data')
     ? [...baseCols.filter(k => k !== 'interaction_data'), ...GESTURE_DERIVED_COLS, 'interaction_data']
     : baseCols
-  const isFiltered = selectedParticipant !== 'all'
-  const canChart = selectedTable.hasChart
+  const emptyHint = participant !== 'all' ? 'Nothing recorded for this participant yet.' : 'Nothing recorded for this sensor yet.'
 
-  const totalPages = totalCount !== null ? Math.ceil(totalCount / pageSize) : null
-  const isLastPage = totalPages !== null && page >= totalPages - 1
-  const rowStart = totalCount === 0 ? 0 : page * pageSize + 1
-  const rowEnd = Math.min((page + 1) * pageSize, totalCount ?? 0)
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (meta.error) return <ErrorState message={meta.error} onRetry={meta.retry} />
+
+  if (meta.loading) {
+    return (
+      <div className="space-y-4" aria-busy="true">
+        <div className="flex gap-2">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-8 w-24 rounded-full" />)}</div>
+        <SkeletonRows rows={8} />
+      </div>
+    )
+  }
+
+  if (!hasParticipants) {
+    return (
+      <EmptyState icon={<Users size={28} />} title="No participants yet"
+        hint="Raw data appears here once participants join from the mobile app and their phones sync." />
+    )
+  }
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div>
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Raw Data</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Browse and export collected sensor data</p>
-          </div>
-          <ParticipantPicker
-            participants={participants}
-            value={selectedParticipant}
-            onChange={handleParticipantChange}
-          />
-        </div>
-      </div>
+      <SectionHeader
+        title={table.label}
+        description={canChart && viewMode === 'chart' ? 'Charts of the most recent records in the chosen period.' : 'Every record uploaded by the phones, newest first.'}
+        actions={<ParticipantPicker participants={participants} value={participant} onChange={changeParticipant} />}
+      />
 
-      {/* Sensor type tabs */}
-      <div className="flex flex-wrap gap-1.5">
-        {enabledTables.map(t => {
-          const active = selectedTable.key === t.key
-          const count = counts[t.key] ?? 0
-          const hasData = count > 0
-          return (
-            <button
-              key={t.key}
-              onClick={() => {
-                setSelectedTable(t)
-                setSortCol(t.timeCol)
-                setSortDir('desc')
-                setPage(0)
-                if (!t.hasChart) setViewMode('table')
-              }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                active
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : hasData
-                    ? 'bg-white border border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                    : 'bg-white border border-gray-100 text-gray-400 hover:border-gray-200'
-              }`}
-            >
-              {!countsLoading && hasData && !active && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-              )}
-              {t.label}
-              {countsLoading ? (
-                <span className="w-5 h-2.5 bg-current opacity-20 rounded animate-pulse" />
-              ) : (
-                <span className={`tabular-nums ${active ? 'text-blue-200' : hasData ? 'text-gray-400' : 'text-gray-300'}`}>
-                  {count.toLocaleString()}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        {/* View toggle */}
-        <div className="flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <button
-            onClick={() => setViewMode('table')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
-              viewMode === 'table'
-                ? 'bg-blue-600 text-white'
-                : 'text-gray-600 hover:bg-gray-50'
-            }`}
-          >
-            <Table2 size={12} /> Table
-          </button>
-          <button
-            onClick={() => canChart && setViewMode('chart')}
-            disabled={!canChart}
-            title={!canChart ? 'No chart available for this sensor' : undefined}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
-              viewMode === 'chart'
-                ? 'bg-blue-600 text-white'
-                : canChart
-                  ? 'text-gray-600 hover:bg-gray-50'
-                  : 'text-gray-300 cursor-not-allowed'
-            }`}
-          >
-            <BarChart2 size={12} /> Chart
-          </button>
-        </div>
-
-        {viewMode === 'table' && !loading && totalCount !== null && (
-          <span className="text-xs text-gray-400 tabular-nums">
-            {totalCount === 0
-              ? 'No records'
-              : `${rowStart}–${rowEnd} of ${totalCount.toLocaleString()} records`}
-          </span>
-        )}
-
-        {viewMode === 'chart' && (
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-            {CHART_RANGES.map(r => (
-              <button
-                key={r.key}
-                onClick={() => { chartCacheKey.current = ''; setChartRange(r.key) }}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                  chartRange === r.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-        )}
-        {viewMode === 'chart' && !chartLoading && chartData.length > 0 && (
-          <span className="text-xs text-gray-400 tabular-nums">
-            {chartData.length < CHART_FETCH_LIMIT
-              ? `${chartData.length.toLocaleString()} records`
-              : `Showing latest ${CHART_FETCH_LIMIT.toLocaleString()} records`}
-          </span>
-        )}
-
-        <div className="flex items-center gap-2 ml-auto">
-          {viewMode === 'table' && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-gray-400">Rows</span>
-              <select
-                value={pageSize}
-                onChange={e => { setPageSize(Number(e.target.value)); setPage(0) }}
-                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:border-blue-300 cursor-pointer"
-              >
-                {PAGE_SIZE_OPTIONS.map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <details className="relative">
-            <summary className="flex list-none items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"><Download size={12} />{exporting ? 'Exporting…' : 'Export'}<ChevronDown size={12} /></summary>
-            <div className="absolute right-0 z-20 mt-1 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
-              <button onClick={() => { const csv = buildCSV(viewMode === 'chart' ? chartData : data); if (csv) downloadCSV(csv, `${selectedTable.key}_export.csv`) }} disabled={(viewMode === 'table' ? data : chartData).length === 0} className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Export current view</button>
-              <button onClick={exportAll} disabled={participants.length === 0 || exporting || (totalCount ?? 0) === 0} className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Export filtered dataset{totalCount ? ` (${totalCount.toLocaleString()})` : ''}</button>
-            </div>
-          </details>
-        </div>
-      </div>
-
-      {/* Chart view */}
-      {viewMode === 'chart' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          {chartLoading ? (
-            <div className="flex items-center justify-center h-64 gap-3 text-gray-400 text-sm">
-              <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
-              Loading chart data…
-            </div>
-          ) : chartData.length === 0 ? (
-            <div className="px-6 py-16 text-center">
-              <Database size={32} className="mx-auto text-gray-300 mb-3" />
-              <p className="text-gray-600 font-medium">No {selectedTable.label} data</p>
-              <p className="text-gray-400 text-sm mt-1">
-                {isFiltered ? 'No records for this participant' : 'No records collected yet for this sensor'}
-              </p>
-            </div>
-          ) : (
-            <Suspense fallback={
-              <div className="flex items-center justify-center h-64 gap-3 text-gray-400 text-sm">
-                <div className="w-4 h-4 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
-                Loading chart…
-              </div>
-            }>
-              <ChartView
-                sensorKey={selectedTable.key}
-                data={chartData}
-                participants={participants}
-                showParticipant={showParticipantCol}
-              />
-            </Suspense>
-          )}
-        </div>
+      <FilterPills label="Data table" value={table.table} onChange={changeTable}
+        options={visibleTables.map(t => ({ value: t.table, label: t.label, count: countMap ? countMap[t.table] ?? 0 : null }))} />
+      {counts.error && (
+        <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
+          Could not load record counts: {counts.error}
+          <Button variant="ghost" size="sm" onClick={counts.retry}>Try again</Button>
+        </p>
       )}
 
-      {/* Table view */}
-      {viewMode === 'table' && (
-        <>
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            {loading ? (
-              <div>
-                <div className="border-b border-gray-100 bg-gray-50 px-4 py-3 flex gap-6">
-                  {[...Array(showParticipantCol ? 5 : 4)].map((_, i) => (
-                    <div key={i} className={`h-3 bg-gray-200 rounded animate-pulse ${i === 0 ? 'w-24' : 'w-16'}`} />
-                  ))}
-                </div>
-                {[...Array(7)].map((_, i) => (
-                  <div key={i} className="border-b border-gray-50 px-4 py-3 flex gap-6">
-                    {[...Array(showParticipantCol ? 5 : 4)].map((_, j) => (
-                      <div
-                        key={j}
-                        className={`h-3 bg-gray-100 rounded animate-pulse ${j === 0 ? 'w-20' : j === 1 ? 'w-28' : 'w-14'}`}
-                        style={{ animationDelay: `${i * 60}ms` }}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-            ) : data.length === 0 ? (
-              <div className="px-6 py-16 text-center">
-                <Database size={32} className="mx-auto text-gray-300 mb-3" />
-                <p className="text-gray-600 font-medium">No {selectedTable.label} data</p>
-                <p className="text-gray-400 text-sm mt-1">
-                  {isFiltered ? 'No records for this participant' : 'No records collected yet for this sensor'}
-                </p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 z-10">
-                    <tr className="border-b border-gray-200 bg-gray-50">
-                      {showParticipantCol && (
-                        <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
-                          Participant
-                        </th>
-                      )}
-                      {cols.map(col => DERIVED_HEADERS[col] ? (
-                        <th key={col} className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
-                          {DERIVED_HEADERS[col]}
-                        </th>
-                      ) : (
-                        <th
-                          key={col}
-                          onClick={() => handleColSort(col)}
-                          className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px] cursor-pointer select-none hover:bg-gray-100 transition-colors"
-                        >
-                          <div className="flex items-center gap-1">
-                            <span className={sortCol === col ? 'text-blue-600' : ''}>{formatColHeader(col)}</span>
-                            <SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {data.map((row, i) => {
-                      const pid = String(row.participant_id ?? '')
-                      const p = pMap[pid]
-                      const name = p ? participantName(p) : pid
-                      return (
-                        <tr key={i} className="hover:bg-blue-50/30 transition-colors">
-                          {showParticipantCol && (
-                            <td className="px-4 py-2.5 whitespace-nowrap">
-                              <div className="flex items-center gap-2">
-                                <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${p ? avatarColor(p.id) : 'bg-gray-100 text-gray-500'}`}>
-                                  {avatarInitial(name)}
-                                </span>
-                                <span className="text-gray-700 font-medium truncate max-w-28">{name}</span>
-                              </div>
-                            </td>
-                          )}
-                          {cols.map(k => {
-                            const display = DERIVED_HEADERS[k] ? gestureDerived(k, row) : formatCellValue(k, row[k])
-                            const isEmpty = display === '—'
-                            return (
-                              <td
-                                key={k}
-                                className={`px-4 py-2.5 whitespace-nowrap ${k === '_detail' ? 'max-w-80' : 'max-w-52'} truncate ${isEmpty ? 'text-gray-300' : 'text-gray-600'}`}
-                                title={isEmpty ? undefined : display}
-                              >
-                                {display}
-                              </td>
-                            )
-                          })}
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Pagination */}
-          {!loading && totalPages !== null && totalPages > 1 && (
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-400 tabular-nums">
-                Page {page + 1} of {totalPages.toLocaleString()}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setPage(0)}
-                  disabled={page === 0}
-                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  «
-                </button>
-                <button
-                  onClick={() => setPage(p => Math.max(0, p - 1))}
-                  disabled={page === 0}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  Previous
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i)
-                  .filter(i => i === 0 || i === totalPages - 1 || Math.abs(i - page) <= 2)
-                  .reduce<(number | 'gap')[]>((acc, i, idx, arr) => {
-                    if (idx > 0 && i - (arr[idx - 1] as number) > 1) acc.push('gap')
-                    acc.push(i)
-                    return acc
-                  }, [])
-                  .map((item, idx) =>
-                    item === 'gap' ? (
-                      <span key={`gap-${idx}`} className="px-1.5 py-1.5 text-xs text-gray-300">…</span>
-                    ) : (
-                      <button
-                        key={item}
-                        onClick={() => setPage(item)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                          page === item
-                            ? 'bg-blue-600 border-blue-600 text-white'
-                            : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                        }`}
-                      >
-                        {(item as number) + 1}
-                      </button>
-                    )
-                  )
-                }
-                <button
-                  onClick={() => setPage(p => p + 1)}
-                  disabled={isLastPage}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  Next
-                </button>
-                <button
-                  onClick={() => setPage(totalPages - 1)}
-                  disabled={isLastPage}
-                  className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  »
-                </button>
-              </div>
-            </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {canChart && (
+          <SegmentedControl label="View" value={viewMode} onChange={setViewMode} size="sm"
+            options={[{ value: 'table', label: 'Table', icon: <Table2 size={13} /> }, { value: 'chart', label: 'Chart', icon: <BarChart2 size={13} /> }]} />
+        )}
+        {viewMode === 'chart' && (
+          <SegmentedControl label="Chart period" value={chartRange} onChange={setChartRange} size="sm" options={CHART_RANGES} />
+        )}
+        {viewMode === 'chart' && chart.data && chart.data.rows.length > 0 && (
+          <span className="text-xs text-subtle">
+            {chart.data.truncated
+              ? `Showing the latest ${CHART_FETCH_LIMIT.toLocaleString()} records in this period`
+              : `${chart.data.rows.length.toLocaleString()} records`}
+          </span>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {viewMode === 'table' && (
+            <Button variant="secondary" size="sm" disabled={pageRows.length === 0}
+              onClick={() => downloadCsv(pageRows, `${fileBase}_page${page + 1}`)}>
+              <Download size={13} aria-hidden="true" /> Export this page
+            </Button>
           )}
+          <Button size="sm" onClick={exportAll} loading={exporting} disabled={exporting || total === 0}>
+            {!exporting && <Download size={13} aria-hidden="true" />}
+            {exporting ? 'Exporting…' : `Export all${total ? ` (${total.toLocaleString()})` : ''}`}
+          </Button>
+        </div>
+      </div>
+
+      <Notice notice={notice} onClose={() => setNotice(null)} />
+
+      {viewMode === 'chart' ? (
+        <Card>
+          {chart.error ? (
+            <ErrorState title="Could not load the chart" message={chart.error} onRetry={chart.retry} />
+          ) : chart.loading || !chart.data ? (
+            <div role="status" aria-label="Loading chart" className="space-y-3">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-64 w-full" />
+            </div>
+          ) : chart.data.rows.length === 0 ? (
+            <EmptyState icon={<Database size={28} />} title={`No ${table.label.toLowerCase()} data in this period`}
+              hint={chartRange === 'all' ? emptyHint : 'Try a longer period.'} />
+          ) : (
+            <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+              <ChartView table={table.table} data={chart.data.rows} participants={participants} showParticipant={showParticipantCol} />
+            </Suspense>
+          )}
+        </Card>
+      ) : rows.error ? (
+        <ErrorState message={rows.error} onRetry={rows.retry} />
+      ) : !rowsData ? (
+        <SkeletonRows rows={8} />
+      ) : pageRows.length === 0 ? (
+        <EmptyState icon={<Database size={28} />} title={`No ${table.label.toLowerCase()} data`} hint={emptyHint} />
+      ) : (
+        <>
+          <div className={rows.loading ? 'opacity-60 transition-opacity' : ''} aria-busy={rows.loading}>
+            <TableWrap maxHeight="70vh">
+              <THead>
+                <tr>
+                  {showParticipantCol && <Th>Participant</Th>}
+                  {cols.map(col => DERIVED.has(col) || JSON_COLUMNS.has(col)
+                    ? <Th key={col}>{columnLabel(col)}</Th>
+                    : (
+                      <Th key={col} sort={sortCol === col ? sort.dir : null} onSort={() => toggleSort(col)}>
+                        {columnLabel(col)}
+                      </Th>
+                    ))}
+                </tr>
+              </THead>
+              <tbody>
+                {pageRows.map((row, i) => {
+                  const pid = String(row.participant_id ?? '')
+                  const p = pMap[pid]
+                  const name = p ? participantName(p) : pid.slice(0, 8)
+                  return (
+                    <Tr key={String(row.id ?? i)}>
+                      {showParticipantCol && (
+                        <Td className="whitespace-nowrap">
+                          <Link href={`${studyPaths(studyId).participants}?participant=${pid}`} className="flex items-center gap-2 font-medium text-fg hover:text-accent">
+                            <Avatar id={pid} name={name} size="sm" />
+                            <span className="max-w-32 truncate">{name}</span>
+                          </Link>
+                        </Td>
+                      )}
+                      {cols.map(k => {
+                        if (JSON_COLUMNS.has(k)) return <Td key={k}><JsonCell value={row[k]} label={columnLabel(k)} /></Td>
+                        const display = DERIVED.has(k) ? gestureDerived(k, row) : formatCellValue(k, row[k])
+                        const empty = display === '—'
+                        return (
+                          <Td key={k} title={empty ? undefined : display}
+                            className={`whitespace-nowrap ${k === '_detail' ? 'max-w-80' : 'max-w-56'} truncate tabular-nums ${empty ? 'text-subtle' : ''}`}>
+                            {display}
+                          </Td>
+                        )
+                      })}
+                    </Tr>
+                  )
+                })}
+              </tbody>
+            </TableWrap>
+          </div>
+          <Pagination page={page} pageSize={pageSize} total={total} onPage={setPage}
+            onPageSize={size => { setPageSize(size); setPage(0) }} />
         </>
       )}
     </div>
   )
 }
 
-// ─── Page (Suspense boundary for useSearchParams) ─────────────────────────────
-
-export default function SensorDataPage() {
+export default function RawDataPage() {
   return (
     <Suspense>
-      <SensorDataInner />
+      <RawDataInner />
     </Suspense>
   )
 }

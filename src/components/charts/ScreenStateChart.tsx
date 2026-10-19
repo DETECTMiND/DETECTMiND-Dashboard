@@ -11,59 +11,46 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
-import type { ScreenStateRow } from './types'
+import { localDay } from '@/lib/csv'
+import type { ChartParticipant, ScreenStateRow } from './types'
+import { C, ChartEmpty, ChartSection, TooltipBox, axisLine, axisTick, gridProps, legendStyle, seriesColor, useElementWidth } from './theme'
 
 interface Props {
   data: ScreenStateRow[]
-  participants: { id: string; label: string | null; device_id: string }[]
+  participants: ChartParticipant[]
   showParticipant: boolean
 }
 
-const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
-
-function pName(p: { id: string; label: string | null; device_id: string }) {
+function pName(p: ChartParticipant) {
   return p.label || p.device_id
 }
 
-function toDateStr(iso: string) {
-  return iso.slice(0, 10)
-}
+const isOn = (s: string) => s === 'on' || s === 'unlocked'
+const isOff = (s: string) => s === 'off' || s === 'locked'
 
-function computeDailyScreenOn(
-  data: ScreenStateRow[],
-  participants: Props['participants'],
-): { date: string; [pid: string]: number | string }[] {
+function computeDailyScreenOn(data: ScreenStateRow[], participants: ChartParticipant[]) {
   const byParticipantDate: Record<string, Record<string, { time: number; state: string }[]>> = {}
-
   for (const row of data) {
-    const pid = row.participant_id as string
-    const date = toDateStr(row.recorded_at as string)
-    const time = new Date(row.recorded_at as string).getTime()
-    const state = (row.state as string || '').toLowerCase()
-    if (!byParticipantDate[pid]) byParticipantDate[pid] = {}
-    if (!byParticipantDate[pid][date]) byParticipantDate[pid][date] = []
-    byParticipantDate[pid][date].push({ time, state })
+    const pid = row.participant_id
+    const date = localDay(row.recorded_at)
+    const time = new Date(row.recorded_at).getTime()
+    const state = (row.state || '').toLowerCase()
+    ;((byParticipantDate[pid] ||= {})[date] ||= []).push({ time, state })
   }
-
-  const allDates = Array.from(
-    new Set(data.map(r => toDateStr(r.recorded_at as string)))
-  ).sort()
-
+  const allDates = Array.from(new Set(data.map(r => localDay(r.recorded_at)))).sort()
   return allDates.map(date => {
-    const row: { date: string; [pid: string]: number | string } = { date }
+    const row: Record<string, number | string> = { date }
     for (const p of participants) {
       const events = byParticipantDate[p.id]?.[date] ?? []
       events.sort((a, b) => a.time - b.time)
       let minutes = 0
       let onTime: number | null = null
       for (const ev of events) {
-        if (ev.state === 'on' || ev.state === 'unlocked') {
+        if (isOn(ev.state)) {
           if (onTime === null) onTime = ev.time
-        } else if (ev.state === 'off' || ev.state === 'locked') {
-          if (onTime !== null) {
-            minutes += (ev.time - onTime) / 60000
-            onTime = null
-          }
+        } else if (isOff(ev.state) && onTime !== null) {
+          minutes += (ev.time - onTime) / 60000
+          onTime = null
         }
       }
       row[p.id] = Math.round(minutes)
@@ -72,242 +59,129 @@ function computeDailyScreenOn(
   })
 }
 
-interface TooltipPayload {
-  color: string
-  name: string
-  value: number
-}
+interface TooltipPayload { color: string; name: string; value: number }
 
-interface CustomTooltipProps {
-  active?: boolean
-  payload?: TooltipPayload[]
-  label?: string
-  participants: Props['participants']
-}
-
-function CustomTooltip({ active, payload, label, participants }: CustomTooltipProps) {
+function ScreenTooltip({ active, payload, label, names }: {
+  active?: boolean; payload?: TooltipPayload[]; label?: string; names: Record<string, string>
+}) {
   if (!active || !payload || payload.length === 0) return null
-  const pMap = Object.fromEntries(participants.map(p => [p.id, pName(p)]))
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-lg px-3 py-2 text-xs">
-      <p className="font-semibold text-gray-700 mb-1">{label}</p>
+    <TooltipBox>
+      <p className="mb-1 font-semibold">{label}</p>
       {payload.map(entry => (
-        <p key={entry.name} style={{ color: entry.color }}>
-          {pMap[entry.name] ?? entry.name}: {entry.value} min
-        </p>
+        <p key={entry.name} style={{ color: entry.color }}>{names[entry.name] ?? entry.name}: {entry.value} min</p>
       ))}
-    </div>
+    </TooltipBox>
   )
 }
 
-function ActogramStrip({ data, participants }: { data: ScreenStateRow[]; participants: Props['participants'] }) {
-  const SVG_WIDTH = 900
-  const ROW_HEIGHT = 48
-  const LABEL_WIDTH = 110
-  const TICK_H = 28
+function stateColor(state: string) {
+  const s = (state || '').toLowerCase()
+  if (isOn(s)) return C.green
+  if (isOff(s)) return C.muted
+  return C.amber
+}
+
+function ActogramStrip({ data, participants }: { data: ScreenStateRow[]; participants: ChartParticipant[] }) {
+  const [wrapRef, SVG_WIDTH] = useElementWidth<HTMLDivElement>()
+  const ROW_HEIGHT = 40
+  const LABEL_WIDTH = SVG_WIDTH < 480 ? 80 : 110
+  const TICK_H = 24
   const AXIS_H = 20
   const PADDING_TOP = 4
 
-  const sorted = [...data].sort(
-    (a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()
-  )
-
+  const sorted = useMemo(() => [...data].sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime()), [data])
   const times = sorted.map(r => new Date(r.recorded_at).getTime())
-  // Empty data never reaches here in practice; fall back to a fixed 24 h span.
-  const minTime = times.length > 0 ? Math.min(...times) : 0
-  const maxTime = times.length > 0 ? Math.max(...times) : 86400000
-
+  const minTime = times.length > 0 ? times[0] : 0
+  const maxTime = times.length > 0 ? times[times.length - 1] : 86400000
   const range = maxTime - minTime || 1
+  const toX = (t: number) => LABEL_WIDTH + ((t - minTime) / range) * (SVG_WIDTH - LABEL_WIDTH - 8)
 
-  function toX(t: number) {
-    return LABEL_WIDTH + ((t - minTime) / range) * (SVG_WIDTH - LABEL_WIDTH - 8)
+  const midnights: { t: number; label: string }[] = []
+  const day = new Date(minTime)
+  day.setHours(0, 0, 0, 0)
+  day.setDate(day.getDate() + 1)
+  while (day.getTime() <= maxTime) {
+    midnights.push({ t: day.getTime(), label: day.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })
+    day.setDate(day.getDate() + 1)
   }
-
-  const midnightBoundaries: { t: number; label: string }[] = []
-  const startDay = new Date(minTime)
-  startDay.setHours(0, 0, 0, 0)
-  startDay.setDate(startDay.getDate() + 1)
-  while (startDay.getTime() <= maxTime) {
-    midnightBoundaries.push({
-      t: startDay.getTime(),
-      label: startDay.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-    })
-    startDay.setDate(startDay.getDate() + 1)
-  }
-
-  function stateColor(state: string) {
-    const s = (state || '').toLowerCase()
-    if (s === 'on' || s === 'unlocked') return '#22c55e'
-    if (s === 'off' || s === 'locked') return '#9ca3af'
-    return '#f59e0b'
-  }
-
+  const labelEvery = Math.max(1, Math.ceil((midnights.length * 56) / Math.max(1, SVG_WIDTH - LABEL_WIDTH)))
   const svgHeight = PADDING_TOP + participants.length * ROW_HEIGHT + AXIS_H
+  const baseY = PADDING_TOP + participants.length * ROW_HEIGHT
 
   return (
-    <div className="overflow-x-auto mt-4">
-      <svg width={SVG_WIDTH} height={svgHeight} style={{ display: 'block' }}>
+    <div ref={wrapRef} className="w-full">
+      <svg width={SVG_WIDTH} height={svgHeight} role="img" aria-label="Screen on and off events over time" style={{ display: 'block' }}>
         {participants.map((p, idx) => {
           const y = PADDING_TOP + idx * ROW_HEIGHT
-          const rows = sorted.filter(r => r.participant_id === p.id)
           return (
             <g key={p.id}>
-              <rect
-                x={0}
-                y={y}
-                width={SVG_WIDTH}
-                height={ROW_HEIGHT}
-                fill={idx % 2 === 0 ? '#f9fafb' : '#ffffff'}
-              />
-              <text
-                x={LABEL_WIDTH - 6}
-                y={y + ROW_HEIGHT / 2 + 4}
-                textAnchor="end"
-                fontSize={11}
-                fill="#374151"
-                fontFamily="sans-serif"
-              >
-                {pName(p)}
+              <rect x={0} y={y} width={SVG_WIDTH} height={ROW_HEIGHT} fill={idx % 2 === 0 ? C.sunken : 'transparent'} />
+              <text x={LABEL_WIDTH - 6} y={y + ROW_HEIGHT / 2 + 4} textAnchor="end" fontSize={11} fill={C.fg}>
+                {pName(p).slice(0, SVG_WIDTH < 480 ? 10 : 16)}
               </text>
-              {midnightBoundaries.map(b => (
-                <line
-                  key={b.t}
-                  x1={toX(b.t)}
-                  x2={toX(b.t)}
-                  y1={y + 2}
-                  y2={y + ROW_HEIGHT - 2}
-                  stroke="#e5e7eb"
-                  strokeWidth={1}
-                />
+              {midnights.map(b => (
+                <line key={b.t} x1={toX(b.t)} x2={toX(b.t)} y1={y + 2} y2={y + ROW_HEIGHT - 2} stroke={C.grid} strokeWidth={1} />
               ))}
-              {rows.map((r, i) => {
-                const t = new Date(r.recorded_at).getTime()
-                const x = toX(t)
-                const color = stateColor(r.state)
-                const tickY = y + (ROW_HEIGHT - TICK_H) / 2
-                return (
-                  <rect
-                    key={i}
-                    x={x - 1}
-                    y={tickY}
-                    width={2}
-                    height={TICK_H}
-                    fill={color}
-                    opacity={0.8}
-                  />
-                )
-              })}
+              {sorted.filter(r => r.participant_id === p.id).map((r, i) => (
+                <rect key={i} x={toX(new Date(r.recorded_at).getTime()) - 1} y={y + (ROW_HEIGHT - TICK_H) / 2} width={2} height={TICK_H}
+                  fill={stateColor(r.state)} opacity={0.85} />
+              ))}
             </g>
           )
         })}
-        <g>
-          {midnightBoundaries.map(b => {
-            const x = toX(b.t)
-            return (
-              <text
-                key={b.t}
-                x={x}
-                y={PADDING_TOP + participants.length * ROW_HEIGHT + AXIS_H - 4}
-                textAnchor="middle"
-                fontSize={10}
-                fill="#6b7280"
-                fontFamily="sans-serif"
-              >
-                {b.label}
-              </text>
-            )
-          })}
-        </g>
-        <line
-          x1={LABEL_WIDTH}
-          x2={SVG_WIDTH - 4}
-          y1={PADDING_TOP + participants.length * ROW_HEIGHT}
-          y2={PADDING_TOP + participants.length * ROW_HEIGHT}
-          stroke="#e5e7eb"
-          strokeWidth={1}
-        />
+        {midnights.filter((_, i) => i % labelEvery === 0).map(b => (
+          <text key={b.t} x={toX(b.t)} y={baseY + AXIS_H - 4} textAnchor="middle" fontSize={10} fill={C.axis}>{b.label}</text>
+        ))}
+        <line x1={LABEL_WIDTH} x2={SVG_WIDTH - 4} y1={baseY} y2={baseY} stroke={C.grid} strokeWidth={1} />
       </svg>
-      <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 pl-2">
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: '#22c55e' }} />
-          on / unlocked
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: '#9ca3af' }} />
-          off / locked
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: '#f59e0b' }} />
-          other
-        </span>
+      <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-muted">
+        {[[C.green, 'On / unlocked'], [C.muted, 'Off / locked'], [C.amber, 'Other']].map(([color, label]) => (
+          <span key={label} className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-3 rounded-sm" style={{ backgroundColor: color }} />
+            {label}
+          </span>
+        ))}
       </div>
     </div>
   )
 }
 
 export default function ScreenStateChart({ data, participants, showParticipant }: Props) {
-  const barData = useMemo(() => computeDailyScreenOn(data, participants), [data, participants])
+  // Only participants that have rows in this range
+  const present = useMemo(() => {
+    const ids = new Set(data.map(r => r.participant_id))
+    const known = participants.filter(p => ids.has(p.id))
+    const unknown = [...ids].filter(id => !participants.some(p => p.id === id)).map(id => ({ id, label: null, device_id: id }))
+    return [...known, ...unknown]
+  }, [data, participants])
+  const names = useMemo(() => Object.fromEntries(present.map(p => [p.id, pName(p)])), [present])
+  const barData = useMemo(() => computeDailyScreenOn(data, present), [data, present])
 
-  if (data.length === 0) {
-    return (
-      <div className="py-12 text-center text-sm text-gray-400">No screen state data available.</div>
-    )
-  }
+  if (data.length === 0) return <ChartEmpty>No screen state data available.</ChartEmpty>
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Daily Screen-On Duration</h3>
-        <div style={{ height: 240 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={barData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 11, fill: '#6b7280' }}
-                tickLine={false}
-                axisLine={{ stroke: '#e5e7eb' }}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: '#6b7280' }}
-                tickLine={false}
-                axisLine={false}
-                unit=" min"
-                width={56}
-              />
-              <Tooltip
-                content={<CustomTooltip participants={participants} />}
-              />
-              {showParticipant && participants.length > 1 && (
-                <Legend
-                  iconType="square"
-                  iconSize={8}
-                  wrapperStyle={{ fontSize: 11 }}
-                  formatter={(value) => {
-                    const p = participants.find(x => x.id === value)
-                    return p ? pName(p) : value
-                  }}
-                />
-              )}
-              {participants.map((p, i) => (
-                <Bar
-                  key={p.id}
-                  dataKey={p.id}
-                  name={p.id}
-                  fill={PALETTE[i % PALETTE.length]}
-                  radius={[2, 2, 0, 0]}
-                  maxBarSize={32}
-                />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+    <div className="space-y-8">
+      <ChartSection title="Screen-on time per day">
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={barData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
+            <CartesianGrid {...gridProps} vertical={false} />
+            <XAxis dataKey="date" tick={axisTick} tickLine={false} axisLine={axisLine} minTickGap={24} />
+            <YAxis tick={axisTick} tickLine={false} axisLine={false} unit=" min" width={56} />
+            <Tooltip content={<ScreenTooltip names={names} />} cursor={{ fill: 'var(--surface-sunken)', opacity: 0.6 }} />
+            {showParticipant && present.length > 1 && (
+              <Legend iconType="square" iconSize={8} wrapperStyle={legendStyle} formatter={value => names[value] ?? value} />
+            )}
+            {present.map((p, i) => (
+              <Bar key={p.id} dataKey={p.id} name={p.id} fill={seriesColor(i)} radius={[2, 2, 0, 0]} maxBarSize={32} isAnimationActive={false} />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartSection>
 
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-1">Event Actogram</h3>
-        <ActogramStrip data={data} participants={participants} />
-      </div>
+      <ChartSection title="Screen events over time" hint="Each tick is one screen event.">
+        <ActogramStrip data={data} participants={present} />
+      </ChartSection>
     </div>
   )
 }

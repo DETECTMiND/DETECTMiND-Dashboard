@@ -1,8 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
-import { Users, AlertTriangle, CheckCircle, GitMerge, X, ArrowRight, ShieldAlert } from 'lucide-react'
+import { Users, AlertTriangle, CheckCircle, GitMerge, ArrowRight, ShieldAlert } from 'lucide-react'
+import { Badge, Button, Card, Modal } from '@/components/ui'
+import { errorText } from '@/components/feedback'
+import { fetchAll } from '@/lib/csv'
 
 type SyncLogRow = { participant_id: string; synced_at: string; records_synced: number | null }
 
@@ -36,6 +39,11 @@ function model(p: Participant): string | null {
   return value == null ? null : String(value)
 }
 
+function overlaps(a: Timeline, b: Timeline): boolean {
+  if (!a.first || !a.last || !b.first || !b.last) return false
+  return a.first <= b.last && b.first <= a.last
+}
+
 /**
  * Suggests merges for participants that share a base device_id (X, X_2, X_3).
  * Conservative: only labels a pair "safe" when device models match AND their
@@ -47,7 +55,9 @@ export function MergeSuggestions({
   participants: Participant[]
   onMerged: () => void
 }) {
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
+  const listId = useId()
+  const confirmId = useId()
   const [open, setOpen] = useState(false)
   const [timelines, setTimelines] = useState<Record<string, Timeline>>({})
   const [merging, setMerging] = useState(false)
@@ -59,8 +69,7 @@ export function MergeSuggestions({
     const g: Record<string, Participant[]> = {}
     for (const p of participants) {
       if (p.merged_into) continue // already merged away
-      const b = baseId(p.device_id)
-      ;(g[b] ||= []).push(p)
+      ;(g[baseId(p.device_id)] ||= []).push(p)
     }
     return Object.entries(g)
       .filter(([, members]) => members.length > 1)
@@ -70,55 +79,55 @@ export function MergeSuggestions({
       }))
   }, [participants])
 
-  // Which group the researcher is inspecting + the chosen primary.
+  // Which group the researcher is merging + the chosen primary.
   const [activeBase, setActiveBase] = useState<string | null>(null)
   const [primaryId, setPrimaryId] = useState<string | null>(null)
 
-  // Load data timelines (min/max sync, record count) for members once expanded.
+  // Data timelines (first/last sync, record count) for members once expanded.
   useEffect(() => {
     if (!open || groups.length === 0) return
-    async function loadTimelines() {
-      const ids = groups.flatMap(g => g.members.map(m => m.id))
-      const { data } = await supabase
-        .from('sync_log')
-        .select('participant_id, synced_at, records_synced')
-        .in('participant_id', ids)
-      const tl: Record<string, Timeline> = {}
-      for (const id of ids) tl[id] = { first: null, last: null, records: 0 }
-      for (const row of (data || []) as SyncLogRow[]) {
-        const t = tl[row.participant_id]
-        if (!t) continue
-        const ts = row.synced_at as string
-        if (!t.first || ts < t.first) t.first = ts
-        if (!t.last || ts > t.last) t.last = ts
-        t.records += row.records_synced || 0
-      }
-      setTimelines(tl)
-    }
-    loadTimelines()
-  }, [open, groups]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  function overlaps(a: Timeline, b: Timeline): boolean {
-    if (!a.first || !a.last || !b.first || !b.last) return false
-    return a.first <= b.last && b.first <= a.last
-  }
+    let cancelled = false
+    const ids = groups.flatMap(g => g.members.map(m => m.id))
+    fetchAll<SyncLogRow>((from, to) => supabase.from('sync_log')
+      .select('participant_id, synced_at, records_synced')
+      .in('participant_id', ids).order('id').range(from, to))
+      .then(rows => {
+        if (cancelled) return
+        const tl: Record<string, Timeline> = {}
+        for (const id of ids) tl[id] = { first: null, last: null, records: 0 }
+        for (const row of rows) {
+          const t = tl[row.participant_id]
+          if (!t) continue
+          if (!t.first || row.synced_at < t.first) t.first = row.synced_at
+          if (!t.last || row.synced_at > t.last) t.last = row.synced_at
+          t.records += row.records_synced || 0
+        }
+        setTimelines(tl)
+      })
+      .catch(() => { /* timelines are a hint only */ })
+    return () => { cancelled = true }
+  }, [open, groups, supabase])
 
   // Safety of merging all members of a group onto one primary.
   function groupSafety(members: Participant[]): Safety {
     const models = members.map(model)
     const modelsMatch = models.every(m => m && m === models[0])
     // Any pair of overlapping timelines => risky (likely two different people).
-    let anyOverlap = false
     for (let i = 0; i < members.length; i++) {
       for (let j = i + 1; j < members.length; j++) {
         const ti = timelines[members[i].id]
         const tj = timelines[members[j].id]
-        if (ti && tj && overlaps(ti, tj)) anyOverlap = true
+        if (ti && tj && overlaps(ti, tj)) return 'risky'
       }
     }
-    if (anyOverlap) return 'risky'
-    if (modelsMatch) return 'safe'
-    return 'review'
+    return modelsMatch ? 'safe' : 'review'
+  }
+
+  function latestSyncOf(members: Participant[]) {
+    return Math.max(...members.map(member => {
+      const value = timelines[member.id]?.last || member.last_sync_at
+      return value ? new Date(value).getTime() : 0
+    }))
   }
 
   if (groups.length === 0) return null
@@ -129,13 +138,9 @@ export function MergeSuggestions({
     if (!active || !primaryId) return
     setMerging(true); setError(null)
     try {
-      const dups = active.members.filter(m => m.id !== primaryId)
-      for (const d of dups) {
-        const { error } = await supabase.rpc('merge_participants', {
-          p_primary: primaryId,
-          p_duplicate: d.id,
-        })
-        if (error) throw error
+      for (const d of active.members.filter(m => m.id !== primaryId)) {
+        const { error } = await supabase.rpc('merge_participants', { p_primary: primaryId, p_duplicate: d.id })
+        if (error) throw new Error(errorText(error))
       }
       setActiveBase(null); setPrimaryId(null); setConfirmText('')
       onMerged()
@@ -147,152 +152,124 @@ export function MergeSuggestions({
   }
 
   const safetyBadge = (s: Safety) => {
-    if (s === 'safe') return <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700"><CheckCircle size={12} /> Likely safe</span>
-    if (s === 'review') return <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700"><AlertTriangle size={12} /> Review</span>
-    return <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-600"><ShieldAlert size={12} /> Risky</span>
+    if (s === 'safe') return <Badge tone="green" icon={<CheckCircle size={11} aria-hidden="true" />}>Likely safe</Badge>
+    if (s === 'review') return <Badge tone="amber" icon={<AlertTriangle size={11} aria-hidden="true" />}>Check first</Badge>
+    return <Badge tone="red" icon={<ShieldAlert size={11} aria-hidden="true" />}>Risky</Badge>
   }
 
   return (
     <>
-      {/* Banner */}
-      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm text-amber-800">
-          <GitMerge size={16} />
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+        <p className="flex items-center gap-2 text-sm text-amber-800">
+          <GitMerge size={16} aria-hidden="true" className="shrink-0" />
           <span>
-            <strong>{groups.length}</strong> possible duplicate{groups.length > 1 ? 's' : ''} detected
-            {' '}(same device re-enrolled as <code>_2</code>, <code>_3</code>…)
+            <strong>{groups.length}</strong> possible duplicate{groups.length > 1 ? 's' : ''}: the same phone joined again as <code>_2</code>, <code>_3</code>…
           </span>
-        </div>
-        <button
-          onClick={() => setOpen(o => !o)}
-          className="text-sm font-semibold text-amber-800 hover:text-amber-900 underline shrink-0"
-        >
+        </p>
+        <Button variant="secondary" size="sm" onClick={() => setOpen(o => !o)} aria-expanded={open} aria-controls={listId}>
           {open ? 'Hide' : 'Review merges'}
-        </button>
+        </Button>
       </div>
 
-      {/* Groups */}
       {open && (
-        <div className="space-y-3">
+        <div id={listId} className="space-y-3">
           {groups.map(g => {
             const safety = groupSafety(g.members)
+            const latest = latestSyncOf(g.members)
             return (
-              <div key={g.base} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-                  <div className="flex items-center gap-2">
-                    <Users size={15} className="text-gray-400" />
-                    <span className="text-sm font-semibold text-gray-700">{g.base}</span>
-                    <span className="text-xs text-gray-400">· {g.members.length} participants</span>
+              <Card key={g.base} padded={false} className="overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Users size={15} className="shrink-0 text-subtle" aria-hidden="true" />
+                    <span className="truncate font-mono text-sm font-semibold text-fg">{g.base}</span>
+                    <span className="text-xs text-subtle">· {g.members.length} participants</span>
                   </div>
                   {safetyBadge(safety)}
                 </div>
-                <div className="divide-y divide-gray-50">
+                <ul className="divide-y divide-line">
                   {g.members.map(m => {
                     const tl = timelines[m.id]
-                    const latestSync = Math.max(...g.members.map(member => {
-                      const value = timelines[member.id]?.last || member.last_sync_at
-                      return value ? new Date(value).getTime() : 0
-                    }))
                     const memberSync = tl?.last || m.last_sync_at
-                    const likelyCurrent = !!memberSync && new Date(memberSync).getTime() === latestSync && latestSync > 0
+                    const likelyCurrent = !!memberSync && latest > 0 && new Date(memberSync).getTime() === latest
                     return (
-                      <div key={m.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                      <li key={m.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
                         <div className="min-w-0">
-                          <p className="font-medium text-gray-800 truncate">{pName(m)}</p>
-                          <p className="text-xs text-gray-400">
-                            {model(m) || 'unknown device'} · enrolled {new Date(m.enrolled_at).toLocaleDateString()}
-                            {tl && tl.first && ` · data ${new Date(tl.first).toLocaleDateString()} to ${tl.last ? new Date(tl.last).toLocaleDateString() : 'now'} (${tl.records.toLocaleString()})`}
+                          <p className="truncate font-medium text-fg">{pName(m)}</p>
+                          <p className="text-xs text-subtle">
+                            {model(m) || 'Unknown device'} · joined {new Date(m.enrolled_at).toLocaleDateString()}
+                            {tl && tl.first && ` · data ${new Date(tl.first).toLocaleDateString()} to ${tl.last ? new Date(tl.last).toLocaleDateString() : 'now'} (${tl.records.toLocaleString()} records)`}
                           </p>
-                          {likelyCurrent && <p className="text-[11px] font-semibold text-blue-600 mt-0.5">Likely current phone · most recent sync</p>}
+                          {likelyCurrent && <p className="mt-0.5 text-[11px] font-semibold text-accent">Likely the current phone (most recent sync)</p>}
                         </div>
-                        <span className={`text-[11px] px-2 py-0.5 rounded-full shrink-0 ${m.status === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>
-                          {m.status}
-                        </span>
-                      </div>
+                        <Badge tone={m.status === 'active' ? 'green' : 'neutral'}>{m.status === 'active' ? 'Active' : 'Withdrawn'}</Badge>
+                      </li>
                     )
                   })}
-                </div>
-                <div className="px-4 py-3 bg-gray-50 flex items-center justify-between gap-3">
-                  <p className="text-xs text-gray-500">
+                </ul>
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-sunken px-4 py-3">
+                  <p className="text-xs text-muted">
                     {safety === 'risky'
-                      ? 'Timelines overlap — these may be different people. Merge only if you are sure.'
+                      ? 'The data timelines overlap, so these may be different people. Merge only if you are sure.'
                       : safety === 'review'
-                        ? 'Device models differ — confirm these are the same participant before merging.'
-                        : 'Matching device, non-overlapping data — consistent with a reinstall.'}
+                        ? 'The phone models differ. Check these are the same participant before merging.'
+                        : 'Same phone model and no overlapping data, as expected after a reinstall.'}
                   </p>
-                  <button
-                    onClick={() => { setActiveBase(g.base); setPrimaryId(g.members[0].id); setConfirmText(''); setError(null) }}
-                    className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 shrink-0"
-                  >
+                  <Button size="sm" onClick={() => { setActiveBase(g.base); setPrimaryId(g.members[0].id); setConfirmText(''); setError(null) }}>
                     Merge…
-                  </button>
+                  </Button>
                 </div>
-              </div>
+              </Card>
             )
           })}
         </div>
       )}
 
-      {/* Merge confirmation modal */}
-      {active && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => !merging && setActiveBase(null)}>
-          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2"><GitMerge size={18} /> Merge participants</h2>
-              <button onClick={() => !merging && setActiveBase(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-            </div>
-
-            <p className="text-sm text-gray-600 mb-3">Choose which participant keeps all the data. The phone using another account will switch to this primary automatically on its next successful sync.</p>
-
-            <div className="space-y-2 mb-4">
+      <Modal open={!!active} onClose={() => setActiveBase(null)} dismissible={!merging} size="md"
+        title="Merge participants"
+        icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent"><GitMerge size={18} /></span>}
+        description="Choose which participant keeps all the data. The phone using another account switches to it automatically at its next successful sync."
+        footer={<>
+          <Button variant="secondary" onClick={() => setActiveBase(null)} disabled={merging}>Cancel</Button>
+          <Button onClick={doMerge} loading={merging} disabled={merging || confirmText !== 'MERGE' || !primaryId}>
+            {merging ? 'Merging…' : <>Merge <ArrowRight size={14} aria-hidden="true" /></>}
+          </Button>
+        </>}>
+        {active && (
+          <div className="space-y-4">
+            <fieldset className="space-y-2">
+              <legend className="mb-2 text-sm font-medium text-fg">Keep the data on</legend>
               {active.members.map(m => {
-                const latestSync = Math.max(...active.members.map(member => {
-                  const value = timelines[member.id]?.last || member.last_sync_at
-                  return value ? new Date(value).getTime() : 0
-                }))
+                const latest = latestSyncOf(active.members)
                 const value = timelines[m.id]?.last || m.last_sync_at
-                const likelyCurrent = !!value && new Date(value).getTime() === latestSync && latestSync > 0
+                const likelyCurrent = !!value && latest > 0 && new Date(value).getTime() === latest
+                const on = primaryId === m.id
                 return (
-                <label key={m.id} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer ${primaryId === m.id ? 'border-blue-300 bg-blue-50' : 'border-gray-200'}`}>
-                  <input type="radio" checked={primaryId === m.id} onChange={() => setPrimaryId(m.id)} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-800 truncate">{pName(m)}</p>
-                    <p className="text-xs text-gray-400">{model(m) || 'unknown'} · enrolled {new Date(m.enrolled_at).toLocaleDateString()}{likelyCurrent ? ' · likely current phone' : ''}</p>
-                  </div>
-                  {primaryId === m.id && <span className="text-xs font-semibold text-blue-600 shrink-0">Primary</span>}
-                </label>
+                  <label key={m.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 ${on ? 'border-accent bg-accent-soft' : 'border-line'}`}>
+                    <input type="radio" name="merge-primary" checked={on} onChange={() => setPrimaryId(m.id)} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-fg">{pName(m)}</span>
+                      <span className="block text-xs text-subtle">{model(m) || 'Unknown device'} · joined {new Date(m.enrolled_at).toLocaleDateString()}{likelyCurrent ? ' · likely the current phone' : ''}</span>
+                    </span>
+                    {on && <span className="shrink-0 text-xs font-semibold text-accent">Keeps data</span>}
+                  </label>
                 )
               })}
+            </fieldset>
+
+            <p className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>All sensor data from the other {active.members.length - 1} participant{active.members.length - 1 === 1 ? '' : 's'} moves onto the one you chose. Keep the current phone online afterwards so it can switch over. This cannot be undone automatically.</span>
+            </p>
+
+            <div>
+              <label htmlFor={confirmId} className="mb-1 block text-sm font-medium text-fg">Type <strong>MERGE</strong> to confirm</label>
+              <input id={confirmId} value={confirmText} onChange={e => setConfirmText(e.target.value)} autoComplete="off" spellCheck={false}
+                className="h-9 w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25" />
             </div>
-
-            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 mb-4 flex gap-2">
-              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-              <span>This re-points all sensor data from the other {active.members.length - 1} participant(s) onto the primary. Keep the current phone online after merging so it can adopt the primary. The data move is <strong>not automatically reversible</strong>.</span>
-            </div>
-
-            <label className="block text-xs text-gray-500 mb-1">Type <strong>MERGE</strong> to confirm</label>
-            <input
-              value={confirmText}
-              onChange={e => setConfirmText(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-blue-100"
-              placeholder="MERGE"
-            />
-
-            {error && <p className="text-xs text-red-600 mb-3">{error}</p>}
-
-            <div className="flex items-center justify-end gap-2">
-              <button onClick={() => setActiveBase(null)} disabled={merging} className="px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg">Cancel</button>
-              <button
-                onClick={doMerge}
-                disabled={merging || confirmText !== 'MERGE' || !primaryId}
-                className="px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 flex items-center gap-1.5"
-              >
-                {merging ? 'Merging…' : <>Merge <ArrowRight size={14} /></>}
-              </button>
-            </div>
+            {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
     </>
   )
 }

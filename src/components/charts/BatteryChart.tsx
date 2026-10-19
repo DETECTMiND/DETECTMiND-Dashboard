@@ -13,14 +13,13 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import type { BatteryRow, ChartParticipant as Participant, ChartPoint, InjectedTooltipProps } from './types'
+import { C, TooltipBox, axisLine, axisTick, gridProps, legendStyle, seriesColor } from './theme'
 
 interface Props {
   data: BatteryRow[]
   participants: Participant[]
   showParticipant: boolean
 }
-
-const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
 
 function participantName(p: Participant): string {
   return p.label || p.device_id
@@ -46,7 +45,7 @@ function formatDateTime(v: string | number | undefined): string {
 function CustomDot(props: { cx?: number; cy?: number; payload?: ChartPoint }) {
   const { cx, cy, payload } = props
   if (!payload?.is_charging) return null
-  return <circle cx={cx} cy={cy} r={4} fill="#22c55e" stroke="#fff" strokeWidth={1} />
+  return <circle cx={cx} cy={cy} r={4} fill={C.green} stroke={C.surface} strokeWidth={1} />
 }
 
 interface ChargingPeriod {
@@ -65,8 +64,8 @@ interface BatteryTooltipProps extends InjectedTooltipProps {
 function BatteryTooltip({ active, payload, label, participantIds, participantMap, chartData, showParticipant }: BatteryTooltipProps) {
   if (!active || !payload || payload.length === 0) return null
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1 max-w-xs">
-      <p className="font-semibold text-gray-700 mb-1">{formatDateTime(label)}</p>
+    <TooltipBox>
+      <p className="mb-1 font-semibold">{formatDateTime(label)}</p>
       {participantIds.map(pid => {
         const p = participantMap[pid]
         const name = p ? participantName(p) : pid
@@ -76,26 +75,26 @@ function BatteryTooltip({ active, payload, label, participantIds, participantMap
         const isCharging = dataPoint?.[`is_charging_${pid}`]
         if (levelEntry == null && tempEntry == null) return null
         return (
-          <div key={pid} className="border-t border-gray-100 pt-1 first:border-0 first:pt-0">
-            <p className="font-medium text-gray-600">{showParticipant ? name : 'Battery'}</p>
+          <div key={pid} className="border-t border-line pt-1 first:border-0 first:pt-0">
+            <p className="font-medium text-muted">{showParticipant ? name : 'Battery'}</p>
             {levelEntry != null && (
               <p style={{ color: levelEntry.color }}>
                 Level: {levelEntry.value}%{isCharging ? ' ⚡ charging' : ''}
               </p>
             )}
             {tempEntry != null && (
-              <p className="text-orange-500">Temp: {Number(tempEntry.value).toFixed(1)}°C</p>
+              <p style={{ color: C.amber }}>Temp: {Number(tempEntry.value).toFixed(1)}°C</p>
             )}
           </div>
         )
       })}
-    </div>
+    </TooltipBox>
   )
 }
 
 export default function BatteryChart({ data, participants, showParticipant }: Props) {
   const participantMap = useMemo(
-    () => Object.fromEntries(participants.map((p, i) => [p.id, { ...p, color: PALETTE[i % PALETTE.length] }])),
+    () => Object.fromEntries(participants.map((p, i) => [p.id, { ...p, color: seriesColor(i) }])),
     [participants]
   )
 
@@ -160,7 +159,7 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
 
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-80 text-gray-400 text-sm">
+      <div className="flex h-80 items-center justify-center text-sm text-subtle">
         No battery data available
       </div>
     )
@@ -169,14 +168,14 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
   return (
     <ResponsiveContainer width="100%" height={320}>
       <ComposedChart data={chartData} margin={{ top: 8, right: hasTemperature ? 60 : 16, bottom: 8, left: 8 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+        <CartesianGrid {...gridProps} />
 
         {chargingPeriods.map((period, i) => (
           <ReferenceArea
             key={i}
             x1={period.x1}
             x2={period.x2}
-            fill="#22c55e"
+            fill={C.green}
             fillOpacity={0.07}
             strokeOpacity={0}
           />
@@ -185,38 +184,38 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
         <XAxis
           dataKey="recorded_at"
           tickFormatter={formatTick}
-          tick={{ fontSize: 11, fill: '#9ca3af' }}
+          tick={axisTick}
           tickLine={false}
-          axisLine={{ stroke: '#e5e7eb' }}
+          axisLine={axisLine}
           minTickGap={60}
         />
 
         <YAxis
           yAxisId="level"
           domain={[0, 100]}
-          tick={{ fontSize: 11, fill: '#9ca3af' }}
+          tick={axisTick}
           tickLine={false}
           axisLine={false}
-          label={{ value: 'Level (%)', angle: -90, position: 'insideLeft', offset: 10, style: { fontSize: 11, fill: '#9ca3af' } }}
+          label={{ value: 'Level (%)', angle: -90, position: 'insideLeft', offset: 10, style: axisTick }}
         />
 
         {hasTemperature && (
           <YAxis
             yAxisId="temp"
             orientation="right"
-            tick={{ fontSize: 11, fill: '#f97316' }}
+            tick={{ fontSize: 11, fill: C.amber }}
             tickLine={false}
             axisLine={false}
-            label={{ value: 'Temp (°C)', angle: 90, position: 'insideRight', offset: 10, style: { fontSize: 11, fill: '#f97316' } }}
+            label={{ value: 'Temp (°C)', angle: 90, position: 'insideRight', offset: 10, style: { fontSize: 11, fill: C.amber } }}
           />
         )}
 
         <Tooltip content={<BatteryTooltip participantIds={participantIds} participantMap={participantMap} chartData={chartData} showParticipant={showParticipant} />} />
-        <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+        <Legend wrapperStyle={legendStyle} />
 
         {participantIds.map((pid, idx) => {
           const p = participantMap[pid]
-          const color = p ? p.color : PALETTE[idx % PALETTE.length]
+          const color = p ? p.color : seriesColor(idx)
           const name = p ? participantName(p) : pid
           return (
             <Line
@@ -244,7 +243,7 @@ export default function BatteryChart({ data, participants, showParticipant }: Pr
               type="monotone"
               dataKey={`temp_${pid}`}
               name={showParticipant ? `${name} – Temp` : 'Temp (°C)'}
-              stroke="#f97316"
+              stroke={C.amber}
               strokeWidth={1}
               strokeDasharray="4 2"
               dot={false}

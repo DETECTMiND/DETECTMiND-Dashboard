@@ -1,28 +1,40 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useState, Suspense, useMemo, useCallback } from 'react'
-import { useParams, useSearchParams } from 'next/navigation'
+import { Suspense, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
-  AlertTriangle, Clock, Smartphone, Pencil, Check, ChevronDown,
-  Database, MessageSquare, Search, X, Activity, RefreshCw,
-  TrendingUp, Zap, AlertCircle, CheckCircle, ShieldCheck, ShieldAlert,
-  ChartColumn, CircleAlert, GitMerge, Hourglass, Trash2, FileCheck2,
+  Activity, ChartColumn, Check, Download, MessageSquare, Pencil, RotateCcw, Search, ShieldCheck,
+  Smartphone, Trash2, UserMinus, X,
 } from 'lucide-react'
-import { formatDistanceToNow, format, parseISO } from 'date-fns'
+import { format, formatDistanceToNow, parseISO } from 'date-fns'
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts'
+import {
+  Badge, Button, ButtonLink, ConfirmDialog, DescriptionList, EmptyState, ErrorState, FilterPills, Modal, Notice,
+  PageHeader, Pagination, ReadOnlyBanner, SegmentedControl, SkeletonRows, TableWrap, THead, Th, Td, Tr,
+  useDialogFocus, type NoticeState,
+} from '@/components/ui'
 import { MergeSuggestions } from '@/components/participant-merge'
 import { PermissionHistoryModal } from '@/components/permission-history-modal'
 import { PinLockouts } from '@/components/pin-lockouts'
 import { MergeAudit } from '@/components/merge-audit'
-import { avatarColor, avatarInitial } from '@/components/participant-ui'
-import { useStudyAccess } from '@/lib/access'
-import { Notice, ReadOnlyBanner, errorText, type NoticeState } from '@/components/feedback'
 import { DeleteParticipantModal } from '@/components/delete-participant-modal'
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
-} from 'recharts'
+  Avatar, hasPermissionIssue, isSyncOverdue, missingPermissions, participantName, permissionSummary, syncHealth,
+  type SyncHealth,
+} from '@/components/participant-ui'
+import { scopedSelect } from '@/components/data/scope'
+import { must, useAsync } from '@/components/data/use-async'
+import { C, axisLine, axisTick, gridProps, intensity, legendStyle, tooltipProps } from '@/components/charts/theme'
+import { errorText } from '@/components/feedback'
+import { useStudyAccess } from '@/lib/access'
+import { downloadCsv, fetchAll, localDay } from '@/lib/csv'
+import { studyPaths } from '@/lib/nav'
+import { permissionLabel } from '@/lib/sensors'
+import { SYNC_STATUS, type SyncStatusKey } from '@/lib/status'
 
 interface Participant {
   id: string
@@ -40,911 +52,683 @@ interface Participant {
   consent_at?: string | null
 }
 
-const STATUS_OPTIONS = ['active', 'withdrawn']
-
-type FilterKey = 'all' | 'issues' | 'active' | 'withdrawn' | 'stale' | 'perm_missing'
-
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: 'all',          label: 'All' },
-  { key: 'issues',       label: 'Needs attention' },
-  { key: 'active',       label: 'Active' },
-  { key: 'withdrawn',    label: 'Withdrawn' },
-  { key: 'stale',        label: 'Sync Stale' },
-  { key: 'perm_missing', label: 'Permission Missing' },
-]
-
 interface SyncRow {
   synced_at: string
   status: string
-  records_synced: number
+  records_synced: number | null
   participant_id: string
   error_message?: string | null
 }
 
-function pName(p: Participant) { return p.label || p.device_id }
+type FilterKey = 'all' | 'issues' | 'active' | 'withdrawn' | 'stale' | 'silent' | 'perm_missing'
 
-function formatSilence(hours: number): string {
-  if (hours < 48) return `${Math.floor(hours)}h`
-  return `${Math.floor(hours / 24)}d`
+const FILTERS: { value: FilterKey; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'issues', label: 'Needs attention' },
+  { value: 'active', label: 'Active' },
+  { value: 'withdrawn', label: 'Withdrawn' },
+  { value: 'stale', label: 'Sync overdue' },
+  { value: 'silent', label: 'Silent' },
+  { value: 'perm_missing', label: 'Permissions off' },
+]
+const FILTER_KEYS = new Set<string>(FILTERS.map(f => f.value))
+const PAGE_SIZE = 25
+
+function deviceSummary(p: Participant): string {
+  const di = p.device_info || {}
+  return [
+    di.model ? String(di.model) : 'Unknown device',
+    di.android_version ? `Android ${di.android_version}` : null,
+    di.app_version ? `app ${di.app_version}` : null,
+  ].filter(Boolean).join(' · ')
 }
 
-const ACTION_BTN = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-blue-50 hover:text-blue-700 transition-colors'
-
-const CHIP_TONES = {
-  red:   'bg-red-50 text-red-700 ring-red-200',
-  amber: 'bg-amber-50 text-amber-700 ring-amber-200',
-  green: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  blue:  'bg-blue-50 text-blue-700 ring-blue-200',
+function relative(iso: string | null) {
+  return iso ? formatDistanceToNow(new Date(iso), { addSuffix: true }) : 'Never'
 }
 
-function Chip({ tone, icon, title, children }: {
-  tone: keyof typeof CHIP_TONES
-  icon: React.ReactNode
-  title?: string
-  children: React.ReactNode
-}) {
-  return (
-    <span title={title} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ring-1 ring-inset ${CHIP_TONES[tone]}`}>
-      {icon}{children}
-    </span>
-  )
-}
+const iconBtn = 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-subtle hover:bg-sunken hover:text-fg'
 
-function syncCellIntensity(rows: SyncRow[], maxPerDay: number): string {
-  if (!rows.length) return '#e5e7eb'
-  const hasError   = rows.some(r => r.status === 'error')
-  const hasPartial = rows.some(r => r.status === 'partial')
+// ── Sync history ──────────────────────────────────────────────────────────────
+
+function syncCellColor(rows: SyncRow[], maxPerDay: number): string {
+  if (!rows.length) return 'var(--surface-sunken)'
   const ratio = Math.min(rows.length / Math.max(maxPerDay, 1), 1)
-  if (hasError)   return `rgba(239,68,68,${0.3 + ratio * 0.7})`
-  if (hasPartial) return `rgba(245,158,11,${0.3 + ratio * 0.7})`
-  return `rgba(16,185,129,${0.2 + ratio * 0.8})`
+  if (rows.some(r => r.status === 'error')) return intensity('var(--danger)', 0.35 + ratio * 0.65)
+  if (rows.some(r => r.status === 'partial')) return intensity('var(--warning)', 0.35 + ratio * 0.65)
+  return intensity('var(--success)', 0.25 + ratio * 0.75)
 }
 
-// ── Sync History Modal ────────────────────────────────────────────────────────
-
-interface SyncModalProps {
-  participant: Participant
-  onClose: () => void
-}
-
-function SyncHistoryModal({ participant, onClose }: SyncModalProps) {
+function SyncHistoryModal({ participant, onClose }: { participant: Participant; onClose: () => void }) {
   const supabase = useMemo(() => createClient(), [])
-  const [result, setResult] = useState<{ range: string; rows: SyncRow[] } | null>(null)
   const [range, setRange] = useState<'30d' | '90d' | 'all'>('90d')
-  const [tick, setTick] = useState(0)
-  const fetchKey = `${range}:${tick}`
 
-  useEffect(() => {
-    let cancelled = false
-    let q = supabase
-      .from('sync_log')
-      .select('synced_at, status, records_synced, participant_id')
+  const q = useAsync(`sync:${participant.id}|${range}`, () => fetchAll<SyncRow>((from, to) => {
+    let query = supabase.from('sync_log').select('synced_at, status, records_synced, participant_id, error_message')
       .eq('participant_id', participant.id)
-      .order('synced_at', { ascending: true })
     if (range !== 'all') {
-      const days = range === '30d' ? 30 : 90
       const since = new Date()
-      since.setDate(since.getDate() - days)
-      q = q.gte('synced_at', since.toISOString())
+      since.setDate(since.getDate() - (range === '30d' ? 30 : 90))
+      query = query.gte('synced_at', since.toISOString())
     }
-    q.limit(2000).then(({ data }) => {
-      if (!cancelled) setResult({ range: fetchKey, rows: (data || []) as SyncRow[] })
-    })
-    return () => { cancelled = true }
-  }, [supabase, participant.id, range, fetchKey])
-  const rows = result?.rows ?? null
-  const loading = result?.range !== fetchKey
-
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+    return query.order('synced_at', { ascending: true }).order('id').range(from, to)
+  }, { limit: 20_000 }))
+  const rows = q.data ?? q.previous ?? null
 
   const { calendarWeeks, trendData, stats, maxPerDay } = useMemo(() => {
     if (!rows || !rows.length) return { calendarWeeks: [], trendData: [], stats: null, maxPerDay: 1 }
-
     const byDate = new Map<string, SyncRow[]>()
     for (const r of rows) {
-      const d = r.synced_at.slice(0, 10)
+      const d = localDay(r.synced_at)
       if (!byDate.has(d)) byDate.set(d, [])
       byDate.get(d)!.push(r)
     }
-
     const maxPerDay = Math.max(...Array.from(byDate.values()).map(v => v.length), 1)
 
-    // Calendar: pad start to Monday, fill to today
-    const dates = Array.from(byDate.keys()).sort()
-    const start = new Date(dates[0])
-    const end   = new Date()
+    // Calendar of local days: pad the start to Monday, fill to today
+    const first = new Date(rows[0].synced_at)
+    first.setHours(0, 0, 0, 0)
+    const start = new Date(first)
     while ((start.getDay() + 6) % 7 !== 0) start.setDate(start.getDate() - 1)
-
-    const calendarWeeks: { date: string; rows: SyncRow[]; inRange: boolean }[][] = [[]]
-    const cur = new Date(start)
-    const rangeStart = new Date(dates[0])
-    while (cur <= end) {
-      const d = cur.toISOString().slice(0, 10)
-      const w = calendarWeeks[calendarWeeks.length - 1]
-      w.push({ date: d, rows: byDate.get(d) || [], inRange: cur >= rangeStart })
-      if (w.length === 7) calendarWeeks.push([])
-      cur.setDate(cur.getDate() + 1)
+    const end = new Date()
+    const weeks: { date: string; rows: SyncRow[]; inRange: boolean }[][] = [[]]
+    for (const cur = new Date(start); cur <= end; cur.setDate(cur.getDate() + 1)) {
+      const w = weeks[weeks.length - 1]
+      const key = localDay(cur)
+      w.push({ date: key, rows: byDate.get(key) || [], inRange: cur >= first })
+      if (w.length === 7) weeks.push([])
     }
 
-    // Trend data — daily
     const trendData = Array.from(byDate.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, rs]) => ({
         date,
         records: rs.reduce((s, r) => s + (r.records_synced || 0), 0),
-        syncs:   rs.length,
-        errors:  rs.filter(r => r.status === 'error').length,
+        syncs: rs.length,
+        errors: rs.filter(r => r.status === 'error').length,
       }))
 
-    const totalSyncs   = rows.length
+    const totalSyncs = rows.length
     const successCount = rows.filter(r => r.status === 'success').length
-    const errorCount   = rows.filter(r => r.status === 'error').length
+    const errorCount = rows.filter(r => r.status === 'error').length
     const partialCount = rows.filter(r => r.status === 'partial').length
     const totalRecords = rows.reduce((s, r) => s + (r.records_synced || 0), 0)
-    const successRate  = totalSyncs > 0 ? Math.round((successCount / totalSyncs) * 100) : 0
-    const activeDays   = byDate.size
-
-    const lastSync = rows[rows.length - 1]
-
     return {
-      calendarWeeks,
+      calendarWeeks: weeks.filter(w => w.length),
       trendData,
       maxPerDay,
-      stats: { totalSyncs, successCount, errorCount, partialCount, totalRecords, successRate, activeDays, lastSync },
+      stats: {
+        totalSyncs, successCount, errorCount, partialCount, totalRecords,
+        successRate: Math.round((successCount / totalSyncs) * 100), activeDays: byDate.size,
+      },
     }
   }, [rows])
 
+  const recentRows = useMemo(() => (rows ? [...rows].reverse().slice(0, 20) : []), [rows])
   const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-  const recentRows = useMemo(() => {
-    if (!rows) return []
-    return [...rows].reverse().slice(0, 20)
-  }, [rows])
+  return (
+    <Modal open onClose={onClose} size="xl" title="Sync history" description={participantName(participant)}
+      icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent"><Activity size={18} /></span>}>
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedControl label="Period" value={range} onChange={setRange} size="sm"
+            options={[{ value: '30d', label: '30 days' }, { value: '90d', label: '90 days' }, { value: 'all', label: 'All time' }]} />
+          <Button variant="ghost" size="sm" onClick={q.retry} loading={q.loading}>Refresh</Button>
+        </div>
+
+        {q.error ? (
+          <ErrorState message={q.error} onRetry={q.retry} />
+        ) : rows === null ? (
+          <SkeletonRows rows={6} />
+        ) : rows.length === 0 ? (
+          <EmptyState icon={<Activity size={28} />} title="No syncs in this period" hint="Try a longer period." />
+        ) : (
+          <div className={`space-y-6 ${q.loading ? 'opacity-60' : ''}`} aria-busy={q.loading}>
+            {stats && (
+              <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  { label: 'Syncs', value: stats.totalSyncs.toLocaleString(), sub: `${stats.activeDays} days with a sync` },
+                  { label: 'Succeeded', value: `${stats.successRate}%`, sub: `${stats.successCount.toLocaleString()} syncs` },
+                  { label: 'Records uploaded', value: stats.totalRecords.toLocaleString(), sub: `about ${Math.round(stats.totalRecords / Math.max(stats.activeDays, 1)).toLocaleString()} a day` },
+                  { label: 'Failed', value: stats.errorCount.toLocaleString(), sub: `${stats.partialCount} partial`, danger: stats.errorCount > 0 },
+                ].map(s => (
+                  <div key={s.label} className={`rounded-xl p-3.5 ${s.danger ? 'bg-danger-soft' : 'bg-sunken'}`}>
+                    <dt className="text-xs font-medium text-subtle">{s.label}</dt>
+                    <dd className={`text-2xl font-bold tabular-nums ${s.danger ? 'text-danger' : 'text-fg'}`}>{s.value}</dd>
+                    <dd className="text-[11px] text-subtle">{s.sub}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+
+            <section>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-fg">Sync calendar</h3>
+                <div className="flex flex-wrap items-center gap-3 text-[11px] text-subtle">
+                  {[['var(--surface-sunken)', 'No sync'], [intensity('var(--success)', 0.8), 'Succeeded'], [intensity('var(--warning)', 0.8), 'Partial'], [intensity('var(--danger)', 0.8), 'Failed']].map(([c, l]) => (
+                    <span key={l} className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded-sm ring-1 ring-line" style={{ background: c }} aria-hidden="true" />{l}</span>
+                  ))}
+                  <span>Darker means more syncs</span>
+                </div>
+              </div>
+              <div className="overflow-x-auto pb-1">
+                <div className="flex min-w-fit gap-1">
+                  <div className="mr-1 mt-5 flex flex-col gap-1" aria-hidden="true">
+                    {DOW.map(d => <div key={d} className="flex h-[14px] w-6 items-center text-[9px] text-subtle">{d}</div>)}
+                  </div>
+                  {calendarWeeks.map((week, wi) => {
+                    const firstDay = new Date(`${week[0].date}T12:00:00`)
+                    return (
+                      <div key={wi} className="flex flex-col gap-1">
+                        <div className="flex h-4 items-end pb-0.5 text-[9px] text-subtle">{firstDay.getDate() <= 7 ? format(firstDay, 'MMM') : ''}</div>
+                        {week.map(({ date, rows: dayRows, inRange }) => {
+                          const total = dayRows.reduce((s, r) => s + (r.records_synced || 0), 0)
+                          const tip = dayRows.length
+                            ? `${date}: ${dayRows.length} syncs, ${total.toLocaleString()} records, ${dayRows.filter(r => r.status === 'error').length} failed`
+                            : `${date}: no sync`
+                          return <div key={date} title={tip} className="h-[14px] w-[14px] rounded-[3px]"
+                            style={{ background: inRange ? syncCellColor(dayRows, maxPerDay) : 'transparent' }} />
+                        })}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="mb-3 text-sm font-semibold text-fg">Daily sync activity</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <ComposedChart data={trendData} margin={{ top: 4, right: 12, bottom: 4, left: 0 }}>
+                  <CartesianGrid {...gridProps} vertical={false} />
+                  <XAxis dataKey="date" tick={axisTick} tickLine={false} axisLine={axisLine} interval="preserveStartEnd" minTickGap={24}
+                    tickFormatter={d => { try { return format(parseISO(d), 'MMM d') } catch { return d } }} />
+                  <YAxis yAxisId="records" tick={axisTick} tickLine={false} axisLine={false} width={44} />
+                  <YAxis yAxisId="syncs" orientation="right" tick={axisTick} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
+                  <Tooltip {...tooltipProps}
+                    formatter={(v, name) => [Number(v).toLocaleString(), name === 'records' ? 'Records' : name === 'syncs' ? 'Syncs' : 'Failed']}
+                    labelFormatter={d => { try { return format(parseISO(d as string), 'MMM d, yyyy') } catch { return String(d) } }} />
+                  <Legend wrapperStyle={legendStyle} formatter={v => (v === 'records' ? 'Records' : v === 'syncs' ? 'Syncs' : 'Failed')} />
+                  <Bar yAxisId="records" dataKey="records" name="records" fill={C.violet} opacity={0.75} radius={[2, 2, 0, 0]} isAnimationActive={false} maxBarSize={20} />
+                  {trendData.some(d => d.errors > 0) && (
+                    <Bar yAxisId="syncs" dataKey="errors" name="errors" fill={C.red} radius={[2, 2, 0, 0]} isAnimationActive={false} maxBarSize={12} />
+                  )}
+                  <Line yAxisId="syncs" type="monotone" dataKey="syncs" name="syncs" stroke={C.green} strokeWidth={2} dot={false} isAnimationActive={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </section>
+
+            <section>
+              <h3 className="mb-3 text-sm font-semibold text-fg">Latest syncs</h3>
+              <TableWrap>
+                <THead><tr><Th>Time</Th><Th>Result</Th><Th align="right">Records</Th></tr></THead>
+                <tbody>
+                  {recentRows.map((r, i) => {
+                    const st = SYNC_STATUS[r.status as SyncStatusKey]
+                    return (
+                      <Tr key={i}>
+                        <Td className="whitespace-nowrap tabular-nums">{format(parseISO(r.synced_at), 'MMM d, yyyy HH:mm:ss')}</Td>
+                        <Td>
+                          <Badge tone={st?.tone ?? 'neutral'} title={r.error_message || undefined}>{st?.label ?? r.status}</Badge>
+                          {r.error_message && <p className="mt-1 max-w-md break-words text-xs text-subtle">{r.error_message}</p>}
+                        </Td>
+                        <Td align="right" className="tabular-nums">{(r.records_synced || 0).toLocaleString()}</Td>
+                      </Tr>
+                    )
+                  })}
+                </tbody>
+              </TableWrap>
+              {rows.length > 20 && <p className="mt-2 text-center text-xs text-subtle">Showing the 20 most recent of {rows.length.toLocaleString()}</p>}
+            </section>
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+// ── Detail drawer ─────────────────────────────────────────────────────────────
+
+function ParticipantDrawer({
+  p, health, latest, interval, studyId, canEdit, canManage, suspended,
+  onClose, onStatus, onDelete, onSyncHistory, onPermissionHistory,
+}: {
+  p: Participant
+  health: SyncHealth
+  latest: SyncRow | undefined
+  interval: number
+  studyId: string
+  canEdit: boolean
+  canManage: boolean
+  /** A dialog is open on top: release focus to it */
+  suspended: boolean
+  onClose: () => void
+  onStatus: (next: 'active' | 'withdrawn') => void
+  onDelete: () => void
+  onSyncHistory: () => void
+  onPermissionHistory: () => void
+}) {
+  const panelRef = useRef<HTMLElement>(null)
+  useDialogFocus(panelRef, onClose, !suspended)
+  const paths = studyPaths(studyId)
+  const name = participantName(p)
+  const perms = Object.entries(p.permissions || {})
+  const di = p.device_info || {}
+  const latestSt = latest ? SYNC_STATUS[latest.status as SyncStatusKey] : undefined
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-    >
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-
-      {/* Modal */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
-
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center">
-              <Activity size={18} className="text-indigo-600" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-gray-900">Sync History</h2>
-              <p className="text-xs text-gray-400">{pName(participant)}</p>
+    <div className="fixed inset-0 z-[60] flex justify-end">
+      <div className="absolute inset-0 bg-[var(--overlay)]" aria-hidden="true" onClick={onClose} />
+      <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="participant-detail-title"
+        className="relative flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-2xl">
+        <div className="flex items-start gap-3 border-b border-line p-5">
+          <Avatar id={p.id} name={name} size="lg" />
+          <div className="min-w-0 flex-1">
+            <h2 id="participant-detail-title" className="truncate text-lg font-bold text-fg">{name}</h2>
+            <p className="break-all font-mono text-xs text-subtle">{p.device_id}</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge tone={p.status === 'active' ? 'green' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Withdrawn'}</Badge>
+              {p.status === 'active' && <Badge tone={health.tone} title={health.description}>{health.label}</Badge>}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {/* Range selector */}
-            <div className="flex items-center bg-gray-100 rounded-lg p-0.5 text-xs">
-              {(['30d', '90d', 'all'] as const).map(r => (
-                <button
-                  key={r}
-                  onClick={() => setRange(r)}
-                  className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-                    range === r ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {r === 'all' ? 'All time' : r === '30d' ? '30 days' : '90 days'}
-                </button>
-              ))}
-            </div>
-            <button
-              onClick={() => setTick(t => t + 1)}
-              disabled={loading}
-              className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all disabled:opacity-50"
-              title="Refresh"
-            >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            </button>
-            <button
-              onClick={onClose}
-              className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all"
-            >
-              <X size={16} />
-            </button>
-          </div>
+          <button type="button" onClick={onClose} className={iconBtn} aria-label="Close participant details"><X size={18} /></button>
         </div>
 
-        {/* Body — scrollable */}
-        <div className="overflow-y-auto flex-1 px-6 py-5">
+        <div className="flex-1 space-y-6 overflow-y-auto p-5">
+          <DescriptionList items={[
+            { label: 'Last sync', value: <span title={p.last_sync_at ? format(new Date(p.last_sync_at), 'PPpp') : undefined}>{relative(p.last_sync_at)}</span> },
+            { label: 'Last sync result', value: latestSt ? <><Badge tone={latestSt.tone}>{latestSt.label}</Badge>{latest?.error_message && <span className="mt-1 block text-xs text-subtle">{latest.error_message}</span>}</> : '—' },
+            { label: 'Sync health', value: p.status === 'active' ? health.description : 'Withdrawn: the phone does not collect or upload.' },
+            { label: 'Expected sync', value: `Every ${Math.max(interval, 15)} min` },
+            { label: 'Joined', value: format(new Date(p.enrolled_at), 'PP p') },
+            { label: 'Consent', value: p.consent_version ? <>Version <span className="font-mono">{p.consent_version}</span>{p.consent_at && <> · {format(new Date(p.consent_at), 'PP')}</>}</> : 'Not recorded by this app version' },
+            { label: 'Device', value: deviceSummary(p) },
+            ...(di.pending_records ? [{ label: 'Waiting to upload', value: `${Number(di.pending_records).toLocaleString()} records` }] : []),
+            ...(p.merged_into ? [{ label: 'Merge', value: p.merge_adopted_at ? 'Merged; the phone has switched over' : 'Merged; waiting for the phone to switch over' }] : []),
+          ]} />
 
-          {rows === null ? (
-            <div className="flex items-center justify-center py-16 text-gray-400 text-sm gap-2">
-              <RefreshCw size={14} className="animate-spin" /> Loading sync history…
-            </div>
-          ) : rows.length === 0 && !loading ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-2">
-              <Activity size={32} className="text-gray-300" />
-              <p className="text-sm font-medium">No sync records found</p>
-              <p className="text-xs">Try selecting a wider date range</p>
-            </div>
-          ) : (
-            <div className={`space-y-6 transition-opacity duration-200 ${loading ? 'opacity-50' : 'opacity-100'}`}>
-              {/* Stats cards */}
-              {stats && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="bg-gray-50 rounded-xl p-3.5">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Zap size={13} className="text-blue-500" />
-                      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Total Syncs</span>
-                    </div>
-                    <p className="text-2xl font-bold text-gray-800">{stats.totalSyncs.toLocaleString()}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{stats.activeDays} active days</p>
-                  </div>
-                  <div className="bg-gray-50 rounded-xl p-3.5">
-                    <div className="flex items-center gap-2 mb-1">
-                      <CheckCircle size={13} className="text-emerald-500" />
-                      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Success Rate</span>
-                    </div>
-                    <p className="text-2xl font-bold text-gray-800">{stats.successRate}%</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{stats.successCount} successful</p>
-                  </div>
-                  <div className="bg-gray-50 rounded-xl p-3.5">
-                    <div className="flex items-center gap-2 mb-1">
-                      <TrendingUp size={13} className="text-indigo-500" />
-                      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Records Synced</span>
-                    </div>
-                    <p className="text-2xl font-bold text-gray-800">{stats.totalRecords.toLocaleString()}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">
-                      ~{stats.activeDays > 0 ? Math.round(stats.totalRecords / stats.activeDays).toLocaleString() : 0}/day avg
-                    </p>
-                  </div>
-                  <div className={`rounded-xl p-3.5 ${stats.errorCount > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
-                    <div className="flex items-center gap-2 mb-1">
-                      <AlertCircle size={13} className={stats.errorCount > 0 ? 'text-red-500' : 'text-gray-400'} />
-                      <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Errors</span>
-                    </div>
-                    <p className={`text-2xl font-bold ${stats.errorCount > 0 ? 'text-red-600' : 'text-gray-800'}`}>
-                      {stats.errorCount}
-                    </p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{stats.partialCount} partial</p>
-                  </div>
-                </div>
+          <section>
+            <h3 className="text-sm font-semibold text-fg">Permissions</h3>
+            {perms.length === 0 ? (
+              <p className="mt-1 text-sm text-subtle">The phone has not reported its permissions yet.</p>
+            ) : (
+              <ul className="mt-2 flex flex-wrap gap-1.5">
+                {perms.map(([k, v]) => (
+                  <li key={k}><Badge tone={v ? 'green' : 'red'}>{permissionLabel(k)}{v ? '' : ' (off)'}</Badge></li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="grid grid-cols-2 gap-2">
+            <ButtonLink href={`${paths.data}?participant=${p.id}`} variant="secondary" size="sm"><ChartColumn size={14} aria-hidden="true" /> Raw data</ButtonLink>
+            <ButtonLink href={`${paths.surveys}?participant=${p.id}`} variant="secondary" size="sm"><MessageSquare size={14} aria-hidden="true" /> Survey answers</ButtonLink>
+            <Button variant="secondary" size="sm" onClick={onSyncHistory}><Activity size={14} aria-hidden="true" /> Sync history</Button>
+            <Button variant="secondary" size="sm" onClick={onPermissionHistory}><ShieldCheck size={14} aria-hidden="true" /> Permission history</Button>
+          </section>
+
+          {(canEdit || canManage) && (
+            <section className="space-y-2 border-t border-line pt-5">
+              {canEdit && (p.status === 'active' ? (
+                <Button variant="secondary" onClick={() => onStatus('withdrawn')} className="w-full">
+                  <UserMinus size={14} aria-hidden="true" /> Withdraw participant…
+                </Button>
+              ) : (
+                <Button variant="secondary" onClick={() => onStatus('active')} className="w-full">
+                  <RotateCcw size={14} aria-hidden="true" /> Reactivate participant…
+                </Button>
+              ))}
+              {canManage && (
+                <Button variant="danger-ghost" onClick={onDelete} className="w-full">
+                  <Trash2 size={14} aria-hidden="true" /> Delete participant…
+                </Button>
               )}
-
-              {/* Calendar heatmap */}
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <p className="text-sm font-semibold text-gray-700">Sync Calendar</p>
-                  <div className="flex items-center gap-3 text-[10px] text-gray-400">
-                    {[
-                      ['#e5e7eb', 'No sync'],
-                      ['rgba(16,185,129,0.8)', 'Success'],
-                      ['rgba(245,158,11,0.8)', 'Partial'],
-                      ['rgba(239,68,68,0.8)', 'Error'],
-                    ].map(([c, l]) => (
-                      <span key={l} className="flex items-center gap-1">
-                        <span className="w-3 h-3 rounded-sm inline-block" style={{ background: c }} />
-                        {l}
-                      </span>
-                    ))}
-                    <span className="text-gray-300">· darker = more syncs</span>
-                  </div>
-                </div>
-                <div className="overflow-x-auto pb-1">
-                  <div className="flex gap-1 min-w-fit">
-                    {/* Day-of-week labels */}
-                    <div className="flex flex-col gap-1 mr-1 mt-5">
-                      {DOW.map(d => (
-                        <div key={d} className="h-[14px] flex items-center text-[9px] text-gray-400 w-6">{d}</div>
-                      ))}
-                    </div>
-                    {/* Week columns */}
-                    {calendarWeeks.map((week, wi) => {
-                      const monthLabel = week[0]?.date
-                        ? (() => {
-                            const d = new Date(week[0].date)
-                            return d.getDate() <= 7 ? format(d, 'MMM') : ''
-                          })()
-                        : ''
-                      return (
-                        <div key={wi} className="flex flex-col gap-1">
-                          <div className="h-4 text-[9px] text-gray-400 flex items-end pb-0.5">{monthLabel}</div>
-                          {week.map(({ date, rows: dayRows, inRange }) => {
-                            const color = inRange ? syncCellIntensity(dayRows, maxPerDay) : '#f3f4f6'
-                            const total = dayRows.reduce((s, r) => s + (r.records_synced || 0), 0)
-                            const tip = dayRows.length
-                              ? `${date}\n${dayRows.length} syncs · ${total.toLocaleString()} records\n${dayRows.filter(r => r.status === 'success').length} ok · ${dayRows.filter(r => r.status === 'error').length} err`
-                              : date
-                            return (
-                              <div
-                                key={date}
-                                title={tip}
-                                className="w-[14px] h-[14px] rounded-[3px] cursor-default transition-transform hover:scale-125"
-                                style={{ background: color }}
-                              />
-                            )
-                          })}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* Trend chart */}
-              <div>
-                <p className="text-sm font-semibold text-gray-700 mb-3">Daily Sync Activity</p>
-                <ResponsiveContainer width="100%" height={180}>
-                  <ComposedChart data={trendData} margin={{ top: 4, right: 12, bottom: 4, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                    <XAxis
-                      dataKey="date"
-                      tick={{ fontSize: 10 }}
-                      tickLine={false}
-                      axisLine={{ stroke: '#e5e7eb' }}
-                      interval="preserveStartEnd"
-                      tickFormatter={d => {
-                        try { return format(parseISO(d), 'MMM d') } catch { return d }
-                      }}
-                    />
-                    <YAxis yAxisId="records" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={40} />
-                    <YAxis yAxisId="syncs" orientation="right" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={30} />
-                    <Tooltip
-                      contentStyle={{ fontSize: 11, borderRadius: 8 }}
-                      formatter={(v, name) => {
-                        if (name === 'records') return [Number(v).toLocaleString(), 'Records']
-                        if (name === 'syncs') return [v, 'Syncs']
-                        return [v, 'Errors']
-                      }}
-                      labelFormatter={d => {
-                        try { return format(parseISO(d as string), 'MMM d, yyyy') } catch { return d }
-                      }}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 11 }} />
-                    <Bar yAxisId="records" dataKey="records" name="records" fill="#818cf8" opacity={0.7} radius={[2,2,0,0]} isAnimationActive={false} maxBarSize={20} />
-                    {trendData.some(d => d.errors > 0) && (
-                      <Bar yAxisId="syncs" dataKey="errors" name="errors" fill="#fca5a5" opacity={0.9} radius={[2,2,0,0]} isAnimationActive={false} maxBarSize={12} />
-                    )}
-                    <Line yAxisId="syncs" type="monotone" dataKey="syncs" name="syncs" stroke="#10b981" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Recent syncs table */}
-              <div>
-                <p className="text-sm font-semibold text-gray-700 mb-3">Recent Syncs</p>
-                <div className="rounded-xl border border-gray-100 overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-100">
-                        <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-gray-500">Time</th>
-                        <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-gray-500">Status</th>
-                        <th className="text-right px-4 py-2.5 text-[11px] font-semibold text-gray-500">Records</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {recentRows.map((r, i) => {
-                        const s = r.status?.toLowerCase()
-                        const badge =
-                          s === 'success' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                          s === 'error'   ? 'bg-red-50 text-red-600 border-red-200' :
-                          s === 'partial' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                          'bg-gray-100 text-gray-500 border-gray-200'
-                        return (
-                          <tr key={i} className="hover:bg-gray-50/50 transition-colors">
-                            <td className="px-4 py-2.5 text-gray-600 tabular-nums">
-                              <div>{format(parseISO(r.synced_at), 'MMM d, yyyy')}</div>
-                              <div className="text-gray-400">{format(parseISO(r.synced_at), 'HH:mm:ss')}</div>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-[11px] font-semibold ${badge}`}>
-                                {r.status || 'unknown'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2.5 text-right text-gray-700 font-medium tabular-nums">
-                              {(r.records_synced || 0).toLocaleString()}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                  {rows.length > 20 && (
-                    <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 text-[11px] text-gray-400 text-center">
-                      Showing 20 most recent of {rows.length.toLocaleString()} total
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            </section>
           )}
         </div>
-      </div>
+      </aside>
     </div>
   )
 }
 
-// ── Participants page ─────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 function ParticipantsContent() {
-  const { id: studyId } = useParams()
+  const { id: studyId } = useParams<{ id: string }>()
   const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
-  const access = useStudyAccess(studyId as string)
+  const access = useStudyAccess(studyId)
+  const paths = studyPaths(studyId)
+
   const [notice, setNotice] = useState<NoticeState>(null)
-  const [deleteTarget, setDeleteTarget] = useState<Participant | null>(null)
-  const [participants, setParticipants] = useState<Participant[]>([])
-  const [editingLabel, setEditingLabel] = useState<string | null>(null)
-  const [labelValue, setLabelValue] = useState('')
   const [search, setSearch] = useState('')
-  const [syncModalParticipant, setSyncModalParticipant] = useState<Participant | null>(null)
-  const [permModalParticipant, setPermModalParticipant] = useState<Participant | null>(null)
-  const [detailParticipant, setDetailParticipant] = useState<Participant | null>(null)
-  const [latestSync, setLatestSync] = useState<Record<string, SyncRow>>({})
-  const [renderedAt] = useState(() => Date.now())
-  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState(30)
-  const [activeFilter, setActiveFilter] = useState<FilterKey>(() => {
-    const f = searchParams.get('filter')
-    return (f && ['all', 'issues', 'active', 'withdrawn', 'stale', 'perm_missing'].includes(f) ? f : 'all') as FilterKey
-  })
+  const [pageState, setPageState] = useState({ key: '', page: 0 })
+  const [editing, setEditing] = useState<{ id: string; value: string } | null>(null)
+  const [savingLabel, setSavingLabel] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Participant | null>(null)
+  const [syncTarget, setSyncTarget] = useState<Participant | null>(null)
+  const [permTarget, setPermTarget] = useState<Participant | null>(null)
+  const [statusTarget, setStatusTarget] = useState<{ p: Participant; next: 'active' | 'withdrawn' } | null>(null)
+  const [statusBusy, setStatusBusy] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
 
-  const fetchAll = useCallback(async () => {
-    const [{ data, error }, { data: study }] = await Promise.all([
-      supabase.from('participants').select('*')
-        .eq('study_id', studyId).order('enrolled_at', { ascending: false }),
+  const q = useAsync(`participants:${studyId}`, async () => {
+    const [participants, studyRes, logs] = await Promise.all([
+      fetchAll<Participant>((from, to) => supabase.from('participants').select('*')
+        .eq('study_id', studyId).order('enrolled_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('studies').select('sync_interval_minutes').eq('id', studyId).maybeSingle(),
+      scopedSelect(supabase, 'sync_log', { studyId, participant: 'all' }, 'synced_at, status, records_synced, participant_id, error_message')
+        .order('synced_at', { ascending: false }).limit(3000),
     ])
-    const rows = (data || []) as Participant[]
-    const ids = new Set(rows.map(p => p.id))
-    const { data: logs } = ids.size
-      ? await supabase.from('sync_log').select('synced_at,status,records_synced,participant_id,error_message')
-          .in('participant_id', [...ids]).order('synced_at', { ascending: false }).limit(2000)
-      : { data: [] }
-    const newest: Record<string, SyncRow> = {}
-    for (const log of (logs || []) as SyncRow[]) {
-      if (ids.has(log.participant_id) && !newest[log.participant_id]) newest[log.participant_id] = log
+    const latest: Record<string, SyncRow> = {}
+    for (const log of must(logs) as unknown as SyncRow[]) if (!latest[log.participant_id]) latest[log.participant_id] = log
+    const interval = Number(must(studyRes)?.sync_interval_minutes)
+    return { participants, latest, interval: Number.isFinite(interval) && interval > 0 ? interval : 30, loadedAt: Date.now() }
+  })
+  const d = q.data ?? q.previous
+  const participants = useMemo(() => d?.participants ?? [], [d])
+  const interval = d?.interval ?? 30
+
+  // URL state: ?filter= (from the overview) and ?participant= (opens the drawer)
+  const rawFilter = searchParams.get('filter')
+  const filter: FilterKey = rawFilter && FILTER_KEYS.has(rawFilter) ? rawFilter as FilterKey : 'all'
+  const openId = searchParams.get('participant')
+
+  function setParam(key: string, value: string | null) {
+    const params = new URLSearchParams(searchParams.toString())
+    if (value === null) params.delete(key)
+    else params.set(key, value)
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }
+
+  const rows = useMemo(() => participants.map(p => {
+    const health = syncHealth(p, interval, d?.loadedAt ?? 0)
+    return {
+      p,
+      health,
+      latest: d?.latest[p.id],
+      permIssue: p.status === 'active' && hasPermissionIssue(p.permissions),
+      permText: permissionSummary(p.permissions),
     }
-    return { rows, newest, interval: Number(study?.sync_interval_minutes), error }
-  }, [supabase, studyId])
+  }), [participants, interval, d])
 
-  const apply = useCallback((res: Awaited<ReturnType<typeof fetchAll>>, initial: boolean) => {
-    if (Number.isFinite(res.interval) && res.interval > 0) setSyncIntervalMinutes(res.interval)
-    setParticipants(res.rows)
-    setLatestSync(res.newest)
-    if (res.error) setNotice({ tone: 'error', text: `Could not load participants: ${errorText(res.error)}` })
-    if (initial) {
-      const requested = searchParams.get('participant')
-      if (requested) setDetailParticipant(res.rows.find(p => p.id === requested) || null)
-    } else {
-      setDetailParticipant(current => current ? res.rows.find(p => p.id === current.id) || null : null)
-    }
-  }, [searchParams])
+  const needsAttention = (r: typeof rows[number]) =>
+    r.p.status === 'active' && (isSyncOverdue(r.health) || r.permIssue || r.latest?.status === 'error')
+  const matches: Record<FilterKey, (r: typeof rows[number]) => boolean> = {
+    all: () => true,
+    issues: needsAttention,
+    active: r => r.p.status === 'active',
+    withdrawn: r => r.p.status === 'withdrawn',
+    stale: r => isSyncOverdue(r.health),
+    silent: r => r.health.key === 'silent',
+    perm_missing: r => r.permIssue,
+  }
+  const counts = Object.fromEntries(FILTERS.map(f => [f.value, rows.filter(matches[f.value]).length])) as Record<FilterKey, number>
+  const term = search.trim().toLowerCase()
+  const filtered = rows.filter(r => matches[filter](r) &&
+    (!term || participantName(r.p).toLowerCase().includes(term) || r.p.device_id.toLowerCase().includes(term)))
 
-  const load = useCallback(async () => apply(await fetchAll(), false), [apply, fetchAll])
+  const pageKey = `${filter}|${term}`
+  const page = pageState.key === pageKey ? Math.min(pageState.page, Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1)) : 0
+  const visible = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
 
-  useEffect(() => {
-    let cancelled = false
-    fetchAll().then(res => { if (!cancelled) apply(res, true) })
-    return () => { cancelled = true }
-  }, [fetchAll, apply])
+  const open = openId ? rows.find(r => r.p.id === openId) : undefined
+  const anyModal = !!(deleteTarget || syncTarget || permTarget || statusTarget)
 
   // PostgREST reports an RLS-filtered UPDATE as success with zero rows, so ask
   // for the updated ids back to tell "saved" from "not allowed".
-  async function updateParticipant(participantId: string, patch: Partial<Participant>, what: string) {
-    const { data, error } = await supabase.from('participants').update(patch).eq('id', participantId).select('id')
-    if (error || !data?.length) {
-      setNotice({ tone: 'error', text: `Could not save ${what}: ${error ? errorText(error) : 'you do not have permission to edit participants in this study.'}` })
-      return false
+  async function updateParticipant(id: string, patch: Partial<Participant>): Promise<string | null> {
+    const { data, error } = await supabase.from('participants').update(patch).eq('id', id).select('id')
+    if (error) return errorText(error)
+    if (!data?.length) return 'You do not have permission to edit participants in this study.'
+    return null
+  }
+
+  async function saveLabel() {
+    if (!editing) return
+    setSavingLabel(true)
+    const problem = await updateParticipant(editing.id, { label: editing.value.trim() || null })
+    setSavingLabel(false)
+    if (problem) { setNotice({ tone: 'error', text: `Could not save the label: ${problem}` }); return }
+    setEditing(null)
+    q.retry()
+  }
+
+  async function confirmStatus() {
+    if (!statusTarget) return
+    setStatusBusy(true); setStatusError(null)
+    const problem = await updateParticipant(statusTarget.p.id, { status: statusTarget.next })
+    setStatusBusy(false)
+    if (problem) { setStatusError(problem); return }
+    setNotice({ tone: 'success', text: `${participantName(statusTarget.p)} ${statusTarget.next === 'withdrawn' ? 'was withdrawn' : 'is active again'}.` })
+    setStatusTarget(null)
+    q.retry()
+  }
+
+  function exportList() {
+    downloadCsv(rows.map(({ p, health, latest }) => ({
+      participant_id: p.id,
+      device_id: p.device_id,
+      label: p.label ?? '',
+      status: p.status,
+      enrolled_at: p.enrolled_at,
+      last_sync_at: p.last_sync_at ?? '',
+      sync_health: health.label,
+      last_sync_result: latest?.status ?? '',
+      permissions_off: (missingPermissions(p.permissions) ?? ['not reported']).map(k => k === 'not reported' ? k : permissionLabel(k)).join('; '),
+      device: deviceSummary(p),
+      consent_version: p.consent_version ?? '',
+    })), `participants_${localDay(new Date())}`)
+  }
+
+  // ── Pieces shared by the table and the cards ─────────────────────────────
+  // Plain render helpers (not components), so the label input keeps focus while typing
+  function nameCell(p: Participant) {
+    const name = participantName(p)
+    if (editing?.id === p.id) {
+      return (
+        <form className="flex items-center gap-1" onSubmit={e => { e.preventDefault(); void saveLabel() }}>
+          <input value={editing.value} autoFocus aria-label={`Label for ${p.device_id}`} placeholder="Label"
+            onChange={e => setEditing({ id: p.id, value: e.target.value })}
+            onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setEditing(null) } }}
+            className="h-8 min-w-0 flex-1 rounded-md border border-accent bg-surface px-2 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-accent/25" />
+          <button type="submit" disabled={savingLabel} className={`${iconBtn} text-accent`} aria-label="Save label"><Check size={15} /></button>
+          <button type="button" onClick={() => setEditing(null)} className={iconBtn} aria-label="Cancel renaming"><X size={15} /></button>
+        </form>
+      )
     }
-    return true
+    return (
+      <div className="flex min-w-0 items-center gap-1">
+        <button type="button" onClick={() => setParam('participant', p.id)} aria-label={`Open details for ${name}`}
+          className="flex min-w-0 items-center gap-2.5 rounded-lg text-left hover:text-accent">
+          <Avatar id={p.id} name={name} />
+          <span className="min-w-0">
+            <span className="block truncate font-semibold text-fg">{name}</span>
+            {p.label && <span className="block truncate font-mono text-[11px] text-subtle">{p.device_id}</span>}
+          </span>
+        </button>
+        {access.canEdit && (
+          <button type="button" onClick={() => setEditing({ id: p.id, value: p.label || '' })} className={`${iconBtn} shrink-0`} aria-label={`Rename ${name}`}>
+            <Pencil size={13} />
+          </button>
+        )}
+      </div>
+    )
   }
 
-  async function saveLabel(participantId: string) {
-    const ok = await updateParticipant(participantId, { label: labelValue.trim() || null }, 'the label')
-    if (ok) setEditingLabel(null)
-    await load()
+  function rowActions(p: Participant) {
+    const name = participantName(p)
+    return (
+      <div className="flex items-center justify-end gap-0.5">
+        <Link href={`${paths.data}?participant=${p.id}`} className={iconBtn} aria-label={`Raw data for ${name}`} title="Raw data"><ChartColumn size={15} /></Link>
+        <Link href={`${paths.surveys}?participant=${p.id}`} className={iconBtn} aria-label={`Survey answers for ${name}`} title="Survey answers"><MessageSquare size={15} /></Link>
+        <button type="button" onClick={() => setSyncTarget(p)} className={iconBtn} aria-label={`Sync history for ${name}`} title="Sync history"><Activity size={15} /></button>
+        <button type="button" onClick={() => setPermTarget(p)} className={iconBtn} aria-label={`Permission history for ${name}`} title="Permission history"><ShieldCheck size={15} /></button>
+        {access.canManage && (
+          <button type="button" onClick={() => setDeleteTarget(p)} className={`${iconBtn} hover:bg-danger-soft hover:text-danger`}
+            aria-label={`Delete participant ${name}`} title="Delete participant and all their data"><Trash2 size={15} /></button>
+        )}
+      </div>
+    )
   }
 
-  async function updateStatus(participantId: string, status: string) {
-    const ok = await updateParticipant(participantId, { status }, 'the status')
-    if (ok) setNotice({ tone: 'success', text: `Participant marked ${status}.` })
-    await load()
-  }
+  // ── Render ────────────────────────────────────────────────────────────────
+  const header = (
+    <PageHeader title="Participants"
+      description={d ? `${participants.length.toLocaleString()} enrolled · ${counts.active.toLocaleString()} active · syncs expected every ${Math.max(interval, 15)} min` : 'People enrolled in this study from the mobile app.'}
+      actions={d && participants.length > 0 ? (
+        <Button variant="secondary" size="sm" onClick={exportList}><Download size={13} aria-hidden="true" /> Export list</Button>
+      ) : undefined} />
+  )
 
-  function getMissingPermissions(p: Participant): string[] {
-    if (!p.permissions) return ['no permissions reported']
-    return Object.entries(p.permissions).filter(([, v]) => v === false).map(([k]) => k)
-  }
-
-  function isSyncStale(p: Participant): boolean {
-    if (!p.last_sync_at) return true
-    return renderedAt - new Date(p.last_sync_at).getTime() > 60 * 60 * 1000
-  }
-
-  // An active participant that has gone quiet for well beyond its sync cadence
-  // (3x the study interval; the app enforces a 15 min minimum) or that never
-  // synced within 24 h of enrolling has probably uninstalled or force-stopped
-  // the app. Returns the silent duration in hours, or null when not silent.
-  function silentHours(p: Participant): number | null {
-    if (p.status !== 'active') return null
-    if (p.last_sync_at) {
-      const since = renderedAt - new Date(p.last_sync_at).getTime()
-      const threshold = 3 * Math.max(syncIntervalMinutes, 15) * 60 * 1000
-      return since > threshold ? since / 3_600_000 : null
-    }
-    const sinceEnrol = renderedAt - new Date(p.enrolled_at).getTime()
-    return sinceEnrol > 24 * 3_600_000 ? sinceEnrol / 3_600_000 : null
-  }
-
-  function hasPermIssue(p: Participant): boolean {
-    if (!p.permissions) return true
-    return Object.values(p.permissions).some(v => v === false)
-  }
-
-  const activeOnly = participants.filter(p => p.status === 'active')
-
-  const filtered = participants.filter(p => {
-    const q = search.toLowerCase()
-    if (q) {
-      const name = (p.label || p.device_id).toLowerCase()
-      const did = p.device_id.toLowerCase()
-      if (!name.includes(q) && !did.includes(q)) return false
-    }
-    if (activeFilter === 'active')       return p.status === 'active'
-    if (activeFilter === 'issues')       return p.status === 'active' && (isSyncStale(p) || hasPermIssue(p))
-    if (activeFilter === 'withdrawn')    return p.status === 'withdrawn'
-    if (activeFilter === 'stale')        return p.status === 'active' && isSyncStale(p)
-    if (activeFilter === 'perm_missing') return p.status === 'active' && hasPermIssue(p)
-    return true
-  })
-
-  const filterCounts: Record<FilterKey, number> = {
-    all:          participants.length,
-    issues:       activeOnly.filter(p => isSyncStale(p) || hasPermIssue(p)).length,
-    active:       participants.filter(p => p.status === 'active').length,
-    withdrawn:    participants.filter(p => p.status === 'withdrawn').length,
-    stale:        activeOnly.filter(p => isSyncStale(p)).length,
-    perm_missing: activeOnly.filter(p => hasPermIssue(p)).length,
-  }
+  if (q.error && !d) return <>{header}<ErrorState title="Could not load participants" message={q.error} onRetry={q.retry} /></>
+  if (!d) return <>{header}<SkeletonRows rows={6} /></>
 
   return (
     <div className="space-y-5">
-
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Participants</h1>
-          <p className="text-gray-400 text-sm mt-0.5">
-            {`${participants.length} enrolled · ${filterCounts.active} active`}
-          </p>
-        </div>
-      </div>
+      {header}
 
       {!access.loading && !access.canEdit && <ReadOnlyBanner />}
       <Notice notice={notice} onClose={() => setNotice(null)} />
+      {q.error && <Notice notice={{ tone: 'error', text: `Could not refresh the list: ${q.error}` }} />}
 
-      {/* Duplicate-participant merge suggestions */}
-      {participants.length > 0 && access.canEdit && (
-        <MergeSuggestions participants={participants} onMerged={load} />
-      )}
+      {participants.length > 0 && access.canEdit && <MergeSuggestions participants={participants} onMerged={q.retry} />}
+      <PinLockouts studyId={studyId} canEdit={access.canEdit} />
+      <MergeAudit studyId={studyId} names={Object.fromEntries(participants.map(p => [p.id, participantName(p)]))} />
 
-      <PinLockouts studyId={studyId as string} canEdit={access.canEdit} />
-      <MergeAudit
-        studyId={studyId as string}
-        names={Object.fromEntries(participants.map(p => [p.id, pName(p)]))}
-      />
-
-      {/* Search + filters toolbar */}
-      {participants.length > 0 && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Search name or device ID…"
-              className="pl-8 pr-7 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all bg-white placeholder-gray-400 w-56"
-            />
-            {search && (
-              <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500">
-                <X size={12} />
-              </button>
-            )}
+      {participants.length === 0 ? (
+        <EmptyState icon={<Smartphone size={28} />} title="No participants yet"
+          hint="Participants appear here when they join from the mobile app." />
+      ) : (
+        <>
+          <div className="space-y-3">
+            <div className="relative max-w-sm">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle" aria-hidden="true" />
+              <input type="search" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search participants"
+                placeholder="Search name or device ID…"
+                className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-sm text-fg shadow-card placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25" />
+            </div>
+            <FilterPills label="Show participants" value={filter} onChange={v => setParam('filter', v === 'all' ? null : v)}
+              options={FILTERS.map(f => ({ value: f.value, label: f.label, count: counts[f.value] }))} />
           </div>
 
-          <div className="h-5 w-px bg-gray-200" />
-
-          {FILTERS.map(f => {
-            const isActive = activeFilter === f.key
-            const count = filterCounts[f.key]
-            const isWarn   = f.key === 'stale' && count > 0
-            const isDanger = f.key === 'perm_missing' && count > 0
-
-            return (
-              <button
-                key={f.key}
-                onClick={() => setActiveFilter(f.key)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
-                  isActive
-                    ? isWarn    ? 'bg-amber-500 border-amber-500 text-white shadow-sm'
-                    : isDanger  ? 'bg-red-500 border-red-500 text-white shadow-sm'
-                    :             'bg-blue-600 border-blue-600 text-white shadow-sm'
-                    : isWarn    ? 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
-                    : isDanger  ? 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100'
-                    :             'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300'
-                }`}
-              >
-                {f.label}
-                <span className={`text-[11px] tabular-nums font-bold ${isActive ? 'opacity-70' : isWarn ? 'text-amber-600' : isDanger ? 'text-red-500' : 'text-gray-400'}`}>
-                  {count}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-
-      {/* List */}
-      {participants.length === 0 ? (
-        <div className="bg-white rounded-xl border border-dashed border-gray-200 py-16 text-center">
-          <Smartphone size={32} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-500 font-medium">No participants yet</p>
-          <p className="text-gray-400 text-sm mt-1">Participants appear here when they join via the mobile app</p>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-white rounded-xl border border-dashed border-gray-200 py-12 text-center">
-          <Search size={26} className="mx-auto text-gray-300 mb-2" />
-          <p className="text-gray-500 font-medium text-sm">No matches</p>
-          <p className="text-gray-400 text-xs mt-1">Try a different search or filter</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map(p => {
-            const missing = getMissingPermissions(p)
-            const isWithdrawn = p.status === 'withdrawn'
-            const hasPermIssues = !isWithdrawn && hasPermIssue(p)
-            const stale = !isWithdrawn && isSyncStale(p)
-            const silentFor = silentHours(p)
-            const hasAlerts = stale || hasPermIssues
-            const health = latestSync[p.id]
-
-            const name = pName(p)
-            const meta = [
-              p.device_info?.model ? String(p.device_info.model) : 'Unknown device',
-              p.device_info?.android_version ? `Android ${p.device_info.android_version}` : null,
-              p.device_info?.app_version ? `v${p.device_info.app_version}` : null,
-            ].filter(Boolean) as string[]
-
-            return (
-              <div
-                key={p.id}
-                className={`group/card relative bg-white rounded-xl border shadow-sm hover:shadow-md hover:border-gray-300 transition-all ${
-                  isWithdrawn ? 'border-gray-200 opacity-75' : hasAlerts ? 'border-amber-200' : 'border-gray-200'
-                }`}
-              >
-                {/* Health accent */}
-                <span
-                  className={`absolute left-0 top-3 bottom-3 w-1 rounded-r-full ${
-                    isWithdrawn ? 'bg-gray-300' : hasPermIssues || (health && health.status !== 'success') ? 'bg-red-400' : stale ? 'bg-amber-400' : 'bg-emerald-400'
-                  }`}
-                />
-
-                <div className="flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-5 pl-5 pr-4 py-3.5">
-                  {/* Identity */}
-                  <div className="flex items-center gap-3 min-w-0 lg:w-64 lg:shrink-0">
-                    <div className="relative shrink-0">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${avatarColor(p.id)}`}>
-                        {avatarInitial(name)}
-                      </div>
-                      <span
-                        className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-white ${isWithdrawn ? 'bg-gray-400' : 'bg-emerald-500'}`}
-                        title={p.status}
-                      />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      {editingLabel === p.id ? (
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            value={labelValue}
-                            onChange={e => setLabelValue(e.target.value)}
-                            onKeyDown={e => { if (e.key === 'Enter') saveLabel(p.id); if (e.key === 'Escape') setEditingLabel(null) }}
-                            className="min-w-0 flex-1 px-2 py-1 border border-blue-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                            placeholder="Label"
-                            autoFocus
-                          />
-                          <button onClick={() => saveLabel(p.id)} className="p-1 rounded-md text-blue-600 hover:bg-blue-50" title="Save"><Check size={14} /></button>
-                          <button onClick={() => setEditingLabel(null)} className="p-1 rounded-md text-gray-400 hover:bg-gray-100" title="Cancel"><X size={14} /></button>
-                        </div>
-                      ) : access.canEdit ? (
-                        <button
-                          onClick={() => { setEditingLabel(p.id); setLabelValue(p.label || '') }}
-                          className="group/name flex items-center gap-1.5 max-w-full text-[15px] font-semibold text-gray-900 hover:text-blue-600 transition-colors"
-                          title="Rename"
-                        >
-                          <span className="truncate">{name}</span>
-                          <Pencil size={12} className="shrink-0 text-gray-300 opacity-0 group-hover/name:opacity-100 transition-opacity" />
-                        </button>
-                      ) : (
-                        <p className="truncate text-[15px] font-semibold text-gray-900">{name}</p>
-                      )}
-                      {p.label && editingLabel !== p.id && (
-                        <p className="text-[11px] text-gray-400 font-mono truncate" title={p.device_id}>{p.device_id}</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Device + timeline + health */}
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-gray-500">
-                      <span className="inline-flex items-center gap-1.5 min-w-0">
-                        <Smartphone size={12} className="text-gray-400 shrink-0" />
-                        <span className="truncate">{meta.join(' · ')}</span>
-                      </span>
-                      <span className="hidden sm:inline text-gray-300">|</span>
-                      <span title={format(new Date(p.enrolled_at), 'PPpp')}>
-                        Enrolled {formatDistanceToNow(new Date(p.enrolled_at), { addSuffix: true })}
-                      </span>
-                      <span className="hidden sm:inline text-gray-300">|</span>
-                      <span
-                        className={`inline-flex items-center gap-1 ${p.consent_version ? '' : 'text-gray-400'}`}
-                        title={p.consent_at ? `Consent accepted ${format(new Date(p.consent_at), 'PPpp')}` : 'This app version did not report a consent version'}
-                      >
-                        <FileCheck2 size={12} className="shrink-0" />
-                        {p.consent_version ? `Consent ${p.consent_version}` : 'Consent not recorded'}
-                      </span>
-                      <span className="hidden sm:inline text-gray-300">|</span>
-                      <span
-                        className={`inline-flex items-center gap-1 ${!p.last_sync_at ? 'text-red-600 font-semibold' : stale ? 'text-amber-700 font-medium' : ''}`}
-                        title={p.last_sync_at ? format(new Date(p.last_sync_at), 'PPpp') : undefined}
-                      >
-                        <Clock size={12} className="shrink-0" />
-                        {p.last_sync_at
-                          ? `Synced ${formatDistanceToNow(new Date(p.last_sync_at), { addSuffix: true })}`
-                          : 'Never synced'}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {p.merged_into && !p.merge_adopted_at && (
-                        <Chip tone="blue" icon={<Hourglass size={11} />}>Waiting to adopt</Chip>
-                      )}
-                      {p.merged_into && p.merge_adopted_at && (
-                        <Chip tone="green" icon={<GitMerge size={11} />}>Primary adopted</Chip>
-                      )}
-                      {health && health.status !== 'success' && (
-                        <Chip tone="red" icon={<CircleAlert size={11} />} title={health.error_message || undefined}>
-                          Last sync {health.status}
-                        </Chip>
-                      )}
-                      {silentFor !== null ? (
-                        <Chip
-                          tone="red"
-                          icon={<AlertTriangle size={11} />}
-                          title={p.last_sync_at
-                            ? `Expected a sync every ${syncIntervalMinutes} min; last sync ${format(new Date(p.last_sync_at), 'PPpp')}`
-                            : 'Enrolled more than 24 h ago and has never synced'}
-                        >
-                          {p.last_sync_at ? `No sync for ${formatSilence(silentFor)}` : 'Never synced'} — app may be uninstalled
-                        </Chip>
-                      ) : stale && (
-                        <Chip tone="amber" icon={<AlertTriangle size={11} />}>Sync stale</Chip>
-                      )}
-                      {p.device_info?.pending_records ? (
-                        <Chip tone="amber" icon={<Database size={11} />}>
-                          {Number(p.device_info.pending_records).toLocaleString()} pending
-                        </Chip>
-                      ) : null}
-                      {hasPermIssues ? (
-                        <Chip tone="red" icon={<ShieldAlert size={11} />} title={missing.join(', ')}>
-                          {missing.length === 1 ? missing[0] : `${missing.length} permissions missing`}
-                        </Chip>
-                      ) : p.permissions && !isWithdrawn ? (
-                        <Chip tone="green" icon={<ShieldCheck size={11} />}>All permissions</Chip>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {/* Status + actions */}
-                  <div className="flex items-center gap-2 lg:shrink-0 pt-2.5 lg:pt-0 border-t lg:border-t-0 border-gray-100">
-                    {!access.canEdit ? (
-                      <span className={`rounded-full border px-3 py-1 text-xs font-semibold capitalize ${p.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>{p.status}</span>
-                    ) : (
-                    <div className="relative">
-                      <select
-                        value={p.status}
-                        onChange={e => updateStatus(p.id, e.target.value)}
-                        aria-label="Participant status"
-                        className={`appearance-none pl-6 pr-7 py-1.5 rounded-full text-xs font-semibold border cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${
-                          p.status === 'active'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                            : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-gray-200'
-                        }`}
-                      >
-                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
-                      </select>
-                      <span className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${p.status === 'active' ? 'bg-emerald-500' : 'bg-gray-400'}`} />
-                      <ChevronDown size={12} className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 ${p.status === 'active' ? 'text-emerald-600' : 'text-gray-500'}`} />
-                    </div>
-                    )}
-
-                    <div className="ml-auto lg:ml-0 flex items-center rounded-lg border border-gray-200 bg-white divide-x divide-gray-200 overflow-hidden">
-                      <Link href={`/studies/${studyId}/data?participant=${p.id}`} className={ACTION_BTN} title="View sensor data">
-                        <ChartColumn size={14} /><span className="hidden xl:inline">Data</span>
-                      </Link>
-                      <Link href={`/studies/${studyId}/esm-responses?participant=${p.id}`} className={ACTION_BTN} title="View survey responses">
-                        <MessageSquare size={14} /><span className="hidden xl:inline">Surveys</span>
-                      </Link>
-                      <button onClick={() => setSyncModalParticipant(p)} className={ACTION_BTN} title="Sync history">
-                        <Activity size={14} /><span className="hidden xl:inline">Sync</span>
-                      </button>
-                      <button onClick={() => setPermModalParticipant(p)} className={ACTION_BTN} title="Permission history">
-                        <ShieldCheck size={14} /><span className="hidden xl:inline">Permissions</span>
-                      </button>
-                      {access.canManage && (
-                        <button onClick={() => setDeleteTarget(p)} className={`${ACTION_BTN} hover:!bg-red-50 hover:!text-red-600`} title="Delete participant and all their data">
-                          <Trash2 size={14} /><span className="sr-only">Delete</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
+          {filtered.length === 0 ? (
+            <EmptyState icon={<Search size={24} />} title="No matches" hint="Try a different search or filter.">
+              <Button variant="secondary" size="sm" onClick={() => { setSearch(''); setParam('filter', null) }}>Show everyone</Button>
+            </EmptyState>
+          ) : (
+            <div className={q.loading ? 'opacity-70 transition-opacity' : ''} aria-busy={q.loading}>
+              {/* Table from md up (first in the DOM) */}
+              <div className="hidden md:block">
+                <TableWrap>
+                  <THead>
+                    <tr>
+                      <Th>Participant</Th>
+                      <Th className="hidden lg:table-cell">Device</Th>
+                      <Th>Status</Th>
+                      <Th>Last sync</Th>
+                      <Th>Sync health</Th>
+                      <Th>Permissions</Th>
+                      <Th align="right"><span className="sr-only">Actions</span></Th>
+                    </tr>
+                  </THead>
+                  <tbody>
+                    {visible.map(({ p, health, latest, permText }) => (
+                      <Tr key={p.id} className={p.status === 'withdrawn' ? 'opacity-75' : ''}>
+                        <Td className="max-w-64">{nameCell(p)}</Td>
+                        <Td className="hidden max-w-56 truncate text-muted lg:table-cell" title={deviceSummary(p)}>{deviceSummary(p)}</Td>
+                        <Td><Badge tone={p.status === 'active' ? 'green' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Withdrawn'}</Badge></Td>
+                        <Td className="whitespace-nowrap text-muted" title={p.last_sync_at ? format(new Date(p.last_sync_at), 'PPpp') : undefined}>{relative(p.last_sync_at)}</Td>
+                        <Td>
+                          <div className="flex flex-wrap gap-1">
+                            {p.status === 'active' && <Badge tone={health.tone} title={health.description}>{health.label}</Badge>}
+                            {latest && latest.status !== 'success' && (
+                              <Badge tone={SYNC_STATUS[latest.status as SyncStatusKey]?.tone ?? 'red'} title={latest.error_message || undefined}>
+                                Last sync {SYNC_STATUS[latest.status as SyncStatusKey]?.label.toLowerCase() ?? latest.status}
+                              </Badge>
+                            )}
+                            {p.status === 'withdrawn' && <span className="text-subtle">—</span>}
+                          </div>
+                        </Td>
+                        <Td>
+                          {p.status !== 'active' ? <span className="text-subtle">—</span>
+                            : permText ? <Badge tone="red" title={(missingPermissions(p.permissions) ?? []).map(permissionLabel).join(', ') || undefined}>{permText}</Badge>
+                              : <Badge tone="green">All on</Badge>}
+                        </Td>
+                        <Td align="right">{rowActions(p)}</Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
               </div>
-            )
-          })}
-        </div>
+
+              {/* Cards on phones */}
+              <ul className="space-y-2 md:hidden">
+                {visible.map(({ p, health, latest, permText }) => (
+                  <li key={p.id} className={`rounded-xl border border-line bg-surface p-4 shadow-card ${p.status === 'withdrawn' ? 'opacity-75' : ''}`}>
+                    {nameCell(p)}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Badge tone={p.status === 'active' ? 'green' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Withdrawn'}</Badge>
+                      {p.status === 'active' && <Badge tone={health.tone}>{health.label}</Badge>}
+                      {latest && latest.status !== 'success' && <Badge tone="red">Last sync {latest.status}</Badge>}
+                      {p.status === 'active' && permText && <Badge tone="red">{permText}</Badge>}
+                    </div>
+                    <p className="mt-2 text-xs text-subtle">{deviceSummary(p)} · synced {relative(p.last_sync_at).toLowerCase()}</p>
+                    <div className="mt-2 border-t border-line pt-2">{rowActions(p)}</div>
+                  </li>
+                ))}
+              </ul>
+
+              {filtered.length > PAGE_SIZE && (
+                <Pagination className="mt-3" page={page} pageSize={PAGE_SIZE} total={filtered.length}
+                  onPage={next => setPageState({ key: pageKey, page: next })} />
+              )}
+            </div>
+          )}
+        </>
       )}
 
-      {/* Sync History Modal */}
-      {syncModalParticipant && (
-        <SyncHistoryModal
-          participant={syncModalParticipant}
-          onClose={() => setSyncModalParticipant(null)}
-        />
+      {open && (
+        <ParticipantDrawer p={open.p} health={open.health} latest={open.latest} interval={interval} studyId={studyId}
+          canEdit={access.canEdit} canManage={access.canManage} suspended={anyModal}
+          onClose={() => setParam('participant', null)}
+          onStatus={next => { setStatusError(null); setStatusTarget({ p: open.p, next }) }}
+          onDelete={() => setDeleteTarget(open.p)}
+          onSyncHistory={() => setSyncTarget(open.p)}
+          onPermissionHistory={() => setPermTarget(open.p)} />
       )}
 
-      {/* Permission History Modal */}
-      {permModalParticipant && (
-        <PermissionHistoryModal
-          participant={permModalParticipant}
-          onClose={() => setPermModalParticipant(null)}
-        />
-      )}
+      {syncTarget && <SyncHistoryModal participant={syncTarget} onClose={() => setSyncTarget(null)} />}
+      {permTarget && <PermissionHistoryModal participant={permTarget} onClose={() => setPermTarget(null)} />}
       {deleteTarget && (
         <DeleteParticipantModal
-          participant={{ id: deleteTarget.id, name: pName(deleteTarget), deviceId: deleteTarget.device_id }}
-          mergedChildren={participants.filter(x => x.merged_into === deleteTarget.id).map(pName)}
+          participant={{ id: deleteTarget.id, name: participantName(deleteTarget), deviceId: deleteTarget.device_id }}
+          mergedChildren={participants.filter(x => x.merged_into === deleteTarget.id).map(participantName)}
           onClose={() => setDeleteTarget(null)}
           onDeleted={summary => {
             setNotice({ tone: 'success', text: summary })
-            setDetailParticipant(null)
-            void load()
+            if (openId === deleteTarget.id) setParam('participant', null)
+            q.retry()
           }}
         />
       )}
-      {detailParticipant && (
-        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-labelledby="participant-detail-title">
-          <button className="absolute inset-0 bg-slate-950/40" onClick={() => setDetailParticipant(null)} aria-label="Close participant details" />
-          <aside className="relative flex h-full w-full max-w-md flex-col bg-white shadow-2xl">
-            <div className="flex items-start justify-between border-b border-gray-200 p-5">
-              <div><p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Participant</p><h2 id="participant-detail-title" className="mt-1 text-xl font-bold text-gray-900">{pName(detailParticipant)}</h2><p className="mt-1 font-mono text-xs text-gray-500">{detailParticipant.device_id}</p></div>
-              <button onClick={() => setDetailParticipant(null)} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100" aria-label="Close participant details"><X size={18} /></button>
-            </div>
-            <div className="flex-1 space-y-5 overflow-y-auto p-5">
-              <div className="grid grid-cols-2 gap-3"><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Status</p><p className="mt-1 text-sm font-semibold capitalize text-gray-900">{detailParticipant.status}</p></div><div className="rounded-xl bg-gray-50 p-3"><p className="text-xs text-gray-500">Last sync</p><p className="mt-1 text-sm font-semibold text-gray-900">{detailParticipant.last_sync_at ? formatDistanceToNow(new Date(detailParticipant.last_sync_at), { addSuffix: true }) : 'Never'}</p></div></div>
-              <div><h3 className="text-sm font-semibold text-gray-900">Health</h3><div className="mt-2 flex flex-wrap gap-2">{isSyncStale(detailParticipant) && <span className="rounded-md bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">Sync overdue</span>}{hasPermIssue(detailParticipant) && <span className="rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-700">Permission issue</span>}{!isSyncStale(detailParticipant) && !hasPermIssue(detailParticipant) && <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Healthy</span>}</div></div>
-              <div><h3 className="text-sm font-semibold text-gray-900">Consent</h3><p className="mt-1 text-sm text-gray-600">{detailParticipant.consent_version ? <>Version <span className="font-mono">{detailParticipant.consent_version}</span>{detailParticipant.consent_at && <> · accepted {format(new Date(detailParticipant.consent_at), 'PPpp')}</>}</> : 'Not recorded (enrolled with an app version that did not report it).'}</p></div>
-              {access.canEdit && <div className="border-t border-gray-200 pt-5"><label className="text-sm font-semibold text-gray-900">Participant status<select value={detailParticipant.status} onChange={e => updateStatus(detailParticipant.id, e.target.value)} className="mt-2 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-normal text-gray-700">{STATUS_OPTIONS.map(status => <option key={status} value={status}>{status}</option>)}</select></label></div>}
-              {access.canManage && <div className="border-t border-gray-200 pt-5"><button onClick={() => setDeleteTarget(detailParticipant)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50"><Trash2 size={14} /> Delete participant…</button></div>}
-            </div>
-          </aside>
-        </div>
-      )}
+      <ConfirmDialog
+        open={!!statusTarget}
+        title={statusTarget?.next === 'withdrawn' ? `Withdraw ${statusTarget ? participantName(statusTarget.p) : ''}?` : `Reactivate ${statusTarget ? participantName(statusTarget.p) : ''}?`}
+        body={statusTarget?.next === 'withdrawn'
+          ? 'The phone stops collecting and uploading. Data already received is kept.'
+          : 'The phone starts collecting and uploading again at its next sync.'}
+        confirmLabel={statusTarget?.next === 'withdrawn' ? 'Withdraw' : 'Reactivate'}
+        tone={statusTarget?.next === 'withdrawn' ? 'danger' : 'default'}
+        busy={statusBusy}
+        error={statusError}
+        onConfirm={confirmStatus}
+        onCancel={() => { if (!statusBusy) setStatusTarget(null) }}
+      />
     </div>
   )
 }

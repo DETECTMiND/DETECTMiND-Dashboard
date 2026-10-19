@@ -4,12 +4,20 @@ import { useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
-import type { NotificationRow } from './types'
+import { localDay } from '@/lib/csv'
+import type { ChartParticipant, NotificationRow } from './types'
+import { C, ChartEmpty, ChartSection, axisLine, axisTick, gridProps, intensity, tooltipProps, useElementWidth } from './theme'
 
 interface Props {
   data: NotificationRow[]
-  participants: { id: string; label: string | null; device_id: string }[]
+  participants: ChartParticipant[]
   showParticipant: boolean
+}
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function shortDay(day: string) {
+  return new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 export default function NotificationsChart({ data }: Props) {
@@ -19,64 +27,29 @@ export default function NotificationsChart({ data }: Props) {
     return (Math.max(...times) - Math.min(...times)) / 86400000
   }, [data])
 
-  // ── Heatmap data ─────────────────────────────────────────────────────────────
-  const { heatmap, xLabels } = useMemo(() => {
-    const useExactDates = spanDays <= 14
-    const cellMap: Record<string, Record<number, number>> = {}
-
+  // Day × hour counts: exact local dates for up to two weeks, else averaged per weekday
+  const { heatmap, xKeys, xLabels } = useMemo(() => {
+    const exact = spanDays <= 14
+    const cells: Record<string, number[]> = {}
     for (const r of data) {
       const d = new Date(r.posted_at)
-      const xKey = useExactDates
-        ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-        : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][(d.getDay() + 6) % 7]
-      const h = d.getHours()
-      if (!cellMap[xKey]) cellMap[xKey] = {}
-      cellMap[xKey][h] = (cellMap[xKey][h] ?? 0) + 1
+      const key = exact ? localDay(d) : WEEKDAYS[(d.getDay() + 6) % 7]
+      ;(cells[key] ||= new Array(24).fill(0))[d.getHours()]++
     }
-
-    const xLabels = useExactDates
-      ? Array.from(new Set(data.map(r => {
-          const d = new Date(r.posted_at)
-          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-        }))).sort((a, b) => {
-          const ta = data.find(r => new Date(r.posted_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) === a)
-          const tb = data.find(r => new Date(r.posted_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) === b)
-          return new Date(ta?.posted_at ?? 0).getTime() - new Date(tb?.posted_at ?? 0).getTime()
-        })
-      : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
-    // If day-of-week mode, average counts
-    if (!useExactDates) {
-      const countMap: Record<string, number> = {}
-      for (const r of data) {
-        const d = new Date(r.posted_at)
-        const key = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][(d.getDay() + 6) % 7]
-        countMap[key] = (countMap[key] ?? 0) + 1
-      }
+    const keys = exact ? Object.keys(cells).sort() : WEEKDAYS
+    if (!exact) {
       const weeks = Math.max(1, Math.ceil(spanDays / 7))
-      for (const xk of xLabels) {
-        if (!cellMap[xk]) cellMap[xk] = {}
-        for (let h = 0; h < 24; h++) {
-          if (cellMap[xk][h]) cellMap[xk][h] = Math.round(cellMap[xk][h] / weeks)
-        }
-      }
+      for (const k of keys) cells[k] = (cells[k] || new Array(24).fill(0)).map(v => Math.round(v / weeks))
     }
-
-    return { heatmap: cellMap, xLabels }
+    return { heatmap: cells, xKeys: keys, xLabels: exact ? keys.map(shortDay) : keys }
   }, [data, spanDays])
 
   const heatmapMax = useMemo(() => {
     let max = 0
-    for (const xk of xLabels) {
-      for (let h = 0; h < 24; h++) {
-        const v = heatmap[xk]?.[h] ?? 0
-        if (v > max) max = v
-      }
-    }
+    for (const k of xKeys) for (const v of heatmap[k] ?? []) if (v > max) max = v
     return max || 1
-  }, [heatmap, xLabels])
+  }, [heatmap, xKeys])
 
-  // ── Top apps ─────────────────────────────────────────────────────────────────
   const topApps = useMemo(() => {
     const map = new Map<string, number>()
     for (const r of data) {
@@ -89,58 +62,40 @@ export default function NotificationsChart({ data }: Props) {
       .map(([app, count]) => ({ app, count }))
   }, [data])
 
-  const cellW = Math.max(28, Math.floor(640 / Math.max(xLabels.length, 1)))
-  const cellH = 20
-  const labelW = 40
+  const [wrapRef, width] = useElementWidth<HTMLDivElement>()
+  const labelW = 36
+  const cellW = Math.max(14, (width - labelW) / Math.max(xKeys.length, 1))
+  const cellH = 18
   const xAxisH = 18
-  const svgW = labelW + xLabels.length * cellW
+  const svgW = Math.max(width, labelW + xKeys.length * cellW)
   const svgH = 24 * cellH + xAxisH
+  const labelEvery = Math.max(1, Math.ceil(44 / cellW))
 
-  if (!data.length) return (
-    <div className="py-12 text-center text-sm text-gray-400">No notification data available.</div>
-  )
+  if (!data.length) return <ChartEmpty>No notification data available.</ChartEmpty>
 
   return (
     <div className="space-y-8">
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-1">Notification Heatmap (Day × Hour)</h3>
-        <p className="text-[10px] text-gray-400 mb-3">
-          {spanDays <= 14 ? 'Exact dates' : 'Averaged by day of week'} · colour intensity = notification count
-        </p>
-        <div className="overflow-x-auto">
-          <svg width={svgW} height={svgH} style={{ display: 'block' }}>
+      <ChartSection title="Notifications by day and hour"
+        hint={spanDays <= 14 ? 'Darker cells mean more notifications.' : 'Averaged per weekday. Darker cells mean more notifications.'}>
+        <div ref={wrapRef} className="w-full overflow-x-auto">
+          <svg width={svgW} height={svgH} role="img" aria-label="Heatmap of notifications by day and hour" style={{ display: 'block' }}>
             {Array.from({ length: 24 }, (_, h) => (
               <g key={h} transform={`translate(0, ${h * cellH})`}>
-                <text x={labelW - 4} y={cellH / 2} textAnchor="end" dominantBaseline="middle" fontSize={9} fill="#9ca3af">
-                  {h}h
-                </text>
-                {xLabels.map((xk, xi) => {
+                {h % 3 === 0 && (
+                  <text x={labelW - 4} y={cellH / 2} textAnchor="end" dominantBaseline="middle" fontSize={9} fill={C.axis}>{h}h</text>
+                )}
+                {xKeys.map((xk, xi) => {
                   const v = heatmap[xk]?.[h] ?? 0
-                  const opacity = v / heatmapMax
+                  const amount = v / heatmapMax
                   return (
                     <g key={xk}>
-                      <rect
-                        x={labelW + xi * cellW + 1}
-                        y={1}
-                        width={cellW - 2}
-                        height={cellH - 2}
-                        fill={`rgba(59,130,246,${opacity.toFixed(3)})`}
-                        rx={2}
-                      >
-                        <title>{`${xk} ${h}:00 — ${v} notifications`}</title>
+                      <rect x={labelW + xi * cellW + 1} y={1} width={Math.max(1, cellW - 2)} height={cellH - 2} rx={2}
+                        fill={v > 0 ? intensity(C.blue, 0.12 + 0.88 * amount) : C.sunken}>
+                        <title>{`${xLabels[xi]} ${h}:00: ${v} notification${v === 1 ? '' : 's'}`}</title>
                       </rect>
                       {v > 0 && cellW >= 28 && (
-                        <text
-                          x={labelW + xi * cellW + cellW / 2}
-                          y={cellH / 2}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                          fontSize={8}
-                          fill={opacity > 0.5 ? '#fff' : '#374151'}
-                          pointerEvents="none"
-                        >
-                          {v}
-                        </text>
+                        <text x={labelW + xi * cellW + cellW / 2} y={cellH / 2} textAnchor="middle" dominantBaseline="middle"
+                          fontSize={8} fill={amount > 0.5 ? '#fff' : C.fg} pointerEvents="none">{v}</text>
                       )}
                     </g>
                   )
@@ -148,41 +103,28 @@ export default function NotificationsChart({ data }: Props) {
               </g>
             ))}
             <g transform={`translate(0, ${24 * cellH})`}>
-              {xLabels.map((xk, xi) => (
-                <text
-                  key={xk}
-                  x={labelW + xi * cellW + cellW / 2}
-                  y={xAxisH - 4}
-                  textAnchor="middle"
-                  fontSize={9}
-                  fill="#6b7280"
-                >
-                  {xk}
+              {xKeys.map((xk, xi) => xi % labelEvery === 0 ? (
+                <text key={xk} x={labelW + xi * cellW + cellW / 2} y={xAxisH - 4} textAnchor="middle" fontSize={9} fill={C.axis}>
+                  {xLabels[xi]}
                 </text>
-              ))}
+              ) : null)}
             </g>
           </svg>
         </div>
-      </div>
+      </ChartSection>
 
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Top Notification Sources</h3>
+      <ChartSection title="Top notification sources">
         <ResponsiveContainer width="100%" height={Math.max(180, topApps.length * 28)}>
-          <BarChart layout="vertical" data={topApps} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" tick={{ fontSize: 11 }} />
-            <YAxis
-              type="category"
-              dataKey="app"
-              width={150}
-              tick={{ fontSize: 11 }}
-              tickFormatter={(v: string) => v.length > 20 ? v.slice(0, 19) + '…' : v}
-            />
-            <Tooltip formatter={v => [v, 'Notifications']} />
-            <Bar dataKey="count" fill="#3b82f6" radius={[0, 3, 3, 0]} isAnimationActive={false} />
+          <BarChart layout="vertical" data={topApps} margin={{ top: 4, right: 24, bottom: 4, left: 0 }}>
+            <CartesianGrid {...gridProps} horizontal={false} />
+            <XAxis type="number" tick={axisTick} axisLine={axisLine} tickLine={false} allowDecimals={false} />
+            <YAxis type="category" dataKey="app" width={width < 480 ? 100 : 150} tick={axisTick} axisLine={false} tickLine={false}
+              tickFormatter={(v: string) => v.length > 20 ? v.slice(0, 19) + '…' : v} />
+            <Tooltip {...tooltipProps} formatter={v => [v, 'Notifications']} />
+            <Bar dataKey="count" fill={C.blue} radius={[0, 3, 3, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </ChartSection>
     </div>
   )
 }

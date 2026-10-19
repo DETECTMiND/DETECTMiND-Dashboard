@@ -5,9 +5,11 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
+import { localDay } from '@/lib/csv'
 import type { ChartParticipant as Participant, ChartPoint, LocationRow } from './types'
+import { ChartEmpty, ChartSection, axisLine, axisTick, gridProps, legendStyle, seriesColor, tooltipProps, useResolvedColors } from './theme'
 
-const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
+const CANVAS_VARS = ['--chart-1', '--chart-2', '--chart-3', '--chart-4', '--chart-5', '--chart-6', '--chart-7', '--chart-8', '--chart-grid', '--chart-axis', '--surface-sunken']
 
 interface Props {
   data: LocationRow[]
@@ -35,11 +37,12 @@ export default function LocationChart({ data, participants, showParticipant }: P
 
   const allDates = useMemo(() => {
     const s = new Set<string>()
-    for (const r of data) s.add(r.recorded_at?.slice(0, 10) ?? '')
+    for (const r of data) if (r.recorded_at) s.add(localDay(r.recorded_at))
     return Array.from(s).filter(Boolean).sort()
   }, [data])
 
   const [selectedDay, setSelectedDay] = useState('all')
+  const colors = useResolvedColors(CANVAS_VARS)
 
   // Responsive canvas width
   useEffect(() => {
@@ -63,14 +66,14 @@ export default function LocationChart({ data, participants, showParticipant }: P
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const filtered = selectedDay === 'all' ? data : data.filter(r => r.recorded_at?.startsWith(selectedDay))
+    const filtered = selectedDay === 'all' ? data : data.filter(r => r.recorded_at && localDay(r.recorded_at) === selectedDay)
     const validPoints = filtered.filter(r => r.latitude != null && r.longitude != null)
 
     if (!validPoints.length) {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
-      ctx.fillStyle = '#f9fafb'
+      ctx.fillStyle = colors['--surface-sunken'] || '#f1f5f9'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
-      ctx.fillStyle = '#9ca3af'
+      ctx.fillStyle = colors['--chart-axis'] || '#64748b'
       ctx.font = '13px sans-serif'
       ctx.textAlign = 'center'
       ctx.fillText('No location data for this selection', canvas.width / 2, canvas.height / 2)
@@ -95,11 +98,11 @@ export default function LocationChart({ data, participants, showParticipant }: P
     }
 
     ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#f8fafc'
+    ctx.fillStyle = colors['--surface-sunken'] || '#f1f5f9'
     ctx.fillRect(0, 0, W, H)
 
     // Grid
-    ctx.strokeStyle = '#e2e8f0'
+    ctx.strokeStyle = colors['--chart-grid'] || '#e2e8f0'
     ctx.lineWidth = 0.5
     for (let i = 0; i <= 8; i++) {
       const x = PAD + i * (W - PAD * 2) / 8
@@ -115,11 +118,12 @@ export default function LocationChart({ data, participants, showParticipant }: P
         .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime())
       if (!pPoints.length) continue
       const idx = pIds.indexOf(pid)
-      const color = PALETTE[idx % PALETTE.length]
+      const color = colors[`--chart-${(idx % 8) + 1}`] || '#2563eb'
 
       if (selectedDay !== 'all' && pPoints.length > 1) {
         ctx.beginPath()
-        ctx.strokeStyle = color + '66'
+        ctx.strokeStyle = color
+        ctx.globalAlpha = 0.4
         ctx.lineWidth = 1.5
         const [x0, y0] = toXY(pPoints[0].latitude, pPoints[0].longitude)
         ctx.moveTo(x0, y0)
@@ -130,17 +134,19 @@ export default function LocationChart({ data, participants, showParticipant }: P
         ctx.stroke()
       }
 
+      ctx.globalAlpha = 0.8
       for (const pt of pPoints) {
         const [x, y] = toXY(pt.latitude, pt.longitude)
         ctx.beginPath()
         ctx.arc(x, y, selectedDay === 'all' ? 3 : 4, 0, Math.PI * 2)
-        ctx.fillStyle = color + 'cc'
+        ctx.fillStyle = color
         ctx.fill()
       }
+      ctx.globalAlpha = 1
     }
 
     // Axis labels
-    ctx.fillStyle = '#94a3b8'
+    ctx.fillStyle = colors['--chart-axis'] || '#64748b'
     ctx.font = '10px monospace'
     ctx.textAlign = 'left'
     ctx.fillText(`${minLat.toFixed(4)}°N`, 2, H - PAD - 2)
@@ -149,15 +155,15 @@ export default function LocationChart({ data, participants, showParticipant }: P
     ctx.fillText(`${minLon.toFixed(4)}°E`, PAD, H - 4)
     ctx.textAlign = 'right'
     ctx.fillText(`${maxLon.toFixed(4)}°E`, W - 4, H - 4)
-  }, [data, selectedDay, pIds, canvasW])
+  }, [data, selectedDay, pIds, canvasW, colors])
 
   // ── Mobility metrics ──────────────────────────────────────────────────────────
   const mobilityData = useMemo(() => {
     const dateMap = new Map<string, Record<string, { lats: number[]; lons: number[] }>>()
     for (const r of data) {
       if (r.latitude == null || r.longitude == null) continue
-      const date = r.recorded_at?.slice(0, 10)
-      if (!date) continue
+      if (!r.recorded_at) continue
+      const date = localDay(r.recorded_at)
       if (!dateMap.has(date)) dateMap.set(date, {})
       const dm = dateMap.get(date)!
       if (!dm[r.participant_id]) dm[r.participant_id] = { lats: [], lons: [] }
@@ -192,22 +198,21 @@ export default function LocationChart({ data, participants, showParticipant }: P
     return Array.from({ length: 24 }, (_, h) => ({ hour: h, ...buckets[h] }))
   }, [data])
 
-  if (!data.length) return (
-    <div className="py-12 text-center text-sm text-gray-400">No location data available.</div>
-  )
+  if (!data.length) return <ChartEmpty>No location data available.</ChartEmpty>
 
   return (
     <div className="space-y-8">
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h3 className="text-sm font-semibold text-gray-700">Location Scatter Map</h3>
-            <p className="text-[10px] text-gray-400 mt-0.5">Select a day to see mobility path · All days shows point cloud</p>
+            <h3 className="text-sm font-semibold text-fg">Location points</h3>
+            <p className="mt-0.5 text-xs text-subtle">Pick a day to see the path taken; all days shows every point.</p>
           </div>
           <select
             value={selectedDay}
             onChange={e => setSelectedDay(e.target.value)}
-            className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 focus:outline-none"
+            aria-label="Day to show"
+            className="h-8 rounded-lg border border-line bg-surface px-2 text-xs text-fg"
           >
             <option value="all">All days</option>
             {allDates.map(d => <option key={d} value={d}>{d}</option>)}
@@ -216,7 +221,8 @@ export default function LocationChart({ data, participants, showParticipant }: P
         <div ref={containerRef} className="w-full">
           <canvas
             ref={canvasRef}
-            className="w-full rounded-lg border border-gray-100 bg-gray-50 block"
+            className="block w-full rounded-lg border border-line bg-sunken"
+            role="img" aria-label="Scatter plot of location points"
           />
         </div>
         {showParticipant && (
@@ -224,8 +230,8 @@ export default function LocationChart({ data, participants, showParticipant }: P
             {pIds.map((pid, idx) => {
               const p = pMap[pid]
               return (
-                <span key={pid} className="flex items-center gap-1.5 text-xs text-gray-600">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PALETTE[idx % PALETTE.length] }} />
+                <span key={pid} className="flex items-center gap-1.5 text-xs text-muted">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: seriesColor(idx) }} />
                   {p ? pName(p) : pid}
                 </span>
               )
@@ -234,16 +240,14 @@ export default function LocationChart({ data, participants, showParticipant }: P
         )}
       </div>
 
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-1">Daily Mobility (Radius of Gyration)</h3>
-        <p className="text-[10px] text-gray-400 mb-3">Distance (km) from centroid — proxy for daily movement range</p>
+      <ChartSection title="Daily mobility (radius of gyration)" hint="Typical distance in km from the day's centre point, a proxy for how far the participant moved.">
         <ResponsiveContainer width="100%" height={240}>
           <LineChart data={mobilityData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-            <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
-            <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} unit=" km" />
-            <Tooltip formatter={v => [`${v} km`]} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <CartesianGrid {...gridProps} vertical={false} />
+            <XAxis dataKey="date" tick={axisTick} tickLine={false} axisLine={axisLine} minTickGap={16} />
+            <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} unit=" km" />
+            <Tooltip {...tooltipProps} formatter={v => [`${v} km`]} />
+            <Legend wrapperStyle={legendStyle} />
             {pIds.map((pid, idx) => {
               const p = pMap[pid]
               return (
@@ -252,7 +256,7 @@ export default function LocationChart({ data, participants, showParticipant }: P
                   type="monotone"
                   dataKey={pid}
                   name={p ? pName(p) : pid}
-                  stroke={PALETTE[idx % PALETTE.length]}
+                  stroke={seriesColor(idx)}
                   dot={{ r: 3 }}
                   connectNulls
                   strokeWidth={2}
@@ -262,27 +266,26 @@ export default function LocationChart({ data, participants, showParticipant }: P
             })}
           </LineChart>
         </ResponsiveContainer>
-      </div>
+      </ChartSection>
 
-      <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">GPS Fix Density by Hour</h3>
+      <ChartSection title="Location fixes by hour of day">
         <ResponsiveContainer width="100%" height={180}>
           <BarChart data={hourData} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-            <XAxis dataKey="hour" tickFormatter={h => `${h}h`} tick={{ fontSize: 10 }} tickLine={false} axisLine={{ stroke: '#e5e7eb' }} />
-            <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-            <Tooltip labelFormatter={h => `${h}:00`} />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <CartesianGrid {...gridProps} vertical={false} />
+            <XAxis dataKey="hour" tickFormatter={h => `${h}h`} tick={axisTick} tickLine={false} axisLine={axisLine} minTickGap={8} />
+            <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} />
+            <Tooltip {...tooltipProps} labelFormatter={h => `${h}:00`} />
+            <Legend wrapperStyle={legendStyle} />
             {pIds.map((pid, idx) => {
               const p = pMap[pid]
               return (
                 <Bar key={pid} dataKey={pid} name={p ? pName(p) : pid}
-                  stackId="a" fill={PALETTE[idx % PALETTE.length]} isAnimationActive={false} />
+                  stackId="a" fill={seriesColor(idx)} isAnimationActive={false} />
               )
             })}
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </ChartSection>
     </div>
   )
 }
