@@ -29,7 +29,7 @@ type Filter = (typeof FILTERS)[number]
 const FILTER_LABEL: Record<Filter, string> = { all: 'All', pending: 'Pending approval', active: 'Active', paused: 'Paused', completed: 'Completed' }
 
 // Fixed tracks shared by the header and rows so columns line up
-const COLS = 'md:grid-cols-[minmax(0,2fr)_9.5rem_minmax(0,1.5fr)_6.5rem_7rem_2.5rem]'
+const COLS = 'xl:grid-cols-[minmax(0,2fr)_9.5rem_minmax(0,1.5fr)_6.5rem_7rem_2.5rem]'
 
 function matchesFilter(st: StudyView, f: Filter) {
   if (f === 'all') return true
@@ -141,28 +141,28 @@ function AdminStudies() {
       ) : (
         <div className="overflow-hidden rounded-lg border border-line bg-surface">
           {/* Column headings from md up; below md each row is a card. */}
-          <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid ${COLS}`}>
+          <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle xl:grid ${COLS}`}>
             <span>Study</span><span>Status</span><span>Owners</span><span>Participants</span><span>Created</span><span className="sr-only">Actions</span>
           </div>
           <ul className="divide-y divide-line" aria-label="Studies">
             {visible.map(st => (
               <li key={st.id} data-testid="study-row" data-study-id={st.id}
-                className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 px-4 py-3.5 md:items-center ${COLS}`}>
+                className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 px-4 py-3.5 xl:items-center ${COLS}`}>
                 <div className="min-w-0">
                   <Link href={studyPaths(st.id).overview} className="block truncate text-sm font-medium text-fg hover:text-accent" title={st.name}>{st.name}</Link>
                 </div>
-                <div className="order-3 md:order-none"><StatusPill study={st} /></div>
-                <div className="order-4 col-span-2 min-w-0 text-sm md:order-none md:col-span-1">
-                  <span className="mr-1 text-xs text-subtle md:hidden">Owners:</span>
+                <div className="order-3 xl:order-none"><StatusPill study={st} /></div>
+                <div className="order-4 col-span-2 min-w-0 text-sm xl:order-none xl:col-span-1">
+                  <span className="mr-1 text-xs text-subtle xl:hidden">Owners:</span>
                   {st.owners.length === 0
                     ? <span className="text-danger">No owner</span>
                     : <span className="break-words text-muted">{st.owners.join(', ')}</span>}
                 </div>
-                <div className="order-5 col-span-2 flex gap-6 text-sm text-muted md:order-none md:col-span-1 md:contents">
-                  <p className="tabular-nums"><span className="mr-1 text-xs text-subtle md:hidden">Participants:</span>{st.participantCount ?? '—'}</p>
-                  <p><span className="mr-1 text-xs text-subtle md:hidden">Created:</span>{format(new Date(st.created_at), 'd MMM yyyy')}</p>
+                <div className="order-5 col-span-2 flex gap-6 text-sm text-muted xl:order-none xl:col-span-1 xl:contents">
+                  <p className="tabular-nums"><span className="mr-1 text-xs text-subtle xl:hidden">Participants:</span>{st.participantCount ?? '—'}</p>
+                  <p><span className="mr-1 text-xs text-subtle xl:hidden">Created:</span>{format(new Date(st.created_at), 'd MMM yyyy')}</p>
                 </div>
-                <div className="order-2 flex justify-end md:order-none">
+                <div className="order-2 flex justify-end xl:order-none">
                   <ActionMenu label={`Actions for ${st.name}`} items={[
                     { label: 'Open overview', icon: <ArrowRight />, href: studyPaths(st.id).overview },
                     { label: 'Manage team', icon: <UsersRound />, href: studyPaths(st.id).team },

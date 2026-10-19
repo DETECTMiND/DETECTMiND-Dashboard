@@ -624,7 +624,7 @@ function ParticipantsContent() {
                   <THead>
                     <tr>
                       <Th>Participant</Th>
-                      <Th className="hidden lg:table-cell">Device</Th>
+                      <Th className="hidden xl:table-cell">Device</Th>
                       <Th>Status</Th>
                       <Th>Last sync</Th>
                       <Th>Sync health</Th>
@@ -636,7 +636,7 @@ function ParticipantsContent() {
                     {visible.map(({ p, health, latest, permText }) => (
                       <Tr key={p.id} className={p.status === 'withdrawn' ? 'opacity-75' : ''}>
                         <Td className="max-w-64">{nameCell(p)}</Td>
-                        <Td className="hidden max-w-56 truncate text-muted lg:table-cell" title={deviceSummary(p)}>{deviceSummary(p)}</Td>
+                        <Td className="hidden max-w-56 truncate text-muted xl:table-cell" title={deviceSummary(p)}>{deviceSummary(p)}</Td>
                         <Td><Badge tone={p.status === 'active' ? 'green' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Withdrawn'}</Badge></Td>
                         <Td className="whitespace-nowrap text-muted" title={p.last_sync_at ? format(new Date(p.last_sync_at), 'PPpp') : undefined}>{relative(p.last_sync_at)}</Td>
                         <Td>

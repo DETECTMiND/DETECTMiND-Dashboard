@@ -68,7 +68,8 @@ last-admin guard, the menus and tabs, old-address redirects, dark mode, and ever
 phone width.
 
 `SCREENSHOTS=1 npx playwright test e2e/screenshots.spec.ts` saves every page in light and
-dark to `e2e-screenshots/review/` for a visual check.
+dark to `e2e-screenshots/review/`, and every page at phone (375 px), tablet (768 px) and
+tablet-landscape (1024 px) widths to `e2e-screenshots/responsive/`, reporting any sideways overflow.
 
 ## Navigation
 

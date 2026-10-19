@@ -54,7 +54,7 @@ const STATUS_FILTERS: { value: '' | Status; label: string }[] = [
 ]
 
 // Fixed tracks shared by the header and every row, so columns line up
-const COLS = 'md:grid-cols-[minmax(0,1.4fr)_7rem_10.5rem_minmax(0,2fr)_2.5rem]'
+const COLS = 'xl:grid-cols-[minmax(0,1.4fr)_7rem_10.5rem_minmax(0,2fr)_2.5rem]'
 
 const ago = (iso: string) => formatDistanceToNow(new Date(iso), { addSuffix: true })
 
@@ -260,7 +260,7 @@ function PeopleAdmin() {
             <EmptyState icon={<Users size={30} aria-hidden="true" />} title="No one matches these filters" />
           ) : (
             <div className="overflow-hidden rounded-lg border border-line bg-surface">
-              <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid ${COLS}`}>
+              <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle xl:grid ${COLS}`}>
                 <span>Person</span><span>Account</span><span>Status</span><span>Studies</span><span className="sr-only">Actions</span>
               </div>
               <ul className="divide-y divide-line" aria-label="People">
@@ -290,7 +290,7 @@ function PersonRow({ person: p, self, busy, onType, onActive, onEmail }: {
   const sending = busy?.startsWith(`${p.user_id}:`)
   return (
     <li data-testid="researcher-row" data-user-id={p.user_id}
-      className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 px-4 py-3.5 md:items-center ${COLS} ${p.active ? '' : 'bg-sunken/50'}`}>
+      className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 px-4 py-3.5 xl:items-center ${COLS} ${p.active ? '' : 'bg-sunken/50'}`}>
       <div className="min-w-0">
         <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
           <span className="truncate" title={who}>{who}</span>
@@ -299,20 +299,20 @@ function PersonRow({ person: p, self, busy, onType, onActive, onEmail }: {
         {p.display_name && <p className="truncate text-xs text-subtle">{p.display_name}</p>}
       </div>
 
-      <div className="order-3 col-span-2 flex items-center gap-2 md:order-none md:col-span-1">
+      <div className="order-3 col-span-2 flex items-center gap-2 xl:order-none xl:col-span-1">
         <RoleBadge role={p.role === 'admin' ? 'admin' : 'researcher'} />
       </div>
 
-      <div className="order-4 col-span-2 flex items-center gap-2 md:order-none md:col-span-1 md:block">
+      <div className="order-4 col-span-2 flex items-center gap-2 xl:order-none xl:col-span-1 xl:block">
         <RoleBadge role={status === 'invited' ? 'pending' : status} />
-        <p className="text-xs text-subtle md:mt-1">
+        <p className="text-xs text-subtle xl:mt-1">
           {sending ? 'Sending…' : status === 'invited'
             ? (p.invited_at ? `Invited ${ago(p.invited_at)}` : 'Not signed in yet')
             : p.last_sign_in_at ? `Signed in ${ago(p.last_sign_in_at)}` : 'Never signed in'}
         </p>
       </div>
 
-      <div className="order-5 col-span-2 min-w-0 md:order-none md:col-span-1">
+      <div className="order-5 col-span-2 min-w-0 xl:order-none xl:col-span-1">
         {p.role === 'admin' ? (
           <span className="text-xs text-subtle">Every study</span>
         ) : p.studies.length === 0 ? (
@@ -332,7 +332,7 @@ function PersonRow({ person: p, self, busy, onType, onActive, onEmail }: {
         )}
       </div>
 
-      <div className="order-2 flex justify-end md:order-none">
+      <div className="order-2 flex justify-end xl:order-none">
         <ActionMenu label={`Actions for ${who}`} items={[
           status === 'invited' && { label: 'Resend invite', icon: <Send />, onSelect: () => onEmail('invite') },
           status === 'active' && { label: 'Send password reset', icon: <KeyRound />, onSelect: () => onEmail('reset') },

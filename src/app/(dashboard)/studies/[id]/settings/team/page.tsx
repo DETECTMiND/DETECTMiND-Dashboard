@@ -290,7 +290,7 @@ export default function TeamPage() {
                 const editable = access.canManage && (isAdmin || m.member_role !== 'owner')
                 return (
                   <li key={m.user_id} data-testid="member-row" data-user-id={m.user_id}
-                    className={`grid grid-cols-[minmax(0,1fr)_auto_2.5rem] items-center gap-3 px-5 py-3 ${MEMBER_COLS}`}>
+                    className={`grid grid-cols-[minmax(0,1fr)_2.5rem] items-center gap-x-3 gap-y-2 px-5 py-3 ${MEMBER_COLS}`}>
                     <div className="min-w-0">
                       <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium text-fg">
                         <span className="min-w-0 truncate" title={who}>{m.display_name || who}</span>
@@ -300,10 +300,10 @@ export default function TeamPage() {
                       </p>
                       {m.display_name && <p className="truncate text-xs text-subtle">{who}</p>}
                     </div>
-                    <div>
+                    <div className="order-3 col-span-2 sm:order-none sm:col-span-1">
                       {editable ? (
                         <Select value={m.member_role} onChange={e => changeRole(m, e.target.value as MemberRole)}
-                          aria-label={`Role for ${who}`} className="h-8 w-full text-xs">
+                          aria-label={`Role for ${who}`} className="h-8 w-40 text-xs sm:w-full">
                           {roleOptions.map(r => <option key={r} value={r}>{STUDY_ROLE_LABEL[r]}</option>)}
                         </Select>
                       ) : (
@@ -312,7 +312,7 @@ export default function TeamPage() {
                         </span>
                       )}
                     </div>
-                    <div className="flex justify-end">
+                    <div className="order-2 flex justify-end sm:order-none">
                       {editable && (
                         <ActionMenu label={`Actions for ${who}`} items={[
                           { label: 'Remove from study…', icon: <Trash2 />, danger: true, onSelect: () => remove(m) },

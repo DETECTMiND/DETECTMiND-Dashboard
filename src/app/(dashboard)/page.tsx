@@ -133,7 +133,7 @@ function OverviewSkeleton() {
   return (
     <div role="status" aria-label="Loading overview" className="space-y-6">
       <div className="space-y-2"><Skeleton className="h-7 w-56" /><Skeleton className="h-4 w-80 max-w-full" /></div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-36 rounded-xl" />)}</div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-36 rounded-xl" />)}</div>
       <Skeleton className="h-40 rounded-xl" />
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <Skeleton className="h-80 rounded-xl lg:col-span-3" />
@@ -363,7 +363,7 @@ function OverviewContent() {
 
       <div aria-busy={refreshing} className={`space-y-6 transition-opacity ${refreshing ? 'opacity-60' : ''}`}>
         {/* Stat cards */}
-        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <StatCard icon={<Users size={15} />} label="Participants" value={d.participants.length.toLocaleString()}>
             <Link href={`${paths.participants}?filter=active`} className="inline-flex items-center gap-1.5 font-medium text-success hover:underline">
               <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />{active.length} active
