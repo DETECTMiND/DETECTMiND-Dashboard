@@ -3,7 +3,7 @@ export function Card({ children, className = '', padded = true, as: Tag = 'secti
   children: React.ReactNode; className?: string; padded?: boolean; as?: 'section' | 'div' | 'article'
 } & React.HTMLAttributes<HTMLElement>) {
   return (
-    <Tag className={`rounded-xl border border-line bg-surface shadow-card ${padded ? 'p-5' : ''} ${className}`} {...rest}>
+    <Tag className={`rounded-lg border border-line bg-surface ${padded ? 'p-5 sm:p-6' : ''} ${className}`} {...rest}>
       {children}
     </Tag>
   )
@@ -14,13 +14,11 @@ export function CardHeader({ title, description, actions, icon, className = '' }
   title: React.ReactNode; description?: React.ReactNode; actions?: React.ReactNode; icon?: React.ReactNode; className?: string
 }) {
   return (
-    <div className={`mb-4 flex flex-wrap items-start justify-between gap-3 ${className}`}>
-      <div className="flex min-w-0 items-start gap-3">
-        {icon && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">{icon}</span>}
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-fg">{title}</h2>
-          {description && <p className="mt-0.5 text-sm text-subtle">{description}</p>}
-        </div>
+    <div className={`mb-5 flex flex-wrap items-start justify-between gap-3 ${className}`}>
+      {/* `icon` is accepted for compatibility but not drawn: plain titles read cleaner */}
+      <div className="min-w-0" data-icon={icon ? '' : undefined}>
+        <h2 className="text-[15px] font-semibold text-fg">{title}</h2>
+        {description && <p className="mt-1 text-sm text-subtle">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>

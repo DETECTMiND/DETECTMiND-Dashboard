@@ -313,7 +313,7 @@ function SurveyResponsesInner() {
     <div className="space-y-4">
       <SectionHeader
         title="Responses"
-        description="Every survey prompt sent to participants, newest first. Open a row to read the answers."
+        description="Newest first. Open a row to see the answers."
         actions={
           <>
             <ParticipantPicker participants={participants} value={participant} onChange={changeParticipant} />

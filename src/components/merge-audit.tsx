@@ -27,7 +27,7 @@ export function MergeAudit({ studyId, names }: { studyId: string; names: Record<
   if (!rows.length) return null
   const name = (id: string) => names[id] || id.slice(0, 8)
   return (
-    <details className="group rounded-xl border border-line bg-surface shadow-card">
+    <details className="group rounded-lg border border-line bg-surface">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
         <ChevronRight size={14} className="text-subtle transition-transform group-open:rotate-90" aria-hidden="true" />
         <GitMerge size={14} className="text-subtle" aria-hidden="true" /> Merge history ({rows.length})

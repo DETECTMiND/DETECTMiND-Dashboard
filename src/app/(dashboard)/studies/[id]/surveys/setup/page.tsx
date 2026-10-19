@@ -162,7 +162,7 @@ function QuestionFormBody({ form, setForm, errors }: { form: QuestionForm; setFo
         )}
       </Field>
       {isScale && (
-        <fieldset className="space-y-3 rounded-xl border border-line p-4">
+        <fieldset className="space-y-3 rounded-lg border border-line p-4">
           <legend className="px-1 text-sm font-medium text-fg">Scale</legend>
           <div className="grid grid-cols-3 gap-3">
             <Field label="Lowest">{(id, d) => <NumberInput id={id} describedBy={d} className="w-full" value={form.min} onChange={min => set({ min })} />}</Field>
@@ -504,7 +504,7 @@ export default function SurveySetupPage() {
   )
 
   const questionFormCard = (title: string) => (
-    <form onSubmit={submitQuestion} noValidate className="rounded-xl border border-accent bg-surface p-4 shadow-card">
+    <form onSubmit={submitQuestion} noValidate className="rounded-lg border border-accent bg-surface p-4">
       <h4 className="mb-3 text-sm font-semibold text-fg">{title}</h4>
       <QuestionFormBody form={questionForm} setForm={setQuestionForm} errors={questionErrors} />
       <div className="mt-4 flex flex-wrap gap-2 border-t border-line pt-3">
@@ -519,7 +519,7 @@ export default function SurveySetupPage() {
       {guardDialog}
       {confirmDialog}
       <SectionHeader title="Survey schedules"
-        description="When participants are asked, and the questions they answer."
+       
         actions={canEdit && schedules && schedules.length > 0 && scheduleMode !== 'create'
           ? <Button onClick={openCreateSchedule}><Plus size={15} aria-hidden="true" /> New schedule</Button>
           : undefined} />
@@ -557,7 +557,7 @@ export default function SurveySetupPage() {
                   return (
                     <li key={s.id}>
                       <button type="button" onClick={() => selectSchedule(s.id)} aria-current={on ? 'true' : undefined}
-                        className={`w-full rounded-xl border bg-surface px-4 py-3 text-left shadow-card transition-colors ${on ? 'border-accent ring-1 ring-accent' : 'border-line hover:bg-sunken/60'}`}>
+                        className={`w-full rounded-lg border bg-surface px-4 py-3 text-left transition-colors ${on ? 'border-accent ring-1 ring-accent' : 'border-line hover:bg-sunken/60'}`}>
                         <span className="flex items-start justify-between gap-2">
                           <span className="min-w-0 break-words text-sm font-semibold text-fg">{s.name}</span>
                           {s.enabled ? <Badge tone="green">On</Badge> : <Badge>Off</Badge>}
@@ -597,7 +597,7 @@ export default function SurveySetupPage() {
                     )}
                   </div>
                   {!selectedKnown && (
-                    <div role="note" className="mb-4 flex items-start gap-2 rounded-xl border border-line bg-warning-soft px-4 py-3 text-sm text-fg">
+                    <div role="note" className="mb-4 flex items-start gap-2 rounded-lg border border-line bg-warning-soft px-4 py-3 text-sm text-fg">
                       <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
                       <p>This schedule uses a trigger the app no longer runs (“{selected.schedule_type.replace(/_/g, ' ')}”), so phones never send it. It is shown read-only. To keep asking these questions, create a new fixed or random schedule.</p>
                     </div>
@@ -641,7 +641,7 @@ export default function SurveySetupPage() {
                         {questionList.map((q, i) => questionEditing === q.id ? (
                           <li key={q.id}>{questionFormCard(`Edit question ${i + 1}`)}</li>
                         ) : (
-                          <li key={q.id} className="flex items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-card">
+                          <li key={q.id} className="flex items-start gap-3 rounded-lg border border-line bg-surface px-4 py-3">
                             <span aria-hidden="true" className="flex h-6 min-w-6 shrink-0 items-center justify-center rounded-md bg-sunken px-1 text-xs font-bold text-muted">{i + 1}</span>
                             <span className="sr-only">Question {i + 1}:</span>
                             <QuestionSummary q={q} />

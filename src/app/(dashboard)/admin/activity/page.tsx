@@ -145,7 +145,7 @@ function AuditLog() {
     <div>
       <PageHeader
         title="Activity log"
-        description="Sensitive actions across every study: approvals, deletions, merges, PIN changes and access changes."
+        description="Approvals, deletions, merges, PIN and access changes across all studies."
         actions={
           <Button variant="secondary" onClick={() => void exportCsv()} loading={exporting} disabled={total === 0}>
             {!exporting && <Download size={14} aria-hidden="true" />} Export CSV
@@ -204,7 +204,7 @@ function AuditLog() {
         <EmptyState icon={<ScrollText size={30} aria-hidden="true" />} title="No activity found"
           hint={filtering ? 'Try different filters.' : 'Entries appear here as people make changes.'} />
       ) : (
-        <div className={`overflow-hidden rounded-xl border border-line bg-surface shadow-card ${loading ? 'opacity-60' : ''}`} aria-busy={loading}>
+        <div className={`overflow-hidden rounded-lg border border-line bg-surface ${loading ? 'opacity-60' : ''}`} aria-busy={loading}>
           <div className="hidden grid-cols-[9.5rem_11rem_minmax(0,1fr)] gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid" aria-hidden="true">
             <span>When</span><span>Action</span><span>What happened</span>
           </div>

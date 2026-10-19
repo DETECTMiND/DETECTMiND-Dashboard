@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { inputClass } from './field'
 
+const fixedWidth = inputClass.replace('w-full ', '')
+
 type Unit = 'sec' | 'min' | 'hr'
 const FACTOR: Record<Unit, number> = { sec: 1, min: 60, hr: 3600 }
 
@@ -36,9 +38,9 @@ export function IntervalInput({ seconds, onChange, id, disabled, min = 1, descri
             const n = Number(e.target.value)
             if (Number.isFinite(n) && n > 0) onChange(Math.max(min, Math.round(n * FACTOR[unit])))
           }}
-          className={`${inputClass} w-28`} />
+          className={`${fixedWidth} w-28`} />
         <select aria-label="Unit" value={unit} disabled={disabled} onChange={e => setUnit(e.target.value as Unit)}
-          className={`${inputClass} w-28 pr-8`}>
+          className={`${fixedWidth} w-28`}>
           <option value="sec">seconds</option>
           <option value="min">minutes</option>
           <option value="hr">hours</option>

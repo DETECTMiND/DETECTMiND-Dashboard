@@ -95,7 +95,7 @@ export default function ResetPasswordPage() {
 
       {phase === 'no-session' && (
         <div className="space-y-4 text-center">
-          <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-warning-soft text-warning"><KeyRound size={20} aria-hidden="true" /></span>
+          <span className="mx-auto flex justify-center text-warning"><KeyRound size={20} aria-hidden="true" /></span>
           <p className="text-sm text-muted">
             {invite
               ? 'Invite links work once and expire after a while. Ask the person who invited you to send a new invite.'

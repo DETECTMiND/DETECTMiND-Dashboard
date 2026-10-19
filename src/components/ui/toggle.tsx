@@ -6,7 +6,7 @@ import { useId } from 'react'
  * Accessible on/off switch (role="switch"). Always labelled: pass `label`, or
  * `aria-label` when the label is shown elsewhere.
  */
-export function Toggle({ checked, onChange, label, description, disabled, size = 'md', className = '', ...aria }: {
+export function Toggle({ checked, onChange, label, description, disabled, size = 'sm', className = '', ...aria }: {
   checked: boolean
   onChange: (next: boolean) => void
   label?: React.ReactNode

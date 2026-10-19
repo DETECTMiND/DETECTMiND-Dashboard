@@ -58,11 +58,11 @@ export default function AccountPage() {
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Account" description="Your profile, password and how the dashboard looks." />
+      <PageHeader title="Account" />
 
       <div className="space-y-5">
         <Card>
-          <CardHeader icon={<UserRound size={16} />} title="Profile" description="Ask an admin if any of this needs changing." />
+          <CardHeader icon={<UserRound size={16} />} title="Profile" />
           <DescriptionList items={[
             { label: 'Name', value: me?.displayName || <span className="text-subtle">Not set</span> },
             { label: 'Email', value: me?.email ?? '—' },
@@ -72,7 +72,7 @@ export default function AccountPage() {
         </Card>
 
         <Card>
-          <CardHeader icon={<KeyRound size={16} />} title="Change password" description="You will need your current password." />
+          <CardHeader icon={<KeyRound size={16} />} title="Change password" />
           <form onSubmit={changePassword} className="max-w-sm space-y-4">
             <Notice notice={notice} onClose={() => setNotice(null)} />
             <PasswordInput id="current-password" label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
@@ -86,7 +86,7 @@ export default function AccountPage() {
         </Card>
 
         <Card>
-          <CardHeader icon={<Palette size={16} />} title="Appearance" description="Light, dark, or follow your device setting." />
+          <CardHeader icon={<Palette size={16} />} title="Appearance" />
           <ThemeToggle />
         </Card>
       </div>

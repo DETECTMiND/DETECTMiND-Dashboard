@@ -7,13 +7,13 @@ import { Loader2 } from 'lucide-react'
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-ghost'
 export type ButtonSize = 'sm' | 'md'
 
-const BASE = 'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+const BASE = 'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50'
 
 const VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-accent-fg shadow-card hover:bg-accent-hover',
-  secondary: 'border border-line bg-surface text-fg shadow-card hover:bg-sunken',
+  primary: 'bg-accent text-accent-fg hover:bg-accent-hover',
+  secondary: 'border border-line-strong bg-surface text-fg hover:bg-sunken',
   ghost: 'text-muted hover:bg-sunken hover:text-fg',
-  danger: 'bg-danger text-white shadow-card hover:bg-danger-hover',
+  danger: 'bg-danger text-white hover:bg-danger-hover',
   'danger-ghost': 'text-danger hover:bg-danger-soft',
 }
 

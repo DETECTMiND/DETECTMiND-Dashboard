@@ -68,7 +68,7 @@ export default function SensorSettingsPage() {
     <div>
       {dialog}
       <SectionHeader title="Sensors"
-        description="Choose what the phones record and how often. Phones only collect from sensors that are on."
+        description="Phones only collect from sensors that are switched on."
         actions={<ButtonLink variant="secondary" href={studyPaths(studyId).surveySetup}><ClipboardList size={15} aria-hidden="true" /> Survey setup</ButtonLink>} />
 
       <div className="space-y-4">

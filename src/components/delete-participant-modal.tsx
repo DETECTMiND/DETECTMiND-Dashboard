@@ -1,7 +1,6 @@
 'use client'
 
 import { useId, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase-browser'
 import { errorText } from '@/components/feedback'
 import { Button, Modal } from '@/components/ui'
@@ -56,7 +55,6 @@ export function DeleteParticipantModal({ participant, mergedChildren, onClose, o
   if (counts) {
     return (
       <Modal open onClose={finish} size="sm" title="Participant deleted"
-        icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-success-soft text-success"><CheckCircle2 size={18} /></span>}
         footer={<Button onClick={finish} data-autofocus="">Done</Button>}>
         <p className="text-sm text-muted">
           <strong className="text-fg">{participant.name}</strong> and {total.toLocaleString()} rows were removed. This is recorded in the activity log.
@@ -78,7 +76,6 @@ export function DeleteParticipantModal({ participant, mergedChildren, onClose, o
 
   return (
     <Modal open onClose={onClose} dismissible={!busy} size="sm" title="Delete participant?"
-      icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-danger-soft text-danger"><AlertTriangle size={18} /></span>}
       footer={<>
         <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
         <Button type="submit" form={formId} variant="danger" loading={busy} disabled={typed.trim() !== confirmWord || busy}>

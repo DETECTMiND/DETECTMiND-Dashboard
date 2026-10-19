@@ -187,7 +187,7 @@ export function ScheduleFormBody({ form, setForm, errors = {} }: {
         )}
       </Field>
 
-      <fieldset className="rounded-xl border border-line p-4">
+      <fieldset className="rounded-lg border border-line p-4">
         <legend className="flex items-center gap-1.5 px-1 text-sm font-medium text-fg">
           <Bell size={14} aria-hidden="true" /> Notification on the phone
         </legend>
@@ -204,7 +204,7 @@ export function ScheduleFormBody({ form, setForm, errors = {} }: {
 
 export function NotificationPreview({ title, body, className = '' }: { title: string; body: string; className?: string }) {
   return (
-    <div className={`flex items-start gap-3 rounded-xl border border-line bg-sunken px-3.5 py-3 ${className}`} aria-label="Notification preview">
+    <div className={`flex items-start gap-3 rounded-lg border border-line bg-sunken px-3.5 py-3 ${className}`} aria-label="Notification preview">
       <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-fg"><Bell size={14} /></span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold text-fg">{title || 'No title'}</p>

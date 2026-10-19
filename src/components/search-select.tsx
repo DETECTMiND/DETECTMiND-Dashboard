@@ -115,7 +115,7 @@ export function SearchSelect({
           onClick={() => setOpen(true)}
           onBlur={() => setOpen(false)}
           onKeyDown={onKeyDown}
-          className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-8 text-sm text-fg shadow-card placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-subtle"
+          className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-8 text-sm text-fg placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-subtle"
         />
         {(value || query) && !disabled && (
           <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => { onChange(null, null); setQuery('') }}
@@ -127,7 +127,7 @@ export function SearchSelect({
       {hint && <p id={hintId} className="mt-1.5 text-xs text-subtle">{hint}</p>}
       {open && (
         <ul ref={listRef} id={listId} role="listbox" aria-label={label}
-          className="absolute left-0 right-0 z-40 mt-1 max-h-64 overflow-y-auto rounded-xl border border-line bg-surface p-1 shadow-xl">
+          className="absolute left-0 right-0 z-40 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-surface p-1 shadow-xl">
           {matches.length === 0 ? (
             <li className="px-3 py-2 text-sm text-subtle" role="presentation">{emptyText}</li>
           ) : matches.map((o, i) => (

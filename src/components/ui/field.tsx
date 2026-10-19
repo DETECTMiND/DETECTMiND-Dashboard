@@ -2,9 +2,14 @@
 
 import { forwardRef, useId } from 'react'
 
-const CONTROL = 'w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg shadow-card placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-subtle aria-[invalid=true]:border-danger'
+const CONTROL = 'w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-fg placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25 disabled:cursor-not-allowed disabled:bg-sunken disabled:text-subtle aria-[invalid=true]:border-danger'
 
 export const inputClass = `${CONTROL} h-9`
+
+/** A width class passed in (w-28, w-40…) replaces the default full width. */
+function withWidth(base: string, className: string) {
+  return /(^|\s)w-/.test(className) ? base.replace('w-full ', '') : base
+}
 
 /**
  * Label + control + hint/error. Pass a render function to get the generated id:
@@ -27,7 +32,7 @@ export function Field({ label, hint, error, required, children, className = '', 
   return (
     <div className={className}>
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <label htmlFor={id} className="text-sm font-medium text-fg">
+        <label htmlFor={id} className="text-[13px] font-medium text-fg">
           {label}{required && <span className="ml-0.5 text-danger" aria-hidden="true">*</span>}
         </label>
         {labelAction}
@@ -42,19 +47,19 @@ export function Field({ label, hint, error, required, children, className = '', 
 export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input(
   { className = '', ...rest }, ref,
 ) {
-  return <input ref={ref} className={`${inputClass} ${className}`} {...rest} />
+  return <input ref={ref} className={`${withWidth(inputClass, className)} ${className}`} {...rest} />
 })
 
 export const Select = forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HTMLSelectElement>>(function Select(
   { className = '', children, ...rest }, ref,
 ) {
-  return <select ref={ref} className={`${inputClass} pr-8 ${className}`} {...rest}>{children}</select>
+  return <select ref={ref} className={`${withWidth(inputClass, className)} ${className}`} {...rest}>{children}</select>
 })
 
 export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea(
   { className = '', rows = 3, ...rest }, ref,
 ) {
-  return <textarea ref={ref} rows={rows} className={`${CONTROL} py-2 ${className}`} {...rest} />
+  return <textarea ref={ref} rows={rows} className={`${withWidth(CONTROL, className)} py-2 ${className}`} {...rest} />
 })
 
 /** Convenience: a labelled text input. */

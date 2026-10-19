@@ -220,7 +220,7 @@ export default function TeamPage() {
 
       {access.canManage && (
         <Card>
-          <CardHeader icon={<UserPlus size={16} />} title="Add people" description="New people get an email to set a password and only see the studies they are added to." />
+          <CardHeader icon={<UserPlus size={16} />} title="Add people" description="New people get an email invite and only see the studies they are added to." />
           {directory?.error ? (
             <ErrorState title="Could not load the list of people" message={directory.error} onRetry={() => void reload()} />
           ) : (

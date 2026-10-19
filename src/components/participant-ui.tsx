@@ -22,25 +22,13 @@ export function avatarInitial(name: string) {
   return name.charAt(0).toUpperCase()
 }
 
-const AVATAR_COLORS = [
-  'bg-blue-100 text-blue-700', 'bg-violet-100 text-violet-700',
-  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
-  'bg-rose-100 text-rose-700', 'bg-cyan-100 text-cyan-700',
-]
-
-export function avatarColor(id: string) {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length]
-}
-
-export function Avatar({ id, name, size = 'md' }: { id: string; name: string; size?: 'sm' | 'md' | 'lg' }) {
-  const cls = size === 'sm' ? 'h-6 w-6 text-[11px]' : size === 'lg' ? 'h-10 w-10 text-sm' : 'h-8 w-8 text-xs'
-  return (
-    <span aria-hidden="true" className={`flex shrink-0 items-center justify-center rounded-full font-bold ${cls} ${avatarColor(id)}`}>
-      {avatarInitial(name)}
-    </span>
-  )
+/**
+ * Participants have no names or photos, so letter avatars only repeated the
+ * same "D" for every device. Kept as a no-op so call sites stay simple.
+ */
+export function Avatar(_props: { id: string; name: string; size?: 'sm' | 'md' | 'lg' }) {
+  void _props
+  return null
 }
 
 // ── Sync health ──────────────────────────────────────────────────────────────
@@ -193,7 +181,7 @@ export function ParticipantPicker({
     <div ref={containerRef} className="relative flex max-w-full items-center gap-1" onKeyDown={open ? onKeyDown : undefined}>
       <button ref={buttonRef} type="button" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? listId : undefined}
         onClick={() => (open ? close() : setOpen(true))}
-        className={`flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border bg-surface px-3 text-sm shadow-card hover:bg-sunken sm:w-64 ${selected ? 'border-accent' : 'border-line'}`}>
+        className={`flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border bg-surface px-3 text-sm hover:bg-sunken sm:w-64 ${selected ? 'border-accent' : 'border-line'}`}>
         <span className="sr-only">Participant: </span>
         {selected ? <Avatar id={selected.id} name={label} size="sm" /> : <Users size={14} className="shrink-0 text-subtle" aria-hidden="true" />}
         <span className="min-w-0 flex-1 truncate text-left font-medium text-fg">{label}</span>
@@ -207,7 +195,7 @@ export function ParticipantPicker({
       )}
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-line bg-surface shadow-xl sm:left-auto sm:right-0">
+        <div className="absolute left-0 top-full z-50 mt-1.5 w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-line bg-surface shadow-xl sm:left-auto sm:right-0">
           <div className="border-b border-line p-2">
             <div className="flex items-center gap-2 rounded-lg border border-line bg-sunken px-2.5 py-1.5">
               <Search size={12} className="shrink-0 text-subtle" aria-hidden="true" />

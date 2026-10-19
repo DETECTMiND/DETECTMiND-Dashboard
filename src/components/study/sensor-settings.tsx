@@ -190,9 +190,7 @@ function SensorRow({ sensor, draft, onChange, disabled }: {
   return (
     <li className="px-4 py-4 sm:px-5">
       <div className="flex items-start gap-3">
-        <span aria-hidden="true" className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${draft.enabled ? 'bg-accent-soft text-accent' : 'bg-sunken text-subtle'}`}>
-          <Icon size={16} />
-        </span>
+        <Icon size={16} aria-hidden="true" className={`mt-0.5 shrink-0 ${draft.enabled ? 'text-fg' : 'text-subtle'}`} />
         <Toggle className="min-w-0 flex-1" checked={draft.enabled} disabled={disabled}
           onChange={enabled => onChange({ ...draft, enabled })}
           label={sensor.label} description={sensor.description} />
@@ -249,7 +247,7 @@ export function SensorSettingsEditor({ value, onChange, disabled }: {
           onChange(next)
         }
         return (
-          <section key={cat} aria-labelledby={`sensor-cat-${cat.replace(' ', '-')}`} className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
+          <section key={cat} aria-labelledby={`sensor-cat-${cat.replace(' ', '-')}`} className="overflow-hidden rounded-lg border border-line bg-surface">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-sunken/60 px-4 py-3 sm:px-5">
               <div className="min-w-0">
                 <h3 id={`sensor-cat-${cat.replace(' ', '-')}`} className="text-sm font-semibold text-fg">{CATEGORY_COPY[cat].title}</h3>

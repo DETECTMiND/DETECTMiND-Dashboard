@@ -2,7 +2,6 @@
 
 import { createClient } from '@/lib/supabase-browser'
 import { Suspense, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import {
   Activity, ChartColumn, Check, Download, MessageSquare, Pencil, RotateCcw, Search, ShieldCheck,
@@ -16,6 +15,7 @@ import {
   Badge, Button, ButtonLink, ConfirmDialog, DescriptionList, EmptyState, ErrorState, FilterPills, Modal, Notice,
   PageHeader, Pagination, ReadOnlyBanner, SegmentedControl, SkeletonRows, TableWrap, THead, Th, Td, Tr,
   useDialogFocus, type NoticeState,
+  ActionMenu,
 } from '@/components/ui'
 import { MergeSuggestions } from '@/components/participant-merge'
 import { PermissionHistoryModal } from '@/components/permission-history-modal'
@@ -168,8 +168,7 @@ function SyncHistoryModal({ participant, onClose }: { participant: Participant; 
   const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
   return (
-    <Modal open onClose={onClose} size="xl" title="Sync history" description={participantName(participant)}
-      icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent"><Activity size={18} /></span>}>
+    <Modal open onClose={onClose} size="xl" title="Sync history" description={participantName(participant)}>
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-2">
           <SegmentedControl label="Period" value={range} onChange={setRange} size="sm"
@@ -563,15 +562,14 @@ function ParticipantsContent() {
   function rowActions(p: Participant) {
     const name = participantName(p)
     return (
-      <div className="flex items-center justify-end gap-0.5">
-        <Link href={`${paths.data}?participant=${p.id}`} className={iconBtn} aria-label={`Raw data for ${name}`} title="Raw data"><ChartColumn size={15} /></Link>
-        <Link href={`${paths.surveys}?participant=${p.id}`} className={iconBtn} aria-label={`Survey answers for ${name}`} title="Survey answers"><MessageSquare size={15} /></Link>
-        <button type="button" onClick={() => setSyncTarget(p)} className={iconBtn} aria-label={`Sync history for ${name}`} title="Sync history"><Activity size={15} /></button>
-        <button type="button" onClick={() => setPermTarget(p)} className={iconBtn} aria-label={`Permission history for ${name}`} title="Permission history"><ShieldCheck size={15} /></button>
-        {access.canManage && (
-          <button type="button" onClick={() => setDeleteTarget(p)} className={`${iconBtn} hover:bg-danger-soft hover:text-danger`}
-            aria-label={`Delete participant ${name}`} title="Delete participant and all their data"><Trash2 size={15} /></button>
-        )}
+      <div className="flex justify-end">
+        <ActionMenu label={`Actions for ${name}`} items={[
+          { label: 'Raw data', icon: <ChartColumn />, href: `${paths.data}?participant=${p.id}` },
+          { label: 'Survey answers', icon: <MessageSquare />, href: `${paths.surveys}?participant=${p.id}` },
+          { label: 'Sync history', icon: <Activity />, onSelect: () => setSyncTarget(p) },
+          { label: 'Permission history', icon: <ShieldCheck />, onSelect: () => setPermTarget(p) },
+          access.canManage && { label: 'Delete participant…', icon: <Trash2 />, danger: true, onSelect: () => setDeleteTarget(p) },
+        ]} />
       </div>
     )
   }
@@ -610,7 +608,7 @@ function ParticipantsContent() {
               <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-subtle" aria-hidden="true" />
               <input type="search" value={search} onChange={e => setSearch(e.target.value)} aria-label="Search participants"
                 placeholder="Search name or device ID…"
-                className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-sm text-fg shadow-card placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25" />
+                className="h-9 w-full rounded-lg border border-line bg-surface pl-8 pr-3 text-sm text-fg placeholder:text-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25" />
             </div>
             <FilterPills label="Show participants" value={filter} onChange={v => setParam('filter', v === 'all' ? null : v)}
               options={FILTERS.map(f => ({ value: f.value, label: f.label, count: counts[f.value] }))} />
@@ -669,7 +667,7 @@ function ParticipantsContent() {
               {/* Cards on phones */}
               <ul className="space-y-2 md:hidden">
                 {visible.map(({ p, health, latest, permText }) => (
-                  <li key={p.id} className={`rounded-xl border border-line bg-surface p-4 shadow-card ${p.status === 'withdrawn' ? 'opacity-75' : ''}`}>
+                  <li key={p.id} className={`rounded-lg border border-line bg-surface p-4 ${p.status === 'withdrawn' ? 'opacity-75' : ''}`}>
                     {nameCell(p)}
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <Badge tone={p.status === 'active' ? 'green' : 'neutral'}>{p.status === 'active' ? 'Active' : 'Withdrawn'}</Badge>

@@ -332,7 +332,7 @@ export default function StudySettingsPage() {
     return (
       <div role="status" aria-label="Loading settings" className="space-y-4">
         {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-xl border border-line bg-surface p-5 shadow-card">
+          <div key={i} className="rounded-lg border border-line bg-surface p-5">
             <Skeleton className="h-4 w-40" />
             <Skeleton className="mt-4 h-9 w-full" />
             <Skeleton className="mt-3 h-9 w-2/3" />
@@ -358,7 +358,7 @@ export default function StudySettingsPage() {
 
       {pending && (
         <div role="status" aria-label="Pending approval"
-          className="flex flex-col gap-3 rounded-xl border border-line bg-warning-soft px-4 py-3 sm:flex-row sm:items-center">
+          className="flex flex-col gap-3 rounded-lg border border-line bg-warning-soft px-4 py-3 sm:flex-row sm:items-center">
           <Clock size={18} className="hidden shrink-0 text-warning sm:block" aria-hidden="true" />
           <div className="min-w-0 flex-1 text-sm">
             <p className="font-semibold text-fg">Pending approval</p>
@@ -380,7 +380,7 @@ export default function StudySettingsPage() {
       {/* Study details */}
       <Card>
         <CardHeader icon={<FileText size={16} />} title="Study details"
-          description="The name and descriptions, and how often phones upload." />
+          />
         {canEdit ? (
           <div className="space-y-4">
             <TextField label="Study name" required value={form.name} onChange={e => patch({ name: e.target.value })}
@@ -415,9 +415,9 @@ export default function StudySettingsPage() {
       {/* Joining the study */}
       <Card>
         <CardHeader icon={<UserPlus size={16} />} title="Joining the study"
-          description="What participants need to join, and what the app does on first launch." />
+          />
         <div className="space-y-5">
-          <div className="rounded-xl border border-line p-4">
+          <div className="rounded-lg border border-line p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <KeyRound size={15} className="text-subtle" aria-hidden="true" />
@@ -522,7 +522,7 @@ export default function StudySettingsPage() {
       {/* Export */}
       <Card>
         <CardHeader icon={<Download size={16} />} title="Export"
-          description="Every table for this study as CSV files in one zip. Phone numbers stay hashed." />
+          description="All tables as CSV files in one zip. Phone numbers stay hashed." />
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="secondary" onClick={handleExport} loading={!!exportStatus}>
             {!exportStatus && <Download size={14} aria-hidden="true" />} Export all study data
@@ -533,9 +533,9 @@ export default function StudySettingsPage() {
 
       {/* Danger zone */}
       {access.isAdmin && (
-        <section aria-label="Danger zone" className="rounded-xl border border-danger/40 bg-surface p-5 shadow-card">
+        <section aria-label="Danger zone" className="rounded-lg border border-danger/40 bg-surface p-5">
           <CardHeader icon={<Trash2 size={16} />} title="Danger zone"
-            description="Deleting removes the study, its participants and every row they uploaded. It cannot be undone." />
+            description="Removes the study, its participants and all their data. This cannot be undone." />
           <Button variant="danger" onClick={() => openRemoval('delete')}>
             <Trash2 size={14} aria-hidden="true" /> Delete study
           </Button>

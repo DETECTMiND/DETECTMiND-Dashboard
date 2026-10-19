@@ -104,7 +104,7 @@ function AdminStudies() {
     <div>
       <PageHeader
         title="Studies"
-        description="Every study on the dashboard. Team and settings changes happen inside each study."
+        description="All studies. Teams and settings are managed inside each study."
         actions={<Button variant="secondary" onClick={() => void reload()}><RefreshCw size={14} aria-hidden="true" /> Refresh</Button>}
       />
 
@@ -120,7 +120,7 @@ function AdminStudies() {
       </div>
 
       {filter === 'pending' && (count('pending') ?? 0) > 0 && (
-        <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-line bg-accent-soft px-4 py-3 text-sm text-fg">
+        <p className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-line bg-accent-soft px-4 py-3 text-sm text-fg">
           Approve or reject these studies on the Approvals page.
           <Link href="/admin/approvals" className="inline-flex items-center gap-1 font-semibold text-accent hover:underline">
             Go to approvals <ArrowRight size={14} aria-hidden="true" />
@@ -137,7 +137,7 @@ function AdminStudies() {
           title={studies.length ? 'No studies match' : 'No studies yet'}
           hint={studies.length ? 'Try another status or search.' : 'Studies appear here once a researcher or admin creates one.'} />
       ) : (
-        <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
+        <div className="overflow-hidden rounded-lg border border-line bg-surface">
           {/* Column headings from md up; below md each row is a card. */}
           <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid ${COLS}`}>
             <span>Study</span><span>Owners</span><span>Participants</span><span>Created</span><span className="text-right">Actions</span>

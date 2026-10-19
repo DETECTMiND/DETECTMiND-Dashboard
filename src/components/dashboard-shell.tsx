@@ -130,8 +130,8 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       : 'This account is signed in, but '
     return <div className="flex min-h-dvh items-center justify-center bg-page px-4">
       <title>Not authorised | DETECTMiND</title>
-      <div className="w-full max-w-md rounded-2xl border border-line bg-surface p-7 text-center shadow-card">
-        <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-danger-soft text-danger"><ShieldAlert size={22} /></span>
+      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-7 text-center">
+        <span className="mx-auto mb-3 flex justify-center text-danger"><ShieldAlert size={22} /></span>
         <h1 className="text-lg font-bold text-fg">
           {researcher.status === 'inactive' ? 'Your researcher account has been deactivated'
             : researcher.status === 'error' ? 'Could not check your access'
@@ -287,7 +287,7 @@ function StudySwitcher({ studies, selected, onSwitch }: { studies: Study[] | nul
       <button ref={buttonRef} type="button" onClick={() => (open ? setOpen(false) : openList())}
         onKeyDown={e => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); openList() } }}
         aria-haspopup="listbox" aria-expanded={open} aria-label={`Study: ${selected?.name ?? 'none selected'}. Change study`}
-        className="flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-2 text-left shadow-card hover:bg-sunken">
+        className="flex w-full items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-2 text-left hover:bg-sunken">
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-fg">{selected?.name ?? 'Select a study'}</span>
           {info && <span className="flex items-center gap-1.5 text-xs text-subtle"><span className={`h-1.5 w-1.5 rounded-full ${info.dot}`} aria-hidden="true" />{info.label}</span>}

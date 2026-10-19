@@ -80,7 +80,7 @@ function ModalPanel({ onClose, title, description, children, footer, size, dismi
     <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center sm:p-4">
       <div className="absolute inset-0 bg-[var(--overlay)]" aria-hidden="true" onClick={() => dismissible && onClose()} />
       <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={description ? descId : undefined}
-        className={`relative flex max-h-[92dvh] w-full flex-col rounded-t-2xl border border-line bg-surface shadow-2xl sm:rounded-2xl ${SIZES[size]}`}>
+        className={`relative flex max-h-[92dvh] w-full flex-col rounded-t-xl border border-line bg-surface shadow-2xl sm:rounded-xl ${SIZES[size]}`}>
         <div className="flex items-start gap-3 border-b border-line px-5 py-4">
           {icon}
           <div className="min-w-0 flex-1">

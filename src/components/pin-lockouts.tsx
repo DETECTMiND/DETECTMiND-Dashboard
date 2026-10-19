@@ -49,7 +49,7 @@ export function PinLockouts({ studyId, canEdit = true }: { studyId: string; canE
 
   if (!attempts.length && !error) return null
   return (
-    <section aria-labelledby="pin-lockouts-title" className="overflow-hidden rounded-xl border border-line bg-surface">
+    <section aria-labelledby="pin-lockouts-title" className="overflow-hidden rounded-lg border border-line bg-surface">
       <div className="flex items-center gap-2 border-b border-line bg-warning-soft px-4 py-2.5">
         <KeyRound size={15} className="text-warning" aria-hidden="true" />
         <h3 id="pin-lockouts-title" className="text-sm font-semibold text-fg">Wrong PIN attempts</h3>

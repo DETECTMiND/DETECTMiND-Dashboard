@@ -13,7 +13,7 @@ export function Notice({ notice, onClose }: { notice: NoticeState; onClose?: () 
     info: { cls: 'border-blue-200 bg-blue-50 text-blue-800', icon: <Info size={16} className="mt-0.5 shrink-0" /> },
   }[notice.tone]
   return (
-    <div role={notice.tone === 'error' ? 'alert' : 'status'} className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm ${style.cls}`}>
+    <div role={notice.tone === 'error' ? 'alert' : 'status'} className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${style.cls}`}>
       {style.icon}
       <p className="min-w-0 flex-1 break-words">{notice.text}</p>
       {onClose && (
@@ -28,7 +28,7 @@ export function Notice({ notice, onClose }: { notice: NoticeState; onClose?: () 
 /** Centred spinner block for a section that is loading. */
 export function LoadingBlock({ label = 'Loading…' }: { label?: string }) {
   return (
-    <div role="status" className="flex items-center justify-center gap-2 rounded-xl border border-line bg-surface py-14 text-sm text-subtle">
+    <div role="status" className="flex items-center justify-center gap-2 rounded-lg border border-line bg-surface py-12 text-sm text-subtle">
       <Loader2 size={16} className="animate-spin" aria-hidden="true" /> {label}
     </div>
   )
@@ -56,9 +56,9 @@ export function EmptyState({ icon, title, hint, children }: {
   children?: React.ReactNode
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-line-strong bg-surface px-6 py-14 text-center">
-      {icon && <div className="mb-3 flex justify-center text-subtle">{icon}</div>}
-      <p className="text-sm font-semibold text-fg">{title}</p>
+    <div className="rounded-lg border border-line bg-surface px-6 py-12 text-center">
+      {icon && <div className="mb-3 flex justify-center text-subtle [&_svg]:h-5 [&_svg]:w-5">{icon}</div>}
+      <p className="text-sm font-medium text-fg">{title}</p>
       {hint && <p className="mx-auto mt-1 max-w-md text-sm text-subtle">{hint}</p>}
       {children && <div className="mt-5 flex justify-center gap-2">{children}</div>}
     </div>
@@ -70,7 +70,7 @@ export function ErrorState({ title = 'Could not load this data', message, onRetr
   title?: string; message?: string | null; onRetry?: () => void
 }) {
   return (
-    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-6 py-10 text-center">
+    <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-6 py-10 text-center">
       <AlertCircle size={22} className="mx-auto mb-2 text-red-600" aria-hidden="true" />
       <p className="text-sm font-semibold text-red-800">{title}</p>
       {message && <p className="mx-auto mt-1 max-w-lg break-words text-sm text-red-700">{message}</p>}
@@ -85,7 +85,7 @@ export function ErrorState({ title = 'Could not load this data', message, onRetr
 
 export function ReadOnlyBanner({ text = 'You have view-only access to this study.' }: { text?: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-line bg-sunken px-4 py-2.5 text-xs font-medium text-muted">
+    <div className="flex items-center gap-2 rounded-lg border border-line bg-sunken px-4 py-2.5 text-xs font-medium text-muted">
       <Info size={14} aria-hidden="true" /> {text}
     </div>
   )

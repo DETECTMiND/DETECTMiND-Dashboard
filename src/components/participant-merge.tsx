@@ -226,7 +226,6 @@ export function MergeSuggestions({
 
       <Modal open={!!active} onClose={() => setActiveBase(null)} dismissible={!merging} size="md"
         title="Merge participants"
-        icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent"><GitMerge size={18} /></span>}
         description="Choose which participant keeps all the data. The phone using another account switches to it automatically at its next successful sync."
         footer={<>
           <Button variant="secondary" onClick={() => setActiveBase(null)} disabled={merging}>Cancel</Button>

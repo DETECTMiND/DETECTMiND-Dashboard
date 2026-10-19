@@ -85,7 +85,7 @@ export default function StudiesPage() {
       ) : studies === null ? (
         <div role="status" aria-label="Loading studies" className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="rounded-xl border border-line bg-surface p-5 shadow-card">
+            <div key={i} className="rounded-lg border border-line bg-surface p-5">
               <Skeleton className="h-4 w-2/3" />
               <Skeleton className="mt-3 h-3 w-full" />
               <Skeleton className="mt-2 h-3 w-1/2" />
@@ -116,7 +116,7 @@ export default function StudiesPage() {
                 return (
                   <li key={study.id}>
                     <Link href={studyPaths(study.id).overview}
-                      className="group flex h-full flex-col rounded-xl border border-line bg-surface p-5 shadow-card transition-colors hover:border-line-strong hover:bg-sunken/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                      className="group flex h-full flex-col rounded-lg border border-line bg-surface p-5 transition-colors hover:border-line-strong hover:bg-sunken/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                       <div className="flex items-start justify-between gap-3">
                         <h2 className="min-w-0 break-words text-sm font-semibold text-fg">{study.name}</h2>
                         <StatusPill study={study} />

@@ -423,7 +423,7 @@ function ProcessedDataInner() {
     <div className="space-y-4">
       <SectionHeader
         title={def.label}
-        description="Summaries computed from the raw sensor data, per participant and day."
+        description="Daily summaries per participant, computed from the raw data."
         actions={<ParticipantPicker participants={participants} value={selected} onChange={changeParticipant} />}
       />
 

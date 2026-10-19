@@ -199,14 +199,14 @@ function PeopleAdmin() {
       {dialog}
       <PageHeader
         title="People"
-        description="Invite people to the dashboard and choose their account type. Access to a study is given on that study's Team tab."
+        description="Dashboard accounts. Access to a study is managed on that study's Team tab."
         actions={<Button variant="secondary" onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" /> Refresh</Button>}
       />
 
       <div className="space-y-5">
         <Card>
           <CardHeader icon={<UserPlus size={16} />} title="Invite someone"
-            description="They get an email with a link to set a password. To add them to a study, use that study's Team tab." />
+            description="They will get an email to set a password." />
           <form onSubmit={invite} className="space-y-4">
             <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_11rem]">
               <TextField label="Email" type="email" required value={email} onChange={e => setEmail(e.target.value)}
@@ -274,7 +274,7 @@ function PeopleAdmin() {
           ) : visible.length === 0 ? (
             <EmptyState icon={<Users size={30} aria-hidden="true" />} title="No one matches these filters" />
           ) : (
-            <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-card">
+            <div className="overflow-hidden rounded-lg border border-line bg-surface">
               <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid ${COLS}`}>
                 <span>Person</span><span>Account type</span><span>Status</span><span>Studies</span><span className="text-right">Actions</span>
               </div>
@@ -313,13 +313,13 @@ function PersonRow({ person: p, self, busy, onType, onActive, onEmail }: {
           {self && <Badge tone="blue">You</Badge>}
         </p>
         {p.display_name && <p className="text-xs text-subtle">{p.display_name}</p>}
-        {self && <p id={selfHintId} className="mt-1 text-xs text-subtle">You cannot change your own account type or deactivate yourself. Ask another admin.</p>}
+        {self && <p id={selfHintId} className="sr-only">You cannot change your own account type or deactivate yourself. Ask another admin.</p>}
       </div>
 
       <div className="flex items-center gap-2 md:block">
         <span className="w-24 shrink-0 text-xs text-subtle md:hidden">Account type</span>
         <Select value={p.role} disabled={typeLocked} onChange={e => onType(e.target.value as AccountType)}
-          aria-label={`Account type for ${who}`} aria-describedby={self ? selfHintId : undefined} className="h-8 text-xs md:w-full">
+          aria-label={`Account type for ${who}`} aria-describedby={self ? selfHintId : undefined} title={self ? "You cannot change your own account type" : undefined} className="h-8 text-xs md:w-full">
           <option value="researcher">Researcher</option>
           <option value="admin">Admin</option>
         </Select>

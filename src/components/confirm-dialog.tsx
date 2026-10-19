@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { AlertTriangle, HelpCircle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { Modal } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
 
@@ -47,9 +47,7 @@ function ConfirmDialogInner({
 
   return (
     <Modal open onClose={onCancel} dismissible={!busy} size="sm" title={title}
-      icon={<span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${danger ? 'bg-danger-soft text-danger' : 'bg-accent-soft text-accent'}`}>
-        {danger ? <AlertTriangle size={18} /> : <HelpCircle size={18} />}
-      </span>}
+      icon={danger ? <AlertTriangle size={18} className="mt-0.5 shrink-0 text-danger" aria-hidden="true" /> : undefined}
       footer={<>
         <Button variant="secondary" onClick={onCancel} disabled={busy} data-autofocus={danger && requireText === undefined ? '' : undefined}>{cancelLabel}</Button>
         <Button type="submit" form={formId} variant={danger ? 'danger' : 'primary'} disabled={blocked} loading={busy}

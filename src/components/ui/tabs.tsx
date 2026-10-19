@@ -64,7 +64,7 @@ export function SegmentedControl<T extends string>({ value, onChange, options, l
         return (
           <button key={opt.value} ref={el => { refs.current[i] = el }} type="button" role="radio" aria-checked={on}
             tabIndex={on ? 0 : -1} onKeyDown={e => onKey(e, i)} onClick={() => onChange(opt.value)}
-            className={`inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${on ? 'bg-surface text-fg shadow-card' : 'text-subtle hover:text-fg'}`}>
+            className={`inline-flex items-center gap-1.5 rounded-md font-medium transition-colors ${size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${on ? 'bg-surface text-fg ring-1 ring-line' : 'text-subtle hover:text-fg'}`}>
             {opt.icon}{opt.label}
           </button>
         )

@@ -103,13 +103,10 @@ function StatCard({ icon, label, value, children, tone = 'default' }: {
   icon: React.ReactNode; label: string; value: React.ReactNode; children?: React.ReactNode; tone?: 'default' | 'danger'
 }) {
   return (
-    <Card className={`flex min-h-36 flex-col justify-between ${tone === 'danger' ? 'border-danger/40' : ''}`}>
-      <div className="flex items-center gap-2.5">
-        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone === 'danger' ? 'bg-danger-soft text-danger' : 'bg-accent-soft text-accent'}`} aria-hidden="true">{icon}</span>
-        <h2 className="text-sm font-medium text-muted">{label}</h2>
-      </div>
+    <Card className={`flex flex-col justify-between ${tone === 'danger' ? 'border-danger/40' : ''}`} data-icon={icon ? '' : undefined}>
+      <h2 className="text-[13px] font-medium text-subtle">{label}</h2>
       <div>
-        <p className={`mt-3 text-3xl font-bold tabular-nums tracking-tight ${tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{value}</p>
+        <p className={`mt-2 text-2xl font-semibold tabular-nums tracking-tight ${tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{value}</p>
         {children && <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">{children}</div>}
       </div>
     </Card>

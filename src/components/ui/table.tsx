@@ -9,14 +9,14 @@ import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight } from 'luci
  */
 export function TableWrap({ children, className = '', maxHeight }: { children: React.ReactNode; className?: string; maxHeight?: string }) {
   return (
-    <div className={`overflow-auto rounded-xl border border-line bg-surface shadow-card ${className}`} style={maxHeight ? { maxHeight } : undefined}>
+    <div className={`overflow-auto rounded-lg border border-line bg-surface ${className}`} style={maxHeight ? { maxHeight } : undefined}>
       <table className="w-full border-collapse text-left text-sm">{children}</table>
     </div>
   )
 }
 
 export function THead({ children }: { children: React.ReactNode }) {
-  return <thead className="sticky top-0 z-10 bg-sunken text-xs font-semibold text-subtle">{children}</thead>
+  return <thead className="sticky top-0 z-10 bg-surface text-xs font-medium text-subtle">{children}</thead>
 }
 
 export function Th({ children, className = '', sort, onSort, align = 'left' }: {

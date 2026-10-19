@@ -201,10 +201,10 @@ export default function NewStudyPage() {
   return (
     <div className="mx-auto max-w-3xl">
       {dialog}
-      <PageHeader title="New study" description="Set up the basics now. You can change everything later in the study's settings." />
+      <PageHeader title="New study" description="You can change all of this later in the study's settings." />
 
       {me && !isAdmin && (
-        <div role="note" className="mb-6 flex items-start gap-2 rounded-xl border border-line bg-accent-soft px-4 py-3 text-sm text-fg">
+        <div role="note" className="mb-6 flex items-start gap-2 rounded-lg border border-line bg-accent-soft px-4 py-3 text-sm text-fg">
           <Info size={16} className="mt-0.5 shrink-0 text-accent" aria-hidden="true" />
           <p>An admin will review this study before participants can join. You can set up sensors and surveys in the meantime.</p>
         </div>
@@ -214,7 +214,7 @@ export default function NewStudyPage() {
 
       {step === 0 && (
         <Card>
-          <CardHeader title="Basics" description="What the study is called and how participants join." />
+          <CardHeader title="Basics" />
           <div className="space-y-4">
             <TextField label="Study name" required autoFocus value={state.name} maxLength={200}
               onChange={e => set({ name: e.target.value })} placeholder="e.g. Sleep and phone use 2026"
@@ -232,7 +232,7 @@ export default function NewStudyPage() {
                 </Select>
               )}
             </Field>
-            <Field label="Study PIN" hint="Optional. If set, only people you give the 4-digit PIN to can join." error={showErrors ? pinError : null}>
+            <Field label="Study PIN" hint="Optional. With a PIN, only people you share it with can join." error={showErrors ? pinError : null}>
               {(id, d) => (
                 <Input id={id} aria-describedby={d} aria-invalid={showErrors && pinError ? true : undefined} value={state.pin}
                   inputMode="numeric" autoComplete="off" maxLength={4} placeholder="4 digits"

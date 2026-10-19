@@ -20,7 +20,7 @@ export function ThemeToggle({ className = '' }: { className?: string }) {
         return (
           <button key={opt.value} type="button" role="radio" aria-checked={on} aria-label={opt.label} title={opt.label}
             onClick={() => setChoice(opt.value)}
-            className={`inline-flex h-7 w-8 items-center justify-center rounded-md transition-colors ${on ? 'bg-surface text-fg shadow-card' : 'text-subtle hover:text-fg'}`}>
+            className={`inline-flex h-7 w-8 items-center justify-center rounded-md transition-colors ${on ? 'bg-surface text-fg ring-1 ring-line' : 'text-subtle hover:text-fg'}`}>
             <Icon size={14} aria-hidden="true" />
           </button>
         )

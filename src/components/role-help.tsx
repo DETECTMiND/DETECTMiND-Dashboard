@@ -18,7 +18,7 @@ const STUDY_ROLES: { role: BadgeRole; text: string }[] = [
 /** Collapsible "Who can do what" panel. */
 export function RoleHelp({ defaultOpen = false, className = '' }: { defaultOpen?: boolean; className?: string }) {
   return (
-    <details open={defaultOpen} className={`group rounded-xl border border-line bg-surface shadow-card ${className}`}>
+    <details open={defaultOpen} className={`group rounded-lg border border-line bg-surface ${className}`}>
       <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-fg hover:bg-sunken [&::-webkit-details-marker]:hidden">
         <HelpCircle size={16} className="text-subtle" aria-hidden="true" />
         <span className="flex-1">Who can do what</span>

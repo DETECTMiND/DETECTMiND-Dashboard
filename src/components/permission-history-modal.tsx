@@ -75,7 +75,6 @@ export function PermissionHistoryModal({
 
   return (
     <Modal open onClose={onClose} size="lg" title="Permission history" description={pName(participant)}
-      icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-warning-soft text-warning"><ShieldCheck size={18} /></span>}
       footer={q.data ? (
         <p className="mr-auto self-center text-xs text-subtle">
           {openOutages > 0 ? `${openOutages} permission${openOutages > 1 ? 's are' : ' is'} turned off right now` : 'Every tracked permission is on right now'}

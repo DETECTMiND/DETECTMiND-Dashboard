@@ -146,7 +146,7 @@ function ApprovalsAdmin() {
       {dialog}
       <PageHeader
         title="Approvals"
-        description="New studies wait here until an admin approves them. Participants cannot join a study before that."
+        description="New studies wait here for approval before participants can join."
         actions={<Button variant="secondary" onClick={() => void reload()}><RefreshCw size={14} aria-hidden="true" /> Refresh</Button>}
       />
 
