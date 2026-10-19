@@ -167,7 +167,10 @@ function RawDataInner() {
     if (!enabled || enabled.size === 0) return DATA_TABLES
     return DATA_TABLES.filter(t => !t.sensor || enabled.has(t.sensor) || (countMap?.[t.table] ?? 0) > 0)
   }, [meta.data, countMap])
-  const table = visibleTables.find(t => t.table === tableChoice) ?? visibleTables[0]
+  // Until a table is picked, open the first one that has rows
+  const table = visibleTables.find(t => t.table === tableChoice)
+    ?? visibleTables.find(t => (countMap?.[t.table] ?? 0) > 0)
+    ?? visibleTables[0]
   const canChart = CHART_TABLES.has(table.table)
   const viewMode: ViewMode = canChart ? viewChoice : 'table'
   const sortCol = sort.col ?? table.timeCol
