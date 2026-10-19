@@ -13,9 +13,9 @@ test.describe('study approval', () => {
 
     await signIn(page, 'researcher')
     await page.goto('/studies/new')
-    await expect(page.getByText(/reviewed by an admin/i)).toBeVisible()
+    await expect(page.getByText(/an admin will review/i)).toBeVisible()
     await page.getByLabel(/study name/i).first().fill(name)
-    // Four-step wizard: Basic info → Data collection → ESM → Review
+    // Four-step wizard: Basics → Sensors → Surveys → Review
     for (let i = 0; i < 3; i++) await page.getByRole('button', { name: /^continue$/i }).click()
     await page.getByRole('button', { name: /create study/i }).click()
     await expect(page.getByText(/pending approval/i).first()).toBeVisible()

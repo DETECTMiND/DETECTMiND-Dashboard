@@ -4,6 +4,8 @@ import type { NextConfig } from "next";
 const ID = ':id([0-9a-fA-F-]{36})'
 
 const nextConfig: NextConfig = {
+  // The dev badge sits on top of the sidebar's theme switch
+  devIndicators: false,
   // Old page addresses from before the menu was grouped into Data / Surveys / Settings.
   // Query strings (e.g. ?participant=) are carried over.
   async redirects() {
