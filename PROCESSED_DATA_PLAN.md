@@ -28,6 +28,7 @@ view, not in the app and not re-derived ad-hoc in React. One source of truth.
 | `daily_pickups` | participant × date × hour | Pickups dataset |
 | `daily_first_last_use` | participant × day | First/Last Use dataset |
 | `daily_notifications` | participant × day | Notifications dataset |
+| `daily_calls` | participant × day × app × network × audio/video × outcome | Calls dataset |
 | `daily_battery_summary` | participant × day | Battery dataset |
 | `daily_steps` | participant × day | Steps dataset |
 
@@ -83,8 +84,9 @@ likely research value.
 8. **ESM compliance** — response rate, median latency, per schedule, from
    `data_esm_responses` (expired vs answered). View: `esm_compliance`.
 
-9. **Communication summary** — calls/SMS counts and durations per day, from
-   `data_calls` / `data_sms` (hashed contacts, so counts only).
+9. **Communication summary** — calls are done (`daily_calls`, phone and app
+   calls). SMS counts per day from `data_sms` (hashed contacts, so counts
+   only) are still to do.
 
 10. **Step counts** — requires a NEW raw sensor in the app
     (`TYPE_STEP_COUNTER`, `ACTIVITY_RECOGNITION` permission, Android 10+). The

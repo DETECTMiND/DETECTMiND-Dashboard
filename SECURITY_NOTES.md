@@ -124,6 +124,11 @@ whatever the roles; the row is kept for the audit trail.
   `set_study_pin()`). `pin_attempts`: read if viewable, clear if editable.
 - Processed views use `security_invoker = true`, so they apply all of the
   above automatically.
+- `data_calls`: phone calls carry `contact_hash` (SHA-256 of the E.164
+  number). Calls in other apps (`source` = a package name) carry no contact
+  at all (`contact_hash` NULL): only the app, direction, outcome, audio/video
+  and times. CHECK constraints limit `source`, `call_kind`, `outcome` and
+  `signals` to the expected shapes.
 
 A signed-in user without an active researchers row sees "Your account is not
 authorised as a researcher" (or "...has been deactivated") instead of an

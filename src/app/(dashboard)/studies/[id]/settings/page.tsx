@@ -27,6 +27,7 @@ interface BankingPause {
 
 interface StudyConfig {
   guided_permissions?: boolean
+  show_sync_counts?: boolean
   auto_participant_id?: boolean
   banking_pause?: Partial<BankingPause>
   [key: string]: unknown
@@ -53,6 +54,7 @@ interface StudyForm {
   /** Text so a value under the minimum can be shown with an error instead of being dropped */
   sync_interval: string
   guided_permissions: boolean
+  show_sync_counts: boolean
   auto_participant_id: boolean
   banking: BankingPause
 }
@@ -68,6 +70,7 @@ function formFromStudy(s: Study): StudyForm {
     app_description: s.app_description ?? '',
     sync_interval: String(s.sync_interval_minutes ?? 30),
     guided_permissions: !!s.config?.guided_permissions,
+    show_sync_counts: !!s.config?.show_sync_counts,
     auto_participant_id: !!s.config?.auto_participant_id,
     // No banking_pause key means the phones do not pause at all.
     banking: {
@@ -208,6 +211,8 @@ export default function StudySettingsPage() {
     const config: StudyConfig = { ...(study.config ?? {}) }
     if (form.guided_permissions) config.guided_permissions = true
     else delete config.guided_permissions
+    if (form.show_sync_counts) config.show_sync_counts = true
+    else delete config.show_sync_counts
     if (form.auto_participant_id) config.auto_participant_id = true
     else delete config.auto_participant_id
     config.banking_pause = { ...form.banking }
@@ -467,6 +472,9 @@ export default function StudySettingsPage() {
           <Toggle checked={form.guided_permissions} disabled={!canEdit} onChange={v => patch({ guided_permissions: v })}
             label="Guided permissions"
             description="Walk participants through each Android permission the first time they open the app." />
+          <Toggle checked={form.show_sync_counts} disabled={!canEdit} onChange={v => patch({ show_sync_counts: v })}
+            label="Show 'to sync' counts to participants"
+            description="For pilots and testing. Keep off in real studies so participants don't see how much is recorded." />
 
           <PinLockouts studyId={id} canEdit={canEdit} />
         </div>

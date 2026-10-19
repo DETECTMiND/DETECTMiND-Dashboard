@@ -36,6 +36,18 @@ SQL files at the repo root, run in the Supabase SQL editor in this order:
 
 `PROCESSED_DATA_PLAN.md` describes the processed (derived) views.
 
+`data_calls` holds the phone's own calls and, when the calls sensor's
+"Calls in other apps" option is on (`sensor_configs.config.include_app_calls`,
+missing = on), calls in other apps such as WhatsApp, Botim or Zoom. Columns:
+`direction` (incoming | outgoing | missed), `event_time`, `duration_seconds`
+(talk time), `contact_hash` (SHA-256 of the number; NULL for app calls),
+`source` ('phone' or the app's package name), `call_kind` (cellular | voip),
+`outcome` (answered | missed | declined | unanswered | unknown), `is_video`,
+`video_seconds`, `ring_seconds`, `connected_at`, `ended_at` and `signals`
+(JSON array of how the call was detected). The new columns are nullable, so
+older app versions still upload. `daily_calls` summarises them per
+participant, day, app, network, audio/video and outcome.
+
 ## Scripts
 
 ```bash

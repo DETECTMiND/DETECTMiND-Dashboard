@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { GESTURE_INTERACTION_LABELS } from '@/lib/sensors'
+import { GESTURE_INTERACTION_LABELS, callSourceLabel } from '@/lib/sensors'
 
 // Friendly column names and cell formatting for raw data tables.
 
@@ -26,6 +26,15 @@ const COLUMN_LABELS: Record<string, string> = {
   direction: 'Direction',
   event_time: 'Time',
   contact_hash: 'Contact (hashed)',
+  source: 'App',
+  call_kind: 'Network',
+  outcome: 'Outcome',
+  is_video: 'Video',
+  video_seconds: 'Video (s)',
+  ring_seconds: 'Ringing (s)',
+  connected_at: 'Connected',
+  ended_at: 'Ended',
+  signals: 'Signals',
   schedule_id: 'Schedule',
   triggered_at: 'Triggered',
   responded_at: 'Responded',
@@ -63,7 +72,27 @@ function formatVoltage(value: number): string {
   return (value >= 100 ? value / 1000 : value).toFixed(2)
 }
 
-export function formatCellValue(col: string, value: unknown): string {
+// data_calls display values. Display only: CSV exports keep the raw values.
+const CALL_KIND_LABELS: Record<string, string> = { cellular: 'Cellular', voip: 'Internet (VoIP)' }
+const CALL_OUTCOME_LABELS: Record<string, string> = {
+  answered: 'Answered', missed: 'Missed', declined: 'Declined', unanswered: 'Not answered', unknown: 'Unknown',
+}
+
+function formatCallValue(col: string, value: unknown): string | null {
+  if (col === 'source') return callSourceLabel(typeof value === 'string' ? value : null)
+  if (value === null || value === undefined || value === '') return null
+  if (col === 'call_kind' && typeof value === 'string') return CALL_KIND_LABELS[value] ?? value
+  if (col === 'outcome' && typeof value === 'string') return CALL_OUTCOME_LABELS[value] ?? value
+  if (col === 'signals' && Array.isArray(value)) return value.length ? value.map(String).join(', ') : null
+  return null
+}
+
+/** Display text for one cell. `table` enables per-table formatting (e.g. call app names). */
+export function formatCellValue(col: string, value: unknown, table?: string): string {
+  if (table === 'data_calls') {
+    const call = formatCallValue(col, value)
+    if (call !== null) return call
+  }
   if (value === null || value === undefined || value === '') return '—'
   if (col === 'voltage' && typeof value === 'number') return formatVoltage(value)
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'

@@ -374,7 +374,7 @@ function RawDataInner() {
                       )}
                       {cols.map(k => {
                         if (JSON_COLUMNS.has(k)) return <Td key={k}><JsonCell value={row[k]} label={columnLabel(k)} /></Td>
-                        const display = DERIVED.has(k) ? gestureDerived(k, row) : formatCellValue(k, row[k])
+                        const display = DERIVED.has(k) ? gestureDerived(k, row) : formatCellValue(k, row[k], table.table)
                         const empty = display === '—'
                         return (
                           <Td key={k} title={empty ? undefined : display}

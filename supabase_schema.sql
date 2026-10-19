@@ -247,15 +247,31 @@ CREATE TABLE data_battery (
 CREATE INDEX idx_battery_participant ON data_battery(participant_id, recorded_at);
 CREATE UNIQUE INDEX uq_battery_client_uuid ON data_battery(client_uuid);
 
--- 4a. Phone Calls
+-- 4a. Calls: the phone's own calls (call log) and, when the calls sensor's
+-- config.include_app_calls is on (missing = on), calls in other apps
+-- (WhatsApp, Botim, Zoom, ...). App calls carry no contact at all
+-- (contact_hash NULL): only the app, direction, outcome, audio/video and times.
+-- Every column added for app calls is nullable, so rows from older app
+-- versions (phone calls only) still insert unchanged.
 CREATE TABLE data_calls (
     id BIGSERIAL PRIMARY KEY,
     participant_id UUID NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
     client_uuid UUID,
     direction TEXT NOT NULL CHECK (direction IN ('incoming', 'outgoing', 'missed')),
     event_time TIMESTAMPTZ NOT NULL,
-    duration_seconds INT,
-    contact_hash TEXT, -- SHA-256 of the phone number
+    duration_seconds INT,  -- talk time (connected to ended)
+    contact_hash TEXT,     -- SHA-256 of the E.164 phone number; NULL for app calls
+    -- 'phone' (the dialler / call log) or the calling app's package name.
+    -- NULL = a row from an app version before app calls (always the phone).
+    source TEXT CHECK (source IS NULL OR source ~ '^[A-Za-z0-9_.]{1,255}$'),
+    call_kind TEXT CHECK (call_kind IN ('cellular', 'voip')),
+    outcome TEXT CHECK (outcome IN ('answered', 'missed', 'declined', 'unanswered', 'unknown')),
+    is_video BOOLEAN,
+    video_seconds INT CHECK (video_seconds >= 0),  -- part of the talk time with video on
+    ring_seconds INT CHECK (ring_seconds >= 0),    -- ringing / dialling before answer or give-up
+    connected_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    signals JSONB CHECK (signals IS NULL OR jsonb_typeof(signals) = 'array'),  -- how the call was detected, e.g. ["audio_mode","notification"]
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_calls_participant ON data_calls(participant_id, event_time);
@@ -1376,6 +1392,46 @@ SELECT
     COUNT(*) FILTER (WHERE removal_reason = 'clicked')     AS opened
 FROM data_notifications
 GROUP BY 1, 2;
+
+-- Calls per participant per day, split by app (source), network (cellular /
+-- voip), audio vs video and outcome. Rows from app versions before app calls
+-- have no source/call_kind/outcome/is_video: they are phone calls, cellular,
+-- audio, and their outcome is derived from the call log (missed -> missed,
+-- talk time > 0 -> answered, outgoing with no talk time -> unanswered).
+-- talk_seconds = duration_seconds (talk time); video_seconds is part of it.
+CREATE OR REPLACE VIEW daily_calls
+WITH (security_invoker = true) AS
+WITH c AS (
+    SELECT
+        participant_id,
+        (event_time AT TIME ZONE app_tz())::date AS usage_date,
+        COALESCE(source, 'phone') AS source,
+        COALESCE(call_kind, CASE WHEN COALESCE(source, 'phone') = 'phone' THEN 'cellular' ELSE 'voip' END) AS call_kind,
+        COALESCE(is_video, false) AS is_video,
+        COALESCE(outcome, CASE
+            WHEN direction = 'missed'                                THEN 'missed'
+            WHEN duration_seconds > 0                                THEN 'answered'
+            WHEN direction = 'outgoing' AND duration_seconds IS NOT NULL THEN 'unanswered'
+            ELSE 'unknown'
+        END) AS outcome,
+        GREATEST(COALESCE(duration_seconds, 0), 0) AS talk_seconds,
+        COALESCE(ring_seconds, 0)  AS ring_seconds,
+        COALESCE(video_seconds, 0) AS video_seconds
+    FROM data_calls
+)
+SELECT
+    participant_id,
+    usage_date,
+    source,
+    call_kind,
+    is_video,
+    outcome,
+    COUNT(*)                    AS call_count,
+    SUM(talk_seconds)::bigint   AS talk_seconds,
+    SUM(ring_seconds)::bigint   AS ring_seconds,
+    SUM(video_seconds)::bigint  AS video_seconds
+FROM c
+GROUP BY participant_id, usage_date, source, call_kind, is_video, outcome;
 
 CREATE OR REPLACE VIEW daily_battery_summary
 WITH (security_invoker = true) AS

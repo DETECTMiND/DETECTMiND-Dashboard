@@ -28,7 +28,7 @@ export interface SensorInfo {
 export const SENSORS: SensorInfo[] = [
   { key: 'app_usage', label: 'App usage', description: 'Which apps are used, with start and end times.', icon: Smartphone, hasInterval: false, category: 'phone use', table: 'data_app_usage', timeCol: 'start_time' },
   { key: 'notifications', label: 'Notifications', description: 'Which app posted a notification and when it was opened or dismissed. Titles and content are never stored.', icon: Bell, hasInterval: false, category: 'phone use', table: 'data_notifications', timeCol: 'posted_at' },
-  { key: 'calls', label: 'Calls', description: 'Incoming, outgoing and missed calls with duration. Phone numbers are hashed.', icon: Phone, hasInterval: false, category: 'phone use', table: 'data_calls', timeCol: 'event_time' },
+  { key: 'calls', label: 'Calls', description: 'Incoming, outgoing and missed calls with duration, from the phone and optionally other apps. Phone numbers are hashed.', icon: Phone, hasInterval: false, category: 'phone use', table: 'data_calls', timeCol: 'event_time' },
   { key: 'sms', label: 'SMS', description: 'Sent and received messages with time. Numbers are hashed; message text is never read.', icon: MessageSquare, hasInterval: false, category: 'phone use', table: 'data_sms', timeCol: 'event_time' },
   { key: 'screen_state', label: 'Screen state', description: 'Screen on, off, locked and unlocked.', icon: Monitor, hasInterval: false, category: 'phone use', table: 'data_screen_state', timeCol: 'recorded_at' },
   { key: 'gestures', label: 'Gestures', description: 'Taps, scrolls and swipes between posts or videos. Reads screen layout only, never text.', icon: MousePointerClick, hasInterval: false, category: 'phone use', table: 'data_gestures', timeCol: 'recorded_at' },
@@ -117,6 +117,46 @@ export const DEFAULT_SCROLL_APPS = [
   'com.linkedin.android',
   'com.whatsapp',
 ]
+
+// ── Calls ────────────────────────────────────────────────────────────────────
+
+/** sensor_configs.config options for calls. Missing keys mean "on" (the app's default). */
+export const CALL_OPTION_LABELS: Record<'include_app_calls' | 'detect_video', { label: string; description?: string }> = {
+  include_app_calls: {
+    label: 'Calls in other apps',
+    description: 'WhatsApp, Botim, Instagram, Zoom and any other app. App, direction, answered or not, audio or video, times. Never who or what is said.',
+  },
+  detect_video: { label: 'Detect video calls' },
+}
+
+export const CALL_DEFAULTS = {
+  include_app_calls: true,
+  detect_video: true,
+}
+
+/** Friendly names for data_calls.source (the phone, or the package of the calling app). */
+export const CALL_SOURCE_LABELS: Record<string, string> = {
+  phone: 'Phone',
+  'com.whatsapp': 'WhatsApp',
+  'com.whatsapp.w4b': 'WhatsApp Business',
+  'im.thebot.messenger': 'Botim',
+  'com.instagram.android': 'Instagram',
+  'com.facebook.orca': 'Messenger',
+  'org.telegram.messenger': 'Telegram',
+  'org.thoughtcrime.securesms': 'Signal',
+  'us.zoom.videomeetings': 'Zoom',
+  'com.google.android.apps.tachyon': 'Meet',
+  'com.microsoft.teams': 'Teams',
+  'com.skype.raider': 'Skype',
+  'com.viber.voip': 'Viber',
+  'com.snapchat.android': 'Snapchat',
+}
+
+/** Display name for a call source; unknown packages are shown as-is. Null = an older row from the phone dialler. */
+export function callSourceLabel(source: string | null | undefined): string {
+  if (source == null || source === '') return 'Phone'
+  return CALL_SOURCE_LABELS[source] ?? source
+}
 
 /** Banking apps where gesture collection pauses by default. */
 export const DEFAULT_BANKING_APPS = [

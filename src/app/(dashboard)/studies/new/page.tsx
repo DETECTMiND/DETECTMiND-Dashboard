@@ -26,6 +26,7 @@ interface WizardState {
   pin: string
   autoParticipantId: boolean
   guidedPermissions: boolean
+  showSyncCounts: boolean
   sensors: SensorDrafts
   bankingPause: boolean
   addSchedule: 'none' | 'add'
@@ -52,6 +53,7 @@ function initialState(): WizardState {
     pin: '',
     autoParticipantId: false,
     guidedPermissions: false,
+    showSyncCounts: false,
     sensors: defaultSensorDrafts(),
     bankingPause: true,
     addSchedule: 'none',
@@ -165,6 +167,7 @@ export default function NewStudyPage() {
         banking_pause: { enabled: state.bankingPause, apps: [...DEFAULT_BANKING_APPS], reminder_minutes: 30, escalation_minutes: 120 },
       }
       if (state.guidedPermissions) config.guided_permissions = true
+      if (state.showSyncCounts) config.show_sync_counts = true
       if (state.autoParticipantId) config.auto_participant_id = true
       const { error } = await supabase.from('studies').insert({
         id: studyId,
@@ -246,6 +249,9 @@ export default function NewStudyPage() {
               <Toggle checked={state.guidedPermissions} onChange={v => set({ guidedPermissions: v })}
                 label="Guided permissions"
                 description="Walk participants through each Android permission the first time they open the app." />
+              <Toggle checked={state.showSyncCounts} onChange={v => set({ showSyncCounts: v })}
+                label="Show 'to sync' counts to participants"
+                description="For pilots and testing. Keep off in real studies so participants don't see how much is recorded." />
             </div>
           </div>
         </Card>
@@ -297,6 +303,7 @@ export default function NewStudyPage() {
               { label: 'Study PIN', value: state.pin ? <Badge tone="green">On (4 digits)</Badge> : <Badge>Off: anyone with the app can join</Badge> },
               { label: 'Automatic participant IDs', value: yesNo(state.autoParticipantId) },
               { label: 'Guided permissions', value: yesNo(state.guidedPermissions) },
+              { label: "Show 'to sync' counts to participants", value: yesNo(state.showSyncCounts) },
             ]} />
           </Card>
           <Card>

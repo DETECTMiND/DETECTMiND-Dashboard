@@ -5,7 +5,7 @@ import { Suspense, useMemo, useState } from 'react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { BarChart2, Download, LayoutGrid, Table2, Users } from 'lucide-react'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import {
   Button, Card, EmptyState, ErrorState, FilterPills, Pagination, SectionHeader, SegmentedControl,
@@ -13,15 +13,15 @@ import {
 } from '@/components/ui'
 import { Participant, ParticipantPicker, participantName } from '@/components/participant-ui'
 import { useAsync } from '@/components/data/use-async'
-import { C, axisLine, axisTick, gridProps, intensity, tooltipProps } from '@/components/charts/theme'
+import { C, ChartSection, axisLine, axisTick, gridProps, intensity, legendStyle, seriesColor, tooltipProps } from '@/components/charts/theme'
 import { chunks, downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
-import { permissionLabel } from '@/lib/sensors'
+import { callSourceLabel, permissionLabel } from '@/lib/sensors'
 
 // ─── Dataset registry ─────────────────────────────────────────────────────────
 // Each processed dataset: which database view to read, a stable order for
 // paging through it, and whether it has a chart.
 type DatasetKey =
-  | 'hourly' | 'daily' | 'hourly_app' | 'daily_app' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages' | 'scroll'
+  | 'hourly' | 'daily' | 'hourly_app' | 'daily_app' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'calls' | 'battery' | 'permission_outages' | 'scroll'
 
 interface DatasetDef {
   key: DatasetKey
@@ -40,6 +40,7 @@ const DATASETS: DatasetDef[] = [
   { key: 'pickups',            label: 'Pickups',               view: 'daily_pickups',         order: ['usage_date', 'hour_of_day'],    hasChart: true  },
   { key: 'first_last',         label: 'First and last use',    view: 'daily_first_last_use',  order: ['usage_date'],                   hasChart: false },
   { key: 'notifications',      label: 'Notifications',         view: 'daily_notifications',   order: ['usage_date'],                   hasChart: true  },
+  { key: 'calls',              label: 'Calls',                 view: 'daily_calls',           order: ['usage_date', 'source', 'call_kind', 'is_video', 'outcome'], hasChart: true },
   { key: 'battery',            label: 'Battery',               view: 'daily_battery_summary', order: ['usage_date'],                   hasChart: true  },
   { key: 'permission_outages', label: 'Permission outages',    view: 'permission_outages',    order: ['permission', 'revoked_at'],     hasChart: false },
   { key: 'scroll',             label: 'Scrolling and reels',   view: 'daily_scroll_activity', order: ['usage_date', 'app_name'],       hasChart: true  },
@@ -70,6 +71,25 @@ function fmtTs(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+const CALL_OUTCOMES: { key: string; label: string; color: string }[] = [
+  { key: 'answered', label: 'Answered', color: C.green },
+  { key: 'missed', label: 'Missed', color: C.red },
+  { key: 'declined', label: 'Declined', color: C.amber },
+  { key: 'unanswered', label: 'Not answered', color: C.violet },
+  { key: 'unknown', label: 'Unknown', color: C.muted },
+]
+const callOutcomeLabel = (o: string) => CALL_OUTCOMES.find(x => x.key === o)?.label ?? o
+/** Apps shown separately in the calls chart; the rest are grouped as "Other apps". */
+const CALL_CHART_APPS = 6
+
+/** Seconds as "1h 5m", "4m 10s" or "35s". */
+function fmtSecs(total: number): string {
+  const s = Math.round(total)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return s % 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s / 60}m`
+  return fmtHM(s / 60)
 }
 
 // Raw rows from the database views have per-view shapes; treated dynamically.
@@ -370,6 +390,40 @@ function ProcessedDataInner() {
       }
     }
 
+    if (dataset === 'calls') {
+      // View grain is participant x date x app x network x audio/video x outcome.
+      const rows = [...scoped]
+        .sort((a, b) => String(b.usage_date).localeCompare(String(a.usage_date))
+          || callSourceLabel(a.source).localeCompare(callSourceLabel(b.source))
+          || Number(a.is_video) - Number(b.is_video)
+          || String(a.outcome).localeCompare(String(b.outcome)))
+        .map(r => ({
+          date: r.usage_date as string,
+          participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }),
+          app: callSourceLabel(r.source),
+          source: r.source as string,
+          call_kind: r.call_kind as string,
+          is_video: !!r.is_video,
+          outcome: r.outcome as string,
+          calls: Number(r.call_count) || 0,
+          talk_seconds: Number(r.talk_seconds) || 0,
+          ring_seconds: Number(r.ring_seconds) || 0,
+          video_seconds: Number(r.video_seconds) || 0,
+        }))
+      const cells = (r: typeof rows[number]) => [
+        r.app, r.is_video ? 'Video' : 'Audio', r.call_kind === 'cellular' ? 'Cellular' : 'Internet', callOutcomeLabel(r.outcome),
+        r.calls.toLocaleString(), fmtSecs(r.talk_seconds), fmtSecs(r.ring_seconds), r.is_video ? fmtSecs(r.video_seconds) : '—',
+      ]
+      const tail = ['App', 'Type', 'Network', 'Outcome', 'Calls', 'Talk time', 'Ringing', 'Video on']
+      return {
+        headers: isOverall ? ['Date', 'Participant', ...tail] : ['Date', ...tail],
+        rows: rows.map(r => isOverall ? [r.date, r.participant, ...cells(r)] : [r.date, ...cells(r)]),
+        // CSV keeps the raw source (package name) next to the display name.
+        csv: rows.map(({ participant, ...rest }) => (isOverall ? { participant, ...rest } : rest)),
+        chart: [], chartLabel: '', unit: '',
+      }
+    }
+
     if (dataset === 'first_last') {
       const rows = [...scoped].sort((a, b) => (a.usage_date + a.participant_id).localeCompare(b.usage_date + b.participant_id))
         .map(r => ({ date: r.usage_date, participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }), first: r.first_use_local || '—', last: r.last_use_local || '—' }))
@@ -382,6 +436,49 @@ function ProcessedDataInner() {
 
     return null
   }, [dataset, scoped, isOverall, overallMode, pMap])
+
+  // ── Calls charts: per day, minutes by app, audio vs video, calls by outcome ──
+  const callCharts = useMemo(() => {
+    if (dataset !== 'calls') return null
+    // Apps ranked by total talk time, then by number of calls.
+    const appTotals: Record<string, { talk: number; calls: number }> = {}
+    for (const r of scoped) {
+      const t = appTotals[callSourceLabel(r.source)] ??= { talk: 0, calls: 0 }
+      t.talk += Number(r.talk_seconds) || 0
+      t.calls += Number(r.call_count) || 0
+    }
+    const ranked = Object.keys(appTotals)
+      .sort((a, b) => appTotals[b].talk - appTotals[a].talk || appTotals[b].calls - appTotals[a].calls)
+    const shown = ranked.slice(0, CALL_CHART_APPS)
+    const apps = ranked.length > CALL_CHART_APPS ? [...shown, 'Other apps'] : shown
+    const appKey = (app: string) => (shown.includes(app) ? app : 'Other apps')
+
+    type Day = { pids: Set<string>; byApp: Record<string, number>; audio: number; video: number; byOutcome: Record<string, number> }
+    const days: Record<string, Day> = {}
+    for (const r of scoped) {
+      const d = days[r.usage_date] || (days[r.usage_date] = { pids: new Set(), byApp: {}, audio: 0, video: 0, byOutcome: {} })
+      const talk = Number(r.talk_seconds) || 0
+      const app = appKey(callSourceLabel(r.source))
+      d.pids.add(r.participant_id)
+      d.byApp[app] = (d.byApp[app] || 0) + talk
+      if (r.is_video) d.video += talk; else d.audio += talk
+      d.byOutcome[r.outcome] = (d.byOutcome[r.outcome] || 0) + (Number(r.call_count) || 0)
+    }
+    const dates = Object.keys(days).sort()
+    const k = (d: Day) => (isOverall && overallMode === 'avg' ? Math.max(d.pids.size, 1) : 1)
+    const mins = (sec: number, d: Day) => +(sec / 60 / k(d)).toFixed(1)
+    const outcomes = CALL_OUTCOMES.filter(o => dates.some(date => days[date].byOutcome[o.key]))
+    return {
+      apps,
+      outcomes,
+      // Series keys are indexes: recharts reads dots in a dataKey as a path, and package names have dots.
+      byApp: dates.map(date => ({ date, ...Object.fromEntries(apps.map((a, i) => [`app${i}`, mins(days[date].byApp[a] || 0, days[date])])) })),
+      audioVideo: dates.map(date => ({ date, audio: mins(days[date].audio, days[date]), video: mins(days[date].video, days[date]) })),
+      byOutcome: dates.map(date => ({
+        date, ...Object.fromEntries(outcomes.map(o => [o.key, +((days[date].byOutcome[o.key] || 0) / k(days[date])).toFixed(1)])),
+      })),
+    }
+  }, [dataset, scoped, isOverall, overallMode])
 
   // ── hasData + export ────────────────────────────────────────────────────────
   const hasData = dataset === 'hourly'
@@ -467,6 +564,8 @@ function ProcessedDataInner() {
         ) : (
           <HeatmapTable grid={hourlyGrid} dates={hourlyDates} />
         )
+      ) : dataset === 'calls' && viewMode === 'chart' && callCharts ? (
+        <CallsCharts data={callCharts} perParticipant={isOverall && overallMode === 'avg'} />
       ) : generic && (
         viewMode === 'chart' && canChart && generic.chart.length > 0 ? (
           <SimpleBarChart data={generic.chart} xKey="date" valueKey="value" label={generic.chartLabel} unit={generic.unit} />
@@ -501,6 +600,52 @@ function SimpleBarChart({ data, xKey, valueKey, label, unit }: {
           <Bar dataKey={valueKey} name={label} fill={C.blue} radius={[3, 3, 0, 0]} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
+    </Card>
+  )
+}
+
+function StackedDayChart({ data, series, unit, height = 260 }: {
+  data: Record<string, unknown>[]; series: { key: string; label: string; color: string }[]; unit: string; height?: number
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+        <CartesianGrid {...gridProps} vertical={false} />
+        <XAxis dataKey="date" tick={axisTick} axisLine={axisLine} tickLine={false} minTickGap={12} />
+        <YAxis tick={axisTick} axisLine={false} tickLine={false} width={48} />
+        <Tooltip {...tooltipProps} formatter={(v, name) => [`${v}${unit ? ` ${unit}` : ''}`, name]} />
+        <Legend wrapperStyle={legendStyle} />
+        {series.map(s => (
+          <Bar key={s.key} dataKey={s.key} name={s.label} stackId="a" fill={s.color} maxBarSize={40} isAnimationActive={false} />
+        ))}
+      </BarChart>
+    </ResponsiveContainer>
+  )
+}
+
+function CallsCharts({ data, perParticipant }: {
+  data: {
+    apps: string[]; outcomes: { key: string; label: string; color: string }[]
+    byApp: Record<string, unknown>[]; audioVideo: Record<string, unknown>[]; byOutcome: Record<string, unknown>[]
+  }
+  perParticipant: boolean
+}) {
+  const hint = perParticipant ? 'Average per participant with calls that day.' : undefined
+  return (
+    <Card>
+      <div className="space-y-8">
+        <ChartSection title="Talk time per day by app" hint={hint}>
+          <StackedDayChart data={data.byApp} unit="min"
+            series={data.apps.map((a, i) => ({ key: `app${i}`, label: a, color: a === 'Other apps' ? C.muted : seriesColor(i) }))} />
+        </ChartSection>
+        <ChartSection title="Audio and video talk time per day" hint={hint}>
+          <StackedDayChart data={data.audioVideo} unit="min" height={220}
+            series={[{ key: 'audio', label: 'Audio calls', color: C.blue }, { key: 'video', label: 'Video calls', color: C.violet }]} />
+        </ChartSection>
+        <ChartSection title="Calls per day: answered and missed" hint={hint}>
+          <StackedDayChart data={data.byOutcome} unit="" height={220} series={data.outcomes} />
+        </ChartSection>
+      </div>
     </Card>
   )
 }

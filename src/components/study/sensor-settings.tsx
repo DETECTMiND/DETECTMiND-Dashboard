@@ -2,7 +2,7 @@
 
 import { useId } from 'react'
 import {
-  DEFAULT_MOVEMENT_THRESHOLD, DEFAULT_SCROLL_APPS, GESTURE_DEFAULTS, GESTURE_EVENT_LABELS, GESTURE_SKIP_LABELS,
+  CALL_DEFAULTS, CALL_OPTION_LABELS, DEFAULT_MOVEMENT_THRESHOLD, DEFAULT_SCROLL_APPS, GESTURE_DEFAULTS, GESTURE_EVENT_LABELS, GESTURE_SKIP_LABELS,
   SENSORS, type SensorInfo, type SensorKey,
 } from '@/lib/sensors'
 import { Badge, Button, Field, IntervalInput, Textarea, Toggle, formatInterval } from '@/components/ui'
@@ -13,9 +13,11 @@ import { NumberInput } from './number-input'
 
 export interface ScrollTracking { enabled: boolean; apps: string[] }
 
-/** sensor_configs.config: location uses movement_threshold; gestures uses the interaction, skip and scroll settings. */
+/** sensor_configs.config: location uses movement_threshold; gestures uses the interaction, skip and scroll settings; calls uses include_app_calls and detect_video. */
 export interface SensorConfigJson {
   movement_threshold?: number
+  include_app_calls?: boolean
+  detect_video?: boolean
   interaction_types?: Record<string, boolean>
   skip_rules?: Record<string, boolean>
   scroll_tracking?: ScrollTracking
@@ -49,6 +51,11 @@ function normaliseConfig(sensor: SensorInfo, config: SensorConfigJson | null | u
   const cfg: SensorConfigJson = { ...(config ?? {}) }
   if (sensor.key === 'location') {
     cfg.movement_threshold = typeof cfg.movement_threshold === 'number' ? cfg.movement_threshold : DEFAULT_MOVEMENT_THRESHOLD
+  }
+  if (sensor.key === 'calls') {
+    // Missing keys are "on" in the app, so show (and save) them as on.
+    cfg.include_app_calls = typeof cfg.include_app_calls === 'boolean' ? cfg.include_app_calls : CALL_DEFAULTS.include_app_calls
+    cfg.detect_video = typeof cfg.detect_video === 'boolean' ? cfg.detect_video : CALL_DEFAULTS.detect_video
   }
   if (sensor.key === 'gestures') {
     const st = cfg.scroll_tracking as Partial<ScrollTracking> | undefined
@@ -120,7 +127,25 @@ export function sensorSummary(sensor: SensorInfo, d: SensorDraft): string {
     const scroll = !st?.enabled ? 'no feed scroll tracking' : apps.includes('*') ? 'feed scrolls in all apps' : `feed scrolls in ${apps.length} app${apps.length === 1 ? '' : 's'}`
     return `${types.length ? types.join(', ') : 'No event types'}; ${scroll}`
   }
+  if (sensor.key === 'calls') {
+    const parts = [d.config.include_app_calls === false ? 'Phone calls only' : 'Phone and app calls']
+    if (d.config.detect_video !== false) parts.push('video detected')
+    return parts.join('; ')
+  }
   return 'When it happens'
+}
+
+function CallOptions({ draft, onChange, disabled }: { draft: SensorDraft; onChange: (config: SensorConfigJson) => void; disabled?: boolean }) {
+  const cfg = draft.config
+  return (
+    <div className="space-y-3">
+      {(Object.keys(CALL_OPTION_LABELS) as (keyof typeof CALL_OPTION_LABELS)[]).map(key => (
+        <Toggle key={key} size="sm" checked={cfg[key] !== false} disabled={disabled}
+          onChange={on => onChange({ ...cfg, [key]: on })}
+          label={CALL_OPTION_LABELS[key].label} description={CALL_OPTION_LABELS[key].description} />
+      ))}
+    </div>
+  )
 }
 
 function GestureOptions({ draft, onChange, disabled }: { draft: SensorDraft; onChange: (config: SensorConfigJson) => void; disabled?: boolean }) {
@@ -190,7 +215,7 @@ function SensorRow({ sensor, draft, onChange, disabled }: {
   sensor: SensorInfo; draft: SensorDraft; onChange: (next: SensorDraft) => void; disabled?: boolean
 }) {
   const Icon = sensor.icon
-  const hasDetails = sensor.hasInterval || sensor.key === 'gestures'
+  const hasDetails = sensor.hasInterval || sensor.key === 'gestures' || sensor.key === 'calls'
   return (
     <li className="px-4 py-4 sm:px-5">
       <div className="flex items-start gap-3">
@@ -222,6 +247,9 @@ function SensorRow({ sensor, draft, onChange, disabled }: {
                 </Field>
               )}
             </div>
+          )}
+          {sensor.key === 'calls' && (
+            <CallOptions draft={draft} disabled={disabled} onChange={config => onChange({ ...draft, config })} />
           )}
           {sensor.key === 'gestures' && (
             <GestureOptions draft={draft} disabled={disabled} onChange={config => onChange({ ...draft, config })} />
