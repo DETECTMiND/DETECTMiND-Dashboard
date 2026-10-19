@@ -199,7 +199,7 @@ export default function NewStudyPage() {
   const syncLabel = SYNC_OPTIONS.find(o => o.value === state.syncInterval)?.label ?? `Every ${state.syncInterval} minutes`
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div>
       {dialog}
       <PageHeader title="New study" description="You can change all of this later in the study's settings." />
 

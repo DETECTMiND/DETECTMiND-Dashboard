@@ -1,6 +1,5 @@
 'use client'
 
-import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { format, formatDistanceToNow } from 'date-fns'
 import { Check, Inbox, RefreshCw, Settings, X } from 'lucide-react'
@@ -164,8 +163,6 @@ function ApprovalsAdmin() {
           <dd className="font-semibold tabular-nums text-fg">{people ? fmtCount(people.invited) : '…'}</dd>
         </div>
         <div className="flex gap-3 text-sm">
-          <Link href="/admin/studies" className="font-medium text-accent hover:underline">All studies</Link>
-          <Link href="/admin/people" className="font-medium text-accent hover:underline">People</Link>
         </div>
       </dl>
 

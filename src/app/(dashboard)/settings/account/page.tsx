@@ -1,10 +1,10 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { KeyRound, Palette, UserRound } from 'lucide-react'
+import { KeyRound, UserRound } from 'lucide-react'
 import { createClient } from '@/lib/supabase-browser'
 import { useMe, useMyStudyRoles, STUDY_ROLE_LABEL } from '@/lib/access'
-import { Button, Card, CardHeader, DescriptionList, Notice, PageHeader, Skeleton, ThemeToggle, type NoticeState } from '@/components/ui'
+import { Button, Card, CardHeader, DescriptionList, Notice, PageHeader, Skeleton, type NoticeState } from '@/components/ui'
 import { RoleBadge } from '@/components/role-badge'
 import { MIN_PASSWORD_LENGTH, PasswordInput, passwordProblem } from '@/components/password-fields'
 
@@ -57,13 +57,13 @@ export default function AccountPage() {
             .map(([r, n]) => `${n} as ${(STUDY_ROLE_LABEL[r as keyof typeof STUDY_ROLE_LABEL] ?? r).toLowerCase()}`).join(', ')})`
 
   return (
-    <div className="max-w-2xl">
+    <div>
       <PageHeader title="Account" />
 
       <div className="space-y-5">
         <Card>
           <CardHeader icon={<UserRound size={16} />} title="Profile" />
-          <DescriptionList items={[
+          <DescriptionList className="lg:grid-cols-4" items={[
             { label: 'Name', value: me?.displayName || <span className="text-subtle">Not set</span> },
             { label: 'Email', value: me?.email ?? '—' },
             { label: 'Account type', value: me ? <RoleBadge role={isAdmin ? 'admin' : 'researcher'} /> : <Skeleton className="h-4 w-20" /> },
@@ -73,22 +73,20 @@ export default function AccountPage() {
 
         <Card>
           <CardHeader icon={<KeyRound size={16} />} title="Change password" />
-          <form onSubmit={changePassword} className="max-w-sm space-y-4">
+          <form onSubmit={changePassword} className="space-y-4">
             <Notice notice={notice} onClose={() => setNotice(null)} />
-            <PasswordInput id="current-password" label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
-            <PasswordInput id="new-password" label="New password" value={password} onChange={setPassword}
-              autoComplete="new-password" hint={`At least ${MIN_PASSWORD_LENGTH} characters.`} />
-            <PasswordInput id="confirm-password" label="Confirm new password" value={confirm} onChange={setConfirm} autoComplete="new-password" />
+            <div className="grid gap-4 md:grid-cols-3 md:items-start">
+              <PasswordInput id="current-password" label="Current password" value={current} onChange={setCurrent} autoComplete="current-password" />
+              <PasswordInput id="new-password" label="New password" value={password} onChange={setPassword}
+                autoComplete="new-password" hint={`At least ${MIN_PASSWORD_LENGTH} characters.`} />
+              <PasswordInput id="confirm-password" label="Confirm new password" value={confirm} onChange={setConfirm} autoComplete="new-password" />
+            </div>
             <Button type="submit" loading={saving} disabled={!me?.email}>
               {saving ? 'Saving…' : 'Change password'}
             </Button>
           </form>
         </Card>
 
-        <Card>
-          <CardHeader icon={<Palette size={16} />} title="Appearance" />
-          <ThemeToggle />
-        </Card>
       </div>
     </div>
   )
