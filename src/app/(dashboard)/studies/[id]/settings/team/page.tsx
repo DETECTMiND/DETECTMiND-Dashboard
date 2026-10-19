@@ -8,6 +8,7 @@ import { useMe, useStudyAccess, STUDY_ROLE_LABEL } from '@/lib/access'
 import {
   Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Notice, ReadOnlyBanner, Select, SkeletonRows,
   errorText, useConfirm, type NoticeState,
+  ActionMenu,
 } from '@/components/ui'
 import { SearchSelect, type SearchOption } from '@/components/search-select'
 import { RoleBadge } from '@/components/role-badge'
@@ -38,6 +39,9 @@ const ROLE_SUMMARY: Record<MemberRole, string> = {
 function roleWord(role: MemberRole) {
   return role === 'owner' ? 'an owner' : role === 'editor' ? 'an editor' : 'a viewer'
 }
+
+// Person | role | menu, shared by the header and rows so they line up
+const MEMBER_COLS = 'sm:grid-cols-[minmax(0,1fr)_9rem_2.5rem]'
 
 export default function TeamPage() {
   const { id: studyId } = useParams<{ id: string }>()
@@ -210,7 +214,7 @@ export default function TeamPage() {
     : 'Pick someone with a dashboard account, or type an email address to invite someone new. Only admins can add owners.'
 
   return (
-    <div className="max-w-4xl space-y-5">
+    <div className="space-y-5">
       {dialog}
 
       {!access.loading && !access.canEdit && (
@@ -228,7 +232,7 @@ export default function TeamPage() {
             <ErrorState title="Could not load the list of people" message={directory.error} onRetry={() => void reload()} />
           ) : (
             <form onSubmit={submitAdd} className="space-y-3">
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_auto] md:items-start">
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_11rem_auto] md:items-end">
                 <SearchSelect
                   label="Name or email"
                   options={candidates}
@@ -246,16 +250,14 @@ export default function TeamPage() {
                     </Select>
                   )}
                 </Field>
-                <div className="md:pt-[1.625rem]">
-                  <Button type="submit" loading={adding} disabled={!pick} className="w-full md:w-auto">Add to study</Button>
-                </div>
+                <Button type="submit" loading={adding} disabled={!pick} className="w-full md:w-auto">Add to study</Button>
               </div>
               <p className="text-xs text-subtle">
                 {pick?.value.startsWith(NEW_PREFIX)
-                  ? `${pick.label} will get an invite email and join as ${roleWord(effectiveRole)}.`
-                  : addHint}
+                  ? `${pick.label} will get an invite email and join as ${roleWord(effectiveRole)}. `
+                  : `${addHint} `}
+                <span className="text-muted">{STUDY_ROLE_LABEL[effectiveRole]}: {ROLE_SUMMARY[effectiveRole]}</span>
               </p>
-              <p className="text-xs text-subtle">{STUDY_ROLE_LABEL[effectiveRole]}: {ROLE_SUMMARY[effectiveRole]}</p>
             </form>
           )}
         </Card>
@@ -275,42 +277,50 @@ export default function TeamPage() {
             <EmptyState icon={<UsersRound size={30} aria-hidden="true" />} title="No members yet" hint="Only admins can open this study until someone is added." />
           </div>
         ) : (
-          <ul className="divide-y divide-line border-t border-line" aria-label="Members">
-            {members.map(m => {
-              const who = m.email ?? m.user_id
-              const editable = access.canManage && (isAdmin || m.member_role !== 'owner')
-              return (
-                <li key={m.user_id} data-testid="member-row" data-user-id={m.user_id}
-                  className="flex flex-col gap-2 px-5 py-3 sm:flex-row sm:items-center sm:gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-fg">
-                      <span className="min-w-0 break-all">{m.display_name || who}</span>
-                      {m.user_id === me?.userId && <Badge tone="blue">You</Badge>}
-                      {invitedIds.has(m.user_id) && <RoleBadge role="pending" />}
-                      {!m.researcher_active && <RoleBadge role="deactivated" />}
-                    </p>
-                    {m.display_name && <p className="break-all text-xs text-subtle">{who}</p>}
-                  </div>
-                  {editable ? (
-                    <div className="flex items-center gap-2">
-                      <Select value={m.member_role} onChange={e => changeRole(m, e.target.value as MemberRole)}
-                        aria-label={`Role for ${who}`} className="h-8 w-32 text-xs">
-                        {roleOptions.map(r => <option key={r} value={r}>{STUDY_ROLE_LABEL[r]}</option>)}
-                      </Select>
-                      <Button variant="danger-ghost" size="sm" onClick={() => remove(m)} aria-label={`Remove ${who}`}>
-                        <Trash2 size={13} aria-hidden="true" /> Remove
-                      </Button>
+          <>
+            <div aria-hidden="true" className={`hidden border-y border-line bg-sunken px-5 py-2 text-xs font-medium text-subtle sm:grid ${MEMBER_COLS}`}>
+              <span>Person</span><span>Role</span><span />
+            </div>
+            <ul className="divide-y divide-line border-t border-line sm:border-t-0" aria-label="Members">
+              {members.map(m => {
+                const who = m.email ?? m.user_id
+                const editable = access.canManage && (isAdmin || m.member_role !== 'owner')
+                return (
+                  <li key={m.user_id} data-testid="member-row" data-user-id={m.user_id}
+                    className={`grid grid-cols-[minmax(0,1fr)_auto_2.5rem] items-center gap-3 px-5 py-3 ${MEMBER_COLS}`}>
+                    <div className="min-w-0">
+                      <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium text-fg">
+                        <span className="min-w-0 truncate" title={who}>{m.display_name || who}</span>
+                        {m.user_id === me?.userId && <Badge tone="blue">You</Badge>}
+                        {invitedIds.has(m.user_id) && <RoleBadge role="pending" />}
+                        {!m.researcher_active && <RoleBadge role="deactivated" />}
+                      </p>
+                      {m.display_name && <p className="truncate text-xs text-subtle">{who}</p>}
                     </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <RoleBadge role={m.member_role} />
-                      {access.canManage && m.member_role === 'owner' && <span className="text-xs text-subtle">Only admins change owners</span>}
+                    <div>
+                      {editable ? (
+                        <Select value={m.member_role} onChange={e => changeRole(m, e.target.value as MemberRole)}
+                          aria-label={`Role for ${who}`} className="h-8 w-full text-xs">
+                          {roleOptions.map(r => <option key={r} value={r}>{STUDY_ROLE_LABEL[r]}</option>)}
+                        </Select>
+                      ) : (
+                        <span title={access.canManage && m.member_role === 'owner' ? 'Only admins change owners' : undefined}>
+                          <RoleBadge role={m.member_role} />
+                        </span>
+                      )}
                     </div>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
+                    <div className="flex justify-end">
+                      {editable && (
+                        <ActionMenu label={`Actions for ${who}`} items={[
+                          { label: 'Remove from study…', icon: <Trash2 />, danger: true, onSelect: () => remove(m) },
+                        ]} />
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
         )}
       </Card>
 

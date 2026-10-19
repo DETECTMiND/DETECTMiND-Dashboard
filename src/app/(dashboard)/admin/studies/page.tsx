@@ -8,7 +8,8 @@ import { ArrowRight, FlaskConical, RefreshCw, Search, Settings, UsersRound } fro
 import { createClient } from '@/lib/supabase-browser'
 import { AdminOnly } from '@/components/admin-only'
 import {
-  Button, ButtonLink, EmptyState, ErrorState, FilterPills, Input, PageHeader, SkeletonRows, StatusPill, errorText,
+  Button, EmptyState, ErrorState, FilterPills, Input, PageHeader, SkeletonRows, StatusPill, errorText,
+  ActionMenu,
 } from '@/components/ui'
 import { isPendingApproval } from '@/lib/pending-studies'
 import { studyPaths } from '@/lib/nav'
@@ -27,7 +28,8 @@ const FILTERS = ['all', 'pending', 'active', 'paused', 'completed'] as const
 type Filter = (typeof FILTERS)[number]
 const FILTER_LABEL: Record<Filter, string> = { all: 'All', pending: 'Pending approval', active: 'Active', paused: 'Paused', completed: 'Completed' }
 
-const COLS = 'md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_6.5rem_7rem_auto]'
+// Fixed tracks shared by the header and rows so columns line up
+const COLS = 'md:grid-cols-[minmax(0,2fr)_9.5rem_minmax(0,1.5fr)_6.5rem_7rem_2.5rem]'
 
 function matchesFilter(st: StudyView, f: Filter) {
   if (f === 'all') return true
@@ -140,35 +142,32 @@ function AdminStudies() {
         <div className="overflow-hidden rounded-lg border border-line bg-surface">
           {/* Column headings from md up; below md each row is a card. */}
           <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid ${COLS}`}>
-            <span>Study</span><span>Owners</span><span>Participants</span><span>Created</span><span className="text-right">Actions</span>
+            <span>Study</span><span>Status</span><span>Owners</span><span>Participants</span><span>Created</span><span className="sr-only">Actions</span>
           </div>
           <ul className="divide-y divide-line" aria-label="Studies">
             {visible.map(st => (
               <li key={st.id} data-testid="study-row" data-study-id={st.id}
-                className={`grid gap-3 px-4 py-4 md:items-center md:gap-4 md:py-3 ${COLS}`}>
+                className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 px-4 py-3.5 md:items-center ${COLS}`}>
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Link href={studyPaths(st.id).overview} className="min-w-0 break-words text-sm font-semibold text-fg hover:text-accent">{st.name}</Link>
-                    <StatusPill study={st} />
-                  </div>
+                  <Link href={studyPaths(st.id).overview} className="block truncate text-sm font-medium text-fg hover:text-accent" title={st.name}>{st.name}</Link>
                 </div>
-                <div className="min-w-0 text-sm">
+                <div className="order-3 md:order-none"><StatusPill study={st} /></div>
+                <div className="order-4 col-span-2 min-w-0 text-sm md:order-none md:col-span-1">
                   <span className="mr-1 text-xs text-subtle md:hidden">Owners:</span>
                   {st.owners.length === 0
                     ? <span className="text-danger">No owner</span>
                     : <span className="break-words text-muted">{st.owners.join(', ')}</span>}
                 </div>
-                <div className="flex gap-6 text-sm text-muted md:contents">
+                <div className="order-5 col-span-2 flex gap-6 text-sm text-muted md:order-none md:col-span-1 md:contents">
                   <p className="tabular-nums"><span className="mr-1 text-xs text-subtle md:hidden">Participants:</span>{st.participantCount ?? '—'}</p>
                   <p><span className="mr-1 text-xs text-subtle md:hidden">Created:</span>{format(new Date(st.created_at), 'd MMM yyyy')}</p>
                 </div>
-                <div className="flex flex-wrap gap-2 md:justify-end">
-                  <ButtonLink href={studyPaths(st.id).team} variant="secondary" size="sm" aria-label={`Manage team of ${st.name}`}>
-                    <UsersRound size={13} aria-hidden="true" /> Manage team
-                  </ButtonLink>
-                  <ButtonLink href={studyPaths(st.id).settings} variant="ghost" size="sm" aria-label={`Settings of ${st.name}`}>
-                    <Settings size={13} aria-hidden="true" /> Settings
-                  </ButtonLink>
+                <div className="order-2 flex justify-end md:order-none">
+                  <ActionMenu label={`Actions for ${st.name}`} items={[
+                    { label: 'Open overview', icon: <ArrowRight />, href: studyPaths(st.id).overview },
+                    { label: 'Manage team', icon: <UsersRound />, href: studyPaths(st.id).team },
+                    { label: 'Settings', icon: <Settings />, href: studyPaths(st.id).settings },
+                  ]} />
                 </div>
               </li>
             ))}

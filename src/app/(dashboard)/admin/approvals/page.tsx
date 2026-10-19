@@ -142,7 +142,7 @@ function ApprovalsAdmin() {
   const fmtCount = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
 
   return (
-    <div className="max-w-4xl">
+    <div>
       {dialog}
       <PageHeader
         title="Approvals"

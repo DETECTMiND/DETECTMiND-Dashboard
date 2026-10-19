@@ -3,11 +3,11 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
-import { KeyRound, RefreshCw, Search, Send, UserCheck, UserPlus, UserX, Users } from 'lucide-react'
+import { KeyRound, RefreshCw, Search, Send, ShieldCheck, UserCheck, UserPlus, UserRound, UserX, Users } from 'lucide-react'
 import { AdminOnly } from '@/components/admin-only'
 import {
   Badge, Button, Card, CardHeader, EmptyState, ErrorState, FilterPills, Input, Notice, PageHeader, Select,
-  SkeletonRows, TextField, useConfirm, type NoticeState,
+  ActionMenu, SkeletonRows, TextField, useConfirm, type NoticeState,
 } from '@/components/ui'
 import { RoleBadge } from '@/components/role-badge'
 import { RoleHelp } from '@/components/role-help'
@@ -53,7 +53,8 @@ const STATUS_FILTERS: { value: '' | Status; label: string }[] = [
   { value: 'deactivated', label: 'Deactivated' },
 ]
 
-const COLS = 'md:grid-cols-[minmax(0,2fr)_9.5rem_minmax(0,1.3fr)_minmax(0,1.8fr)_auto]'
+// Fixed tracks shared by the header and every row, so columns line up
+const COLS = 'md:grid-cols-[minmax(0,1.4fr)_7rem_10.5rem_minmax(0,2fr)_2.5rem]'
 
 const ago = (iso: string) => formatDistanceToNow(new Date(iso), { addSuffix: true })
 
@@ -260,7 +261,7 @@ function PeopleAdmin() {
           ) : (
             <div className="overflow-hidden rounded-lg border border-line bg-surface">
               <div aria-hidden="true" className={`hidden gap-4 border-b border-line bg-sunken px-4 py-2.5 text-xs font-semibold text-subtle md:grid ${COLS}`}>
-                <span>Person</span><span>Account type</span><span>Status</span><span>Studies</span><span className="text-right">Actions</span>
+                <span>Person</span><span>Account</span><span>Status</span><span>Studies</span><span className="sr-only">Actions</span>
               </div>
               <ul className="divide-y divide-line" aria-label="People">
                 {visible.map(p => (
@@ -286,47 +287,36 @@ function PersonRow({ person: p, self, busy, onType, onActive, onEmail }: {
 }) {
   const status = statusOf(p)
   const who = p.email ?? p.user_id
-  const selfHintId = `self-${p.user_id}`
-  const typeLocked = !p.active || (self && p.role === 'admin')
+  const sending = busy?.startsWith(`${p.user_id}:`)
   return (
     <li data-testid="researcher-row" data-user-id={p.user_id}
-      className={`grid grid-cols-1 gap-3 px-4 py-4 md:items-center md:gap-4 md:py-3 ${COLS} ${p.active ? '' : 'bg-sunken/50'}`}>
+      className={`grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 px-4 py-3.5 md:items-center ${COLS} ${p.active ? '' : 'bg-sunken/50'}`}>
       <div className="min-w-0">
-        <p className="flex flex-wrap items-center gap-1.5 text-sm font-medium text-fg">
-          <span className="min-w-0 break-all">{who}</span>
+        <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fg">
+          <span className="truncate" title={who}>{who}</span>
           {self && <Badge tone="blue">You</Badge>}
         </p>
-        {p.display_name && <p className="text-xs text-subtle">{p.display_name}</p>}
-        {self && <p id={selfHintId} className="sr-only">You cannot change your own account type or deactivate yourself. Ask another admin.</p>}
+        {p.display_name && <p className="truncate text-xs text-subtle">{p.display_name}</p>}
       </div>
 
-      <div className="flex items-center gap-2 md:block">
-        <span className="w-24 shrink-0 text-xs text-subtle md:hidden">Account type</span>
-        <Select value={p.role} disabled={typeLocked} onChange={e => onType(e.target.value as AccountType)}
-          aria-label={`Account type for ${who}`} aria-describedby={self ? selfHintId : undefined} title={self ? "You cannot change your own account type" : undefined} className="h-8 text-xs md:w-full">
-          <option value="researcher">Researcher</option>
-          <option value="admin">Admin</option>
-        </Select>
+      <div className="order-3 col-span-2 flex items-center gap-2 md:order-none md:col-span-1">
+        <RoleBadge role={p.role === 'admin' ? 'admin' : 'researcher'} />
       </div>
 
-      <div className="flex items-center gap-2 md:block">
-        <span className="w-24 shrink-0 text-xs text-subtle md:hidden">Status</span>
-        <div>
-          <RoleBadge role={status === 'invited' ? 'pending' : status} />
-          <p className="mt-1 text-xs text-subtle">
-            {status === 'invited'
-              ? (p.invited_at ? `Invited ${ago(p.invited_at)}` : 'Not signed in yet')
-              : p.last_sign_in_at ? `Last sign-in ${ago(p.last_sign_in_at)}` : 'No sign-in recorded'}
-          </p>
-        </div>
+      <div className="order-4 col-span-2 flex items-center gap-2 md:order-none md:col-span-1 md:block">
+        <RoleBadge role={status === 'invited' ? 'pending' : status} />
+        <p className="text-xs text-subtle md:mt-1">
+          {sending ? 'Sending…' : status === 'invited'
+            ? (p.invited_at ? `Invited ${ago(p.invited_at)}` : 'Not signed in yet')
+            : p.last_sign_in_at ? `Signed in ${ago(p.last_sign_in_at)}` : 'Never signed in'}
+        </p>
       </div>
 
-      <div className="flex items-start gap-2 md:block">
-        <span className="w-24 shrink-0 text-xs text-subtle md:hidden">Studies</span>
+      <div className="order-5 col-span-2 min-w-0 md:order-none md:col-span-1">
         {p.role === 'admin' ? (
-          <span className="text-xs text-subtle">Every study (admin)</span>
+          <span className="text-xs text-subtle">Every study</span>
         ) : p.studies.length === 0 ? (
-          <span className="text-xs text-subtle">None yet</span>
+          <span className="text-xs text-subtle">No studies yet</span>
         ) : (
           <ul className="flex min-w-0 flex-wrap gap-1" aria-label={`Studies of ${who}`}>
             {p.studies.map(s => (
@@ -342,29 +332,15 @@ function PersonRow({ person: p, self, busy, onType, onActive, onEmail }: {
         )}
       </div>
 
-      <div className="flex flex-wrap gap-1.5 md:justify-end">
-        {status === 'invited' && (
-          <Button variant="secondary" size="sm" loading={busy === `${p.user_id}:invite`} disabled={busy !== null} onClick={() => onEmail('invite')}
-            aria-label={`Resend invite to ${who}`}>
-            <Send size={12} aria-hidden="true" /> Resend invite
-          </Button>
-        )}
-        {status === 'active' && (
-          <Button variant="secondary" size="sm" loading={busy === `${p.user_id}:reset`} disabled={busy !== null} onClick={() => onEmail('reset')}
-            aria-label={`Send password reset to ${who}`}>
-            <KeyRound size={12} aria-hidden="true" /> Send password reset
-          </Button>
-        )}
-        {p.active ? (
-          <Button variant="danger-ghost" size="sm" onClick={() => onActive(false)} disabled={self}
-            aria-label={`Deactivate ${who}`} aria-describedby={self ? selfHintId : undefined}>
-            <UserX size={12} aria-hidden="true" /> Deactivate
-          </Button>
-        ) : (
-          <Button variant="secondary" size="sm" onClick={() => onActive(true)} aria-label={`Reactivate ${who}`}>
-            <UserCheck size={12} aria-hidden="true" /> Reactivate
-          </Button>
-        )}
+      <div className="order-2 flex justify-end md:order-none">
+        <ActionMenu label={`Actions for ${who}`} items={[
+          status === 'invited' && { label: 'Resend invite', icon: <Send />, onSelect: () => onEmail('invite') },
+          status === 'active' && { label: 'Send password reset', icon: <KeyRound />, onSelect: () => onEmail('reset') },
+          p.active && !self && p.role === 'researcher' && { label: 'Make admin…', icon: <ShieldCheck />, onSelect: () => onType('admin') },
+          p.active && !self && p.role === 'admin' && { label: 'Make researcher…', icon: <UserRound />, onSelect: () => onType('researcher') },
+          p.active && !self && { label: 'Deactivate…', icon: <UserX />, danger: true, onSelect: () => onActive(false) },
+          !p.active && { label: 'Reactivate…', icon: <UserCheck />, onSelect: () => onActive(true) },
+        ]} />
       </div>
     </li>
   )

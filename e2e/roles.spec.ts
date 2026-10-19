@@ -72,7 +72,8 @@ test.describe('owner powers', () => {
     await expect.poll(() => sql(`SELECT role FROM study_members WHERE study_id = ${q(id)}
       AND user_id = (SELECT id FROM auth.users WHERE email = ${q(ACCOUNTS.researcher)})`)).toBe('viewer')
 
-    await member.getByRole('button', { name: /^remove/i }).click()
+    await member.getByRole('button', { name: /^actions for/i }).click()
+    await page.getByRole('menuitem', { name: /remove from study/i }).click()
     await page.getByRole('dialog').getByRole('button', { name: /^remove$/i }).click()
     await expect.poll(() => sql(`SELECT count(*) FROM study_members WHERE study_id = ${q(id)}
       AND user_id = (SELECT id FROM auth.users WHERE email = ${q(ACCOUNTS.researcher)})`)).toBe('0')
@@ -101,7 +102,7 @@ test.describe('editor and viewer', () => {
     await expect(page.getByRole('button', { name: /delete study/i })).toHaveCount(0)
     await page.goto(teamUrl(id))
     await expect(page.getByTestId('member-row').first()).toBeVisible()
-    await expect(page.getByRole('button', { name: /^remove/i })).toHaveCount(0)
+    await expect(page.getByTestId('member-row').getByRole('button', { name: /^actions for/i })).toHaveCount(0)
     await expect(page.getByRole('combobox', { name: /^role for/i })).toHaveCount(0)
     // Editors may only grant editor or viewer
     await expect(page.getByLabel('Study role', { exact: true }).locator('option[value="owner"]')).toHaveCount(0)
@@ -152,7 +153,8 @@ test.describe('admin', () => {
     await page.goto('/admin/studies')
     const row = page.getByTestId('study-row').filter({ hasText: name })
     await expect(row.getByRole('button', { name: /assign owner|delete/i })).toHaveCount(0)
-    await row.getByRole('link', { name: /manage team/i }).click()
+    await row.getByRole('button', { name: /^actions for/i }).click()
+    await page.getByRole('menuitem', { name: /manage team/i }).click()
     await expect(page).toHaveURL(new RegExp(teamUrl(id)))
 
     await addToTeam(page, ACCOUNTS.editor, 'owner')
@@ -195,7 +197,8 @@ test.describe('admin', () => {
     await page.goto('/admin/people')
     await page.getByRole('searchbox', { name: /search people/i }).fill(ACCOUNTS.viewer)
     const row = page.getByTestId('researcher-row').filter({ hasText: ACCOUNTS.viewer }).first()
-    await row.getByRole('combobox', { name: /account type/i }).selectOption('admin')
+    await row.getByRole('button', { name: /^actions for/i }).click()
+    await page.getByRole('menuitem', { name: /make admin/i }).click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toContainText(/admin/i)
     await dialog.getByRole('button', { name: /cancel/i }).click()
@@ -208,8 +211,9 @@ test.describe('admin', () => {
     // The owner account: no other test reads its mailbox
     const row = page.getByTestId('researcher-row').filter({ hasText: ACCOUNTS.owner }).first()
     await expect(row).toContainText('Active')
-    await expect(row.getByRole('button', { name: /resend invite/i })).toHaveCount(0)
-    await row.getByRole('button', { name: /send password reset/i }).click()
+    await row.getByRole('button', { name: /^actions for/i }).click()
+    await expect(page.getByRole('menuitem', { name: /resend invite/i })).toHaveCount(0)
+    await page.getByRole('menuitem', { name: /send password reset/i }).click()
     await expect(page.getByText(/password reset link sent/i)).toBeVisible()
   })
 })
