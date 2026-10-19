@@ -1,6 +1,6 @@
 'use client'
 
-import { FlaskConical } from 'lucide-react'
+import { Logo } from '@/components/ui/logo'
 import { ThemeToggle } from '@/components/ui'
 
 /** Centred card shared by the sign-in and set-password pages. */
@@ -15,9 +15,7 @@ export function AuthCard({ title, description, children, footer }: {
       <div className="absolute right-4 top-4"><ThemeToggle /></div>
       <main className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <span className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-accent-fg">
-            <FlaskConical size={22} aria-hidden="true" />
-          </span>
+          <Logo size={48} className="mx-auto mb-4" />
           <p className="text-xs font-semibold tracking-wide text-subtle">DETECTMiND</p>
           <h1 className="mt-1 text-xl font-bold tracking-tight text-fg">{title}</h1>
           {description && <p className="mt-1.5 text-sm text-subtle">{description}</p>}

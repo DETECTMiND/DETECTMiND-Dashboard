@@ -18,13 +18,13 @@ function dbErrorText(error: { message?: string; code?: string }): string {
 }
 
 // GET /api/studies/:id/invite
-// Owners (of this study) and admins. Which team members have not accepted
+// Owners and editors (of this study) and admins. Which team members have not accepted
 // their invite yet (never signed in). Needs auth.users, so it runs with the
 // service role after the owner check.
 // Response: {members: [{user_id, invited, invited_at, last_sign_in_at}]}
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: studyId } = await ctx.params
-  const auth = await requireStudyOwner(req, studyId)
+  const auth = await requireStudyOwner(req, studyId, 'edit')
   if (auth instanceof NextResponse) return auth
   const { admin } = auth
 
@@ -44,16 +44,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 }
 
 // POST /api/studies/:id/invite {email, role: 'editor' | 'viewer' | 'owner'}
-// Owners (of this study) and admins; only admins may use role 'owner'. A new email gets a Supabase invite and a
-// plain researcher account; an existing researcher is simply added (or their
-// editor/viewer role changed). The membership write uses the CALLER's session
+// Owners and editors (of this study) and admins; only admins may use role
+// 'owner', and only owners/admins change the role of someone already on the
+// team. A new email gets a Supabase invite and a plain researcher account; an
+// existing researcher is simply added. The membership write uses the CALLER's session
 // so RLS, the owner guard and the membership audit trigger all apply.
 // Response: {status: 'invited' | 'added' | 'updated', email, role, message}
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: studyId } = await ctx.params
-  const auth = await requireStudyOwner(req, studyId)
+  const auth = await requireStudyOwner(req, studyId, 'edit')
   if (auth instanceof NextResponse) return auth
-  const { supabase, admin, user, study, isAdmin } = auth
+  const { supabase, admin, user, study, isAdmin, canManage } = auth
 
   const body = await readJson<{ email?: unknown; role?: unknown }>(req)
   const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : ''
@@ -111,6 +112,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   if (membership?.role === 'owner' && !isAdmin) {
     return jsonError(409, `${email} is already an owner of this study. Only an admin can change or remove owners.`)
+  }
+
+  if (membership && !canManage) {
+    return jsonError(409, `${email} is already on this study team. Ask an owner if their role should change.`)
   }
 
   let status: 'invited' | 'added' | 'updated'

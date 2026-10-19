@@ -47,6 +47,9 @@ export const DATA_TABLES: { table: string; label: string; timeCol: string; senso
   { table: 'data_esm_responses', label: 'Survey responses', timeCol: 'triggered_at' },
 ]
 
+/** Sensor tables only (Data → Raw data). Survey responses have their own Surveys section. */
+export const SENSOR_TABLES = DATA_TABLES.filter(t => t.sensor)
+
 export function sensorLabel(key: string): string {
   return (SENSOR_BY_KEY as Record<string, SensorInfo>)[key]?.label ?? key.replace(/_/g, ' ')
 }

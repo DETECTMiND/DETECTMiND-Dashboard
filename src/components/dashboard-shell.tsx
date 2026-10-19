@@ -10,8 +10,9 @@ import { ADMIN_NAV, studyNav, type NavItem } from '@/lib/nav'
 import { studyStatusInfo } from '@/lib/status'
 import { useDialogFocus } from '@/components/ui/modal'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
+import { Logo } from '@/components/ui/logo'
 import { Button } from '@/components/ui/button'
-import { Check, ChevronsUpDown, FlaskConical, LayoutGrid, Loader2, LogOut, Menu, Plus, ShieldAlert, UserRound, X } from 'lucide-react'
+import { Check, ChevronsUpDown, LayoutGrid, Loader2, LogOut, Menu, Plus, ShieldAlert, UserRound, X } from 'lucide-react'
 
 interface Study { id: string; name: string; status: string; approved_at: string | null }
 
@@ -164,7 +165,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-line bg-surface/95 px-4 backdrop-blur lg:hidden">
         <Button variant="secondary" iconOnly size="sm" onClick={() => setMobileOpen(true)} aria-label="Open menu"><Menu size={16} /></Button>
         <Link href="/" className="flex min-w-0 items-center gap-2 font-semibold text-fg">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-accent-fg"><FlaskConical size={14} /></span>
+          <Logo size={28} />
           <span className="truncate text-sm">{selected?.name ?? 'DETECTMiND'}</span>
         </Link>
       </header>
@@ -198,7 +199,7 @@ function Sidebar({ navigation, pathname, me, isAdmin, studies, selected, onSwitc
     <aside className="flex h-full w-64 flex-col border-r border-line bg-surface">
       <div className="flex h-14 items-center justify-between px-4">
         <Link href="/" className="flex items-center gap-2.5" aria-label="DETECTMiND home">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-fg"><FlaskConical size={16} /></span>
+          <Logo size={30} />
           <span className="text-sm font-bold tracking-wide text-fg">DETECTMiND</span>
         </Link>
         {onClose && <Button variant="ghost" iconOnly size="sm" onClick={onClose} aria-label="Close menu"><X size={16} /></Button>}

@@ -95,14 +95,24 @@ test.describe('owner powers', () => {
 })
 
 test.describe('editor and viewer', () => {
-  test('editor can edit study settings but has no team or status controls', async ({ page }) => {
+  test('editor can add people to the study but not change roles, remove people or delete the study', async ({ page }) => {
     await signIn(page, 'editor')
     const id = await openStudy(page, TEAM_STUDY)
     await expect(page.getByRole('button', { name: /delete study/i })).toHaveCount(0)
     await page.goto(teamUrl(id))
     await expect(page.getByTestId('member-row').first()).toBeVisible()
-    await expect(page.getByRole('button', { name: /add to study|invite/i })).toHaveCount(0)
     await expect(page.getByRole('button', { name: /^remove/i })).toHaveCount(0)
+    await expect(page.getByRole('combobox', { name: /^role for/i })).toHaveCount(0)
+    // Editors may only grant editor or viewer
+    await expect(page.getByLabel('Study role', { exact: true }).locator('option[value="owner"]')).toHaveCount(0)
+
+    await addToTeam(page, ACCOUNTS.researcher, 'viewer')
+    await expect(page.getByText(/was added to/i)).toBeVisible()
+    expect(sql(`SELECT m.role FROM study_members m JOIN researchers r ON r.user_id = m.user_id
+                WHERE r.email = ${q(ACCOUNTS.researcher)} AND m.study_id = ${q(id)}`)).toBe('viewer')
+    // Leave the researcher account without memberships for the tests below
+    sql(`DELETE FROM study_members WHERE study_id = ${q(id)}
+         AND user_id = (SELECT user_id FROM researchers WHERE email = ${q(ACCOUNTS.researcher)})`)
   })
 
   test('viewer is read-only', async ({ page }) => {

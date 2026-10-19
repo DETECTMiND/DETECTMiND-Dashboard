@@ -57,6 +57,10 @@ export function accessFor(role: StudyRole | null): Omit<StudyAccess, 'loading'> 
   }
 }
 
+// Roles rarely change: remember them for the session so every page doesn't
+// wait for the same lookup (still re-checked in the background).
+const roleCache = new Map<string, StudyRole | null>()
+
 /** The caller's role in one study (admins are 'admin' everywhere). */
 export function useStudyAccess(studyId: string | null | undefined): StudyAccess {
   const me = useMe()
@@ -70,15 +74,19 @@ export function useStudyAccess(studyId: string | null | undefined): StudyAccess 
     let cancelled = false
     supabase.from('study_members').select('role')
       .eq('study_id', studyId).eq('user_id', me.userId).maybeSingle()
-      .then(({ data }) => {
-        if (!cancelled) setResult({ key, role: (data?.role as StudyRole | undefined) ?? null })
+      .then(({ data, error }) => {
+        const role = (data?.role as StudyRole | undefined) ?? null
+        if (!error) roleCache.set(key, role)
+        if (!cancelled) setResult({ key, role })
       })
     return () => { cancelled = true }
   }, [me, studyId, isAdmin, key, supabase])
 
   if (isAdmin) return { ...accessFor('admin'), loading: false }
   if (!me || !studyId) return { ...accessFor(null), loading: !me }
-  if (result?.key !== key) return { ...accessFor(null), loading: true }
+  if (result?.key !== key) {
+    return roleCache.has(key) ? { ...accessFor(roleCache.get(key) ?? null), loading: false } : { ...accessFor(null), loading: true }
+  }
   return { ...accessFor(result.role), loading: false }
 }
 

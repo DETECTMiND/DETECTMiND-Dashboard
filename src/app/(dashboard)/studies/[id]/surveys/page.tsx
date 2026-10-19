@@ -1,12 +1,12 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { Suspense, useId, useMemo, useState } from 'react'
+import { Suspense, lazy, useId, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock, Download, Users } from 'lucide-react'
 import {
-  Badge, Button, ButtonLink, EmptyState, ErrorState, FilterPills, Notice, Pagination, SectionHeader, Select,
+  Badge, Button, ButtonLink, EmptyState, ErrorState, FilterPills, Notice, Pagination, SectionHeader, SegmentedControl, Select,
   SkeletonRows, TableWrap, THead, Th, Td, Tr, type NoticeState,
 } from '@/components/ui'
 import { Avatar, ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
@@ -14,6 +14,10 @@ import { scopedSelect, stripScope, type DataScope } from '@/components/data/scop
 import { must, mustCount, useAsync } from '@/components/data/use-async'
 import { downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
 import { studyPaths } from '@/lib/nav'
+import type { EsmResponseRow } from '@/components/charts/types'
+
+const EsmChart = lazy(() => import('@/components/charts/EsmChart'))
+const CHART_LIMIT = 2000
 
 interface Schedule {
   id: string
@@ -185,6 +189,7 @@ function SurveyResponsesInner() {
   const [pageSize, setPageSize] = useState(50)
   const [exporting, setExporting] = useState(false)
   const [notice, setNotice] = useState<NoticeState>(null)
+  const [view, setView] = useState<'list' | 'chart'>('list')
 
   // Participants, this study's schedules and only their questions
   const meta = useAsync(`meta:${studyId}`, async () => {
@@ -233,6 +238,13 @@ function SurveyResponsesInner() {
     return { rows: stripScope(must(res) as unknown as Record<string, unknown>[]) as unknown as ESMResponse[], total: res.count ?? 0 }
   })
   const rowsData = rows.data ?? rows.previous
+
+  // Chart: the latest 2,000 prompts for these filters, oldest first for plotting
+  const chart = useAsync(hasParticipants && view === 'chart' ? `chart:${filterKey}` : null, async () => {
+    const res = await base('participant_id, schedule_id, triggered_at, responded_at, expired, responses')
+      .order('triggered_at', { ascending: false }).limit(CHART_LIMIT)
+    return (stripScope(must(res) as unknown as Record<string, unknown>[]) as unknown as EsmResponseRow[]).reverse()
+  })
   const data = rowsData?.rows ?? []
   const total = rowsData?.total ?? 0
 
@@ -333,6 +345,8 @@ function SurveyResponsesInner() {
         <FilterPills label="Response status" value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0) }}
           options={(Object.keys(STATUS_LABELS) as StatusFilter[]).map(k => ({ value: k, label: STATUS_LABELS[k], count: countMap ? countMap[k] : null }))} />
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <SegmentedControl label="View" size="sm" value={view} onChange={setView}
+            options={[{ value: 'list', label: 'List' }, { value: 'chart', label: 'Chart' }]} />
           <Button variant="secondary" size="sm" disabled={data.length === 0} onClick={() => downloadCsv(toCsvRows(data), `${fileBase}_page${page + 1}`)}>
             <Download size={13} aria-hidden="true" /> Export this page
           </Button>
@@ -351,7 +365,16 @@ function SurveyResponsesInner() {
 
       <Notice notice={notice} onClose={() => setNotice(null)} />
 
-      {rows.error ? (
+      {view === 'chart' ? (
+        chart.error ? <ErrorState message={chart.error} onRetry={chart.retry} />
+          : !chart.data ? <SkeletonRows rows={6} />
+          : (
+            <Suspense fallback={<SkeletonRows rows={6} />}>
+              <EsmChart data={chart.data} participants={participants} showParticipant={participant === 'all'} />
+              {chart.data.length >= CHART_LIMIT && <p className="mt-2 text-xs text-subtle">Showing the latest {CHART_LIMIT.toLocaleString()} prompts.</p>}
+            </Suspense>
+          )
+      ) : rows.error ? (
         <ErrorState message={rows.error} onRetry={rows.retry} />
       ) : !rowsData ? (
         <SkeletonRows rows={8} />

@@ -3,10 +3,10 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertTriangle, KeyRound, RefreshCw, Search, Send, UserCheck, UserPlus, UserX, Users } from 'lucide-react'
+import { KeyRound, RefreshCw, Search, Send, UserCheck, UserPlus, UserX, Users } from 'lucide-react'
 import { AdminOnly } from '@/components/admin-only'
 import {
-  Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, FilterPills, Input, Notice, PageHeader, Select,
+  Badge, Button, Card, CardHeader, EmptyState, ErrorState, FilterPills, Input, Notice, PageHeader, Select,
   SkeletonRows, TextField, useConfirm, type NoticeState,
 } from '@/components/ui'
 import { RoleBadge } from '@/components/role-badge'
@@ -71,7 +71,6 @@ function PeopleAdmin() {
 
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
-  const [accountType, setAccountType] = useState<AccountType>('researcher')
   const [inviting, setInviting] = useState(false)
   const [inviteNotice, setInviteNotice] = useState<NoticeState>(null)
 
@@ -102,12 +101,11 @@ function PeopleAdmin() {
     try {
       const res = await api<{ message: string }>('/api/admin/researchers', {
         method: 'POST',
-        body: JSON.stringify({ email: email.trim().toLowerCase(), role: accountType, display_name: name.trim() || undefined }),
+        body: JSON.stringify({ email: email.trim().toLowerCase(), role: 'researcher', display_name: name.trim() || undefined }),
       })
       setInviteNotice({ tone: 'success', text: res.message })
       setEmail('')
       setName('')
-      setAccountType('researcher')
       await load()
     } catch (err) {
       setInviteNotice({ tone: 'error', text: messageOf(err, 'The invite could not be sent') })
@@ -206,27 +204,13 @@ function PeopleAdmin() {
       <div className="space-y-5">
         <Card>
           <CardHeader icon={<UserPlus size={16} />} title="Invite someone"
-            description="They will get an email to set a password." />
+            description="They join as a researcher and get an email to set a password. Add them to studies from each study's Team tab." />
           <form onSubmit={invite} className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_11rem]">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
               <TextField label="Email" type="email" required value={email} onChange={e => setEmail(e.target.value)}
                 placeholder="name@university.ac.uk" autoComplete="off" />
               <TextField label="Name" hint="Optional" value={name} onChange={e => setName(e.target.value)} maxLength={120} autoComplete="off" />
-              <Field label="Account type">
-                {id => (
-                  <Select id={id} value={accountType} onChange={e => setAccountType(e.target.value as AccountType)}>
-                    <option value="researcher">Researcher</option>
-                    <option value="admin">Admin</option>
-                  </Select>
-                )}
-              </Field>
             </div>
-            {accountType === 'admin' && (
-              <p role="note" className="flex items-start gap-2 rounded-lg border border-line bg-warning-soft px-3 py-2.5 text-sm text-fg">
-                <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
-                <span>Admins can see and change every study and all participant data, delete studies and manage everyone&apos;s access. Only invite people you fully trust as admins.</span>
-              </p>
-            )}
             <Notice notice={inviteNotice} onClose={() => setInviteNotice(null)} />
             <Button type="submit" loading={inviting}>
               <Send size={14} aria-hidden="true" /> {inviting ? 'Sending…' : 'Send invite'}

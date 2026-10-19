@@ -7,7 +7,7 @@ import { useParams, useSearchParams, useRouter, usePathname } from 'next/navigat
 import { BarChart2, Database, Download, Table2, Users } from 'lucide-react'
 import {
   asRows,
-  type AppUsageRow, type BatteryRow, type CallSmsRow, type DataRow, type EsmResponseRow,
+  type AppUsageRow, type BatteryRow, type CallSmsRow, type DataRow,
   type LightRow, type LocationRow, type NotificationRow, type ScreenStateRow,
 } from '@/components/charts/types'
 import {
@@ -18,7 +18,7 @@ import { Avatar, ParticipantPicker, participantName, type Participant } from '@/
 import { JsonCell, columnLabel, formatCellValue } from '@/components/data/cells'
 import { scopedSelect, stripScope, type DataScope } from '@/components/data/scope'
 import { must, mustCount, useAsync } from '@/components/data/use-async'
-import { DATA_TABLES } from '@/lib/sensors'
+import { SENSOR_TABLES as DATA_TABLES } from '@/lib/sensors'
 import { downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
 import { studyPaths } from '@/lib/nav'
 
@@ -30,11 +30,10 @@ const NotificationsChart = lazy(() => import('@/components/charts/NotificationsC
 const AppUsageChart      = lazy(() => import('@/components/charts/AppUsageChart'))
 const CallsSmsChart      = lazy(() => import('@/components/charts/CallsSmsChart'))
 const LocationChart      = lazy(() => import('@/components/charts/LocationChart'))
-const EsmChart           = lazy(() => import('@/components/charts/EsmChart'))
 
 const CHART_TABLES = new Set([
   'data_app_usage', 'data_notifications', 'data_battery', 'data_calls', 'data_sms',
-  'data_esm_responses', 'data_location', 'data_light', 'data_screen_state',
+  'data_location', 'data_light', 'data_screen_state',
 ])
 const JSON_COLUMNS = new Set(['responses', 'interaction_data', 'device_info'])
 const HIDDEN_COLUMNS = new Set(['id', 'participant_id', 'client_uuid', 'participants'])
@@ -109,7 +108,6 @@ function ChartView({ table, data, participants, showParticipant }: {
     case 'data_calls':         return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_calls" />
     case 'data_sms':           return <CallsSmsChart {...props} data={asRows<CallSmsRow>(data)} sensorKey="data_sms" />
     case 'data_location':      return <LocationChart {...props} data={asRows<LocationRow>(data)} />
-    case 'data_esm_responses': return <EsmChart {...props} data={asRows<EsmResponseRow>(data)} />
     default:                   return <p className="py-12 text-center text-sm text-subtle">No chart is available for this data.</p>
   }
 }

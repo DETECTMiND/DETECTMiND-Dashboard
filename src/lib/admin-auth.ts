@@ -49,15 +49,22 @@ export async function requireAdmin(req: NextRequest): Promise<AdminContext | Nex
 
 type StudyOwnerContext = AdminContext & {
   isAdmin: boolean
+  /** Owner or admin (may change roles and remove people) */
+  canManage: boolean
   study: { id: string; name: string }
 }
 
 /**
- * Verifies that the request comes from a signed-in, active researcher who can
- * manage `studyId` (an owner of that study, or an admin). The study check uses
- * the database's own can_manage_study() with the caller's session.
+ * Verifies that the request comes from a signed-in, active researcher with
+ * access to `studyId`'s team. The checks use the database's own
+ * can_manage_study() / can_edit_study() with the caller's session.
  */
-export async function requireStudyOwner(req: NextRequest, studyId: string): Promise<StudyOwnerContext | NextResponse> {
+/**
+ * Caller must be an active researcher who may manage this study's team:
+ * level 'manage' = owner or admin (change roles, remove people);
+ * level 'edit' = also editors (add editors / viewers).
+ */
+export async function requireStudyOwner(req: NextRequest, studyId: string, level: 'manage' | 'edit' = 'manage'): Promise<StudyOwnerContext | NextResponse> {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const origin = req.headers.get('origin')
     if (origin && origin !== req.nextUrl.origin) return jsonError(403, 'Cross-site request refused')
@@ -73,14 +80,16 @@ export async function requireStudyOwner(req: NextRequest, studyId: string): Prom
   if (error) return jsonError(500, `Could not check your access: ${error.message}`)
   if (!me || !me.active) return jsonError(403, 'Your account does not have dashboard access')
 
-  const [{ data: canManage, error: manageError }, { data: study, error: studyError }] = await Promise.all([
+  const [{ data: canManage, error: manageError }, { data: canEdit, error: editError }, { data: study, error: studyError }] = await Promise.all([
     supabase.rpc('can_manage_study', { p_study: studyId }),
+    supabase.rpc('can_edit_study', { p_study: studyId }),
     supabase.from('studies').select('id, name').eq('id', studyId).maybeSingle(),
   ])
-  if (manageError) return jsonError(500, `Could not check your access: ${manageError.message}`)
+  if (manageError || editError) return jsonError(500, `Could not check your access: ${(manageError ?? editError)!.message}`)
   if (studyError) return jsonError(500, studyError.message)
   if (!study) return jsonError(404, 'Study not found')
-  if (canManage !== true) return jsonError(403, 'Only a study owner or an admin can manage this study team')
+  if (level === 'manage' && canManage !== true) return jsonError(403, 'Only a study owner or an admin can manage this study team')
+  if (level === 'edit' && canEdit !== true) return jsonError(403, 'Only owners and editors of this study can add people to it')
 
   let admin: SupabaseClient
   try {
@@ -89,7 +98,7 @@ export async function requireStudyOwner(req: NextRequest, studyId: string): Prom
     if (e instanceof AdminConfigError) return jsonError(500, e.message)
     throw e
   }
-  return { user, supabase, admin, isAdmin: me.role === 'admin', study: study as { id: string; name: string } }
+  return { user, supabase, admin, isAdmin: me.role === 'admin', canManage: canManage === true, study: study as { id: string; name: string } }
 }
 
 /** Appends an audit_log row as the given actor (service role bypasses RLS). */

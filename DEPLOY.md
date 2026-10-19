@@ -59,41 +59,43 @@ one is missing, Supabase silently falls back to the Site URL.
 
 **Authentication → Email Templates**
 
-The default templates work: invites land on `/auth/callback`, which forwards
-to `/reset-password`, where the new researcher sets a password. For more
-robust links (they survive email scanners and work in a different browser),
-change the link in these templates to the token-hash form:
+Branded templates are in `supabase/templates/` (the local stack already uses
+them via `supabase/config.toml`). For each template in the hosted project,
+paste the file's HTML into the body and set the subject:
 
-- **Invite user**
+| Template | File | Subject |
+|---|---|---|
+| Invite user | `invite.html` | You're invited to the DETECTMiND dashboard |
+| Reset password | `recovery.html` | Reset your DETECTMiND password |
+| Magic link | `magic_link.html` | Your DETECTMiND sign-in link |
+| Confirm signup | `confirmation.html` | Confirm your email for DETECTMiND |
+| Change email address | `email_change.html` | Confirm your new email for DETECTMiND |
 
-  ```html
-  <h2>You have been invited to the DETECTMiND research dashboard</h2>
-  <p><a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=invite&next=/reset-password">Accept the invite and set your password</a></p>
-  <p>If you were not expecting this, you can ignore this email.</p>
-  ```
+The links use the token-hash form (`/auth/callback?token_hash=…`), which
+survives email link scanners and works in a different browser. The logo is
+loaded from `{{ .SiteURL }}/logo.png`, so the **Site URL** must be the
+dashboard's address.
 
-- **Reset Password**
+**Sender name and address: Custom SMTP**
 
-  ```html
-  <h2>Reset your DETECTMiND dashboard password</h2>
-  <p><a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password">Choose a new password</a></p>
-  <p>If you did not ask for this, you can ignore this email; your password is unchanged.</p>
-  ```
+Without custom SMTP, Supabase sends as "Supabase Auth
+&lt;noreply@mail.app.supabase.io&gt;" with a footer about Supabase, and only a
+few emails per hour. To send as **DETECTMiND &lt;no-reply@your-domain&gt;**:
 
-Set the subjects too (e.g. "Your DETECTMiND dashboard invitation").
-
-**Custom SMTP (recommended)**
-
-Supabase's built-in email sender is rate limited (a few emails per hour) and
-meant for testing. Before inviting a team, configure **Project Settings →
-Authentication → SMTP Settings** with your institution's SMTP or a provider
-(Resend, Postmark, SES, ...), and a sender such as `no-reply@your-domain`.
+1. Pick a provider (Resend, Postmark, Amazon SES, Brevo, or your
+   university's SMTP) and verify your sending domain there (SPF/DKIM records).
+2. **Project Settings → Authentication → SMTP Settings**: enable custom SMTP,
+   enter the provider's host, port, user and password, set **Sender name** to
+   `DETECTMiND` and **Sender email** to e.g. `no-reply@your-domain`.
+3. Raise the email rate limit under **Authentication → Rate Limits** if you
+   invite many people at once.
 
 ## 4. First sign-in
 
 1. Open the Vercel URL and sign in with the account the seed made admin.
-2. **Admin → Researchers → Invite a researcher** for each colleague.
-3. On each study's **Team** page, add them as owner, editor or viewer.
+2. **Admin → People → Invite someone** for each colleague, or add them by email on a
+   study's **Settings → Team** tab (owners and editors can do this too).
+3. Admins make someone an owner on the Team tab, or an admin on People.
 4. Everyone can change their password under **Account**; "Forgot password?"
    on the sign-in page sends a reset link.
 

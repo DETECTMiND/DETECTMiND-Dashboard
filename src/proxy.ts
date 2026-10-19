@@ -30,9 +30,13 @@ export async function proxy(request: NextRequest) {
     }
   )
 
-  // Refreshes the session cookie. Researcher role/active checks happen in the
-  // dashboard shell and, authoritatively, in the database (RLS).
-  const { data: { user } } = await supabase.auth.getUser()
+  // Refreshes the session cookie when needed and checks the signed-in user.
+  // getClaims verifies the token locally when the project uses asymmetric JWT
+  // signing keys (no round trip to Supabase on every page change), and falls
+  // back to asking the Auth server otherwise. Researcher role/active checks
+  // happen in the dashboard shell and, authoritatively, in the database (RLS).
+  const { data: claimsData } = await supabase.auth.getClaims()
+  const user = claimsData?.claims?.sub ? claimsData.claims : null
   const path = request.nextUrl.pathname
   const isPublic = PUBLIC_PREFIXES.some(p => path === p.replace(/\/$/, '') || path.startsWith(p))
 

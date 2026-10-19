@@ -86,18 +86,18 @@ export default function TeamPage() {
   }, [fetchTeam])
 
   useEffect(() => {
-    if (!access.canManage) return
+    if (!access.canEdit) return
     let cancelled = false
     fetchDirectory().then(d => { if (!cancelled) setDirectory(d) })
     fetchInvited().then(ids => { if (!cancelled && ids) setInvitedIds(ids) })
     return () => { cancelled = true }
-  }, [fetchDirectory, fetchInvited, access.canManage])
+  }, [fetchDirectory, fetchInvited, access.canEdit])
 
   async function reload() {
     const [t, d, ids] = await Promise.all([
       fetchTeam(),
-      access.canManage ? fetchDirectory() : Promise.resolve(null),
-      access.canManage ? fetchInvited() : Promise.resolve(null),
+      access.canEdit ? fetchDirectory() : Promise.resolve(null),
+      access.canEdit ? fetchInvited() : Promise.resolve(null),
     ])
     setTeam(t)
     if (d) setDirectory(d)
@@ -213,12 +213,15 @@ export default function TeamPage() {
     <div className="max-w-4xl space-y-5">
       {dialog}
 
-      {!access.loading && !access.canManage && (
-        <ReadOnlyBanner text="Only study owners and admins can change the team." />
+      {!access.loading && !access.canEdit && (
+        <ReadOnlyBanner text="Only owners, editors and admins can add people to this study." />
+      )}
+      {!access.loading && access.canEdit && !access.canManage && (
+        <ReadOnlyBanner text="You can add editors and viewers. Only owners and admins change roles or remove people." />
       )}
       <Notice notice={notice} onClose={() => setNotice(null)} />
 
-      {access.canManage && (
+      {access.canEdit && (
         <Card>
           <CardHeader icon={<UserPlus size={16} />} title="Add people" description="New people get an email invite and only see the studies they are added to." />
           {directory?.error ? (
@@ -311,7 +314,7 @@ export default function TeamPage() {
         )}
       </Card>
 
-      <RoleHelp />
+      <RoleHelp studyOnly />
     </div>
   )
 }
