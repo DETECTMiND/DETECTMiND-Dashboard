@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { GESTURE_INTERACTION_LABELS } from '@/lib/sensors'
 
 // Friendly column names and cell formatting for raw data tables.
 
@@ -66,6 +67,7 @@ export function formatCellValue(col: string, value: unknown): string {
   if (value === null || value === undefined || value === '') return '—'
   if (col === 'voltage' && typeof value === 'number') return formatVoltage(value)
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (col === 'interaction_type' && typeof value === 'string' && GESTURE_INTERACTION_LABELS[value]) return GESTURE_INTERACTION_LABELS[value]
   if (typeof value === 'object') return JSON.stringify(value)
   if (typeof value === 'string' && isTimeColumn(col) && /^\d{4}-/.test(value)) {
     const d = new Date(value)

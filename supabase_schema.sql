@@ -1151,8 +1151,8 @@ END $$;
 -- ('off' then 'locked'), and often drops the closing event entirely when the OS
 -- kills it. We collapse the raw stream to clean ALTERNATING on/off transitions,
 -- then pair each 'on' with the next transition -- so sessions can never overlap
--- and no hour can exceed 60 minutes. A missing or implausibly long close is
--- capped at 3 hours (long enough not to truncate a normal session, short enough
+-- and no hour can exceed 60 minutes. The still-open latest session ends at the
+-- device's last sync. An implausibly long close is capped at 3 hours (long enough not to truncate a normal session, short enough
 -- that a dropped close cannot invent a day of usage). daily_usage is rolled up
 -- from hourly_usage, so the daily total always equals the sum of that day's
 -- hourly cells. All timestamps are bucketed in the single fixed zone returned by
@@ -1194,16 +1194,26 @@ paired AS (
         LEAD(ts)  OVER (PARTITION BY participant_id ORDER BY ts) AS next_ts,
         LEAD(dir) OVER (PARTITION BY participant_id ORDER BY ts) AS next_dir
     FROM deduped
+),
+-- The latest session has no close yet. It is known to run only up to the device's
+-- last sync (the screen was still on when it uploaded), never 3 hours into the future.
+closed AS (
+    SELECT
+        s.participant_id,
+        s.start_ts,
+        s.next_ts,
+        COALESCE(s.next_ts,
+                 LEAST(GREATEST(s.start_ts, p.last_sync_at), now())) AS close_ts
+    FROM paired s
+    LEFT JOIN participants p ON p.id = s.participant_id
+    WHERE s.dir = 'on'
 )
 SELECT
     participant_id,
     start_ts,
-    LEAST(COALESCE(next_ts, start_ts + interval '3 hours'),
-          start_ts + interval '3 hours') AS end_ts,
-    (next_ts IS NULL
-     OR next_ts - start_ts > interval '3 hours') AS was_capped
-FROM paired
-WHERE dir = 'on';
+    LEAST(COALESCE(close_ts, start_ts), start_ts + interval '3 hours') AS end_ts,
+    (close_ts - start_ts > interval '3 hours') IS TRUE AS was_capped
+FROM closed;
 
 -- Single source of truth for screen-on time; daily_usage rolls up from it.
 CREATE OR REPLACE VIEW hourly_usage

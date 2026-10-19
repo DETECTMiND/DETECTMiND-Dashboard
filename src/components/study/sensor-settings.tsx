@@ -52,7 +52,11 @@ function normaliseConfig(sensor: SensorInfo, config: SensorConfigJson | null | u
   }
   if (sensor.key === 'gestures') {
     const st = cfg.scroll_tracking as Partial<ScrollTracking> | undefined
-    cfg.interaction_types = { ...GESTURE_DEFAULTS.interaction_types, ...(cfg.interaction_types ?? {}) }
+    const saved = cfg.interaction_types ?? {}
+    cfg.interaction_types = { ...GESTURE_DEFAULTS.interaction_types, ...saved }
+    // Configs saved before "touches" existed: the app records touches when Taps
+    // is on, so show (and save) that effective value.
+    if (typeof saved.touches !== 'boolean') cfg.interaction_types.touches = cfg.interaction_types.TYPE_VIEW_CLICKED ?? false
     cfg.skip_rules = { ...GESTURE_DEFAULTS.skip_rules, ...(cfg.skip_rules ?? {}) }
     // When scroll_tracking is absent the app uses "on" + the default list.
     cfg.scroll_tracking = {

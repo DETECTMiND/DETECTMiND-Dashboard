@@ -63,9 +63,17 @@ export function tableLabel(table: string): string {
 /** Friendly names for the Android accessibility event types the gestures sensor can record. */
 export const GESTURE_EVENT_LABELS: Record<string, { label: string; description: string }> = {
   TYPE_VIEW_CLICKED: { label: 'Taps', description: 'A tap on a button or item.' },
+  touches: { label: 'All touches', description: "Every touch on the screen, including apps that don't report taps. No positions; nothing while the keyboard is open." },
   TYPE_VIEW_LONG_CLICKED: { label: 'Long presses', description: 'Press and hold.' },
   TYPE_VIEW_SCROLLED: { label: 'Scrolls', description: 'Scroll events from apps that report them.' },
   TYPE_WINDOW_CONTENT_CHANGED: { label: 'Screen changes', description: 'Content on screen changed. Very frequent; usually off.' },
+}
+
+/** Display names for data_gestures.interaction_type values the app itself defines. */
+export const GESTURE_INTERACTION_LABELS: Record<string, string> = {
+  touch: 'Touch',
+  scroll: 'Feed scroll',
+  page_swipe: 'Page swipe',
 }
 
 export const GESTURE_SKIP_LABELS: Record<string, string> = {
@@ -79,6 +87,9 @@ export const GESTURE_DEFAULTS = {
   interaction_types: {
     TYPE_VIEW_SCROLLED: true,
     TYPE_VIEW_CLICKED: true,
+    // Not an accessibility event type: one row (interaction_type 'touch') per
+    // touch-down. When the key is absent the app follows TYPE_VIEW_CLICKED.
+    touches: true,
     TYPE_VIEW_LONG_CLICKED: true,
     TYPE_WINDOW_CONTENT_CHANGED: false,
   },
