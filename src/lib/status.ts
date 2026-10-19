@@ -32,11 +32,6 @@ export function studyStatusInfo(study: { status?: string | null; approved_at?: s
   return { key, ...INFO[key] }
 }
 
-/** Label for a raw status value (e.g. in a select), without the pending distinction. */
-export function statusLabel(status: string): string {
-  return (INFO as Record<string, { label: string }>)[status]?.label ?? status.charAt(0).toUpperCase() + status.slice(1)
-}
-
 export type SyncStatusKey = 'success' | 'partial' | 'error'
 export const SYNC_STATUS: Record<SyncStatusKey, { label: string; tone: StatusTone; dot: string }> = {
   success: { label: 'Success', tone: 'green', dot: 'bg-emerald-500' },

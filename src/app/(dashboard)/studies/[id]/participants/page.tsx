@@ -23,7 +23,7 @@ import { PinLockouts } from '@/components/pin-lockouts'
 import { MergeAudit } from '@/components/merge-audit'
 import { DeleteParticipantModal } from '@/components/delete-participant-modal'
 import {
-  Avatar, hasPermissionIssue, isSyncOverdue, missingPermissions, participantName, permissionSummary, syncHealth,
+  hasPermissionIssue, isSyncOverdue, missingPermissions, participantName, permissionSummary, syncHealth,
   type SyncHealth,
 } from '@/components/participant-ui'
 import { scopedSelect } from '@/components/data/scope'
@@ -322,7 +322,6 @@ function ParticipantDrawer({
       <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="participant-detail-title"
         className="relative flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-2xl">
         <div className="flex items-start gap-3 border-b border-line p-5">
-          <Avatar id={p.id} name={name} size="lg" />
           <div className="min-w-0 flex-1">
             <h2 id="participant-detail-title" className="truncate text-lg font-bold text-fg">{name}</h2>
             <p className="break-all font-mono text-xs text-subtle">{p.device_id}</p>
@@ -544,7 +543,6 @@ function ParticipantsContent() {
       <div className="flex min-w-0 items-center gap-1">
         <button type="button" onClick={() => setParam('participant', p.id)} aria-label={`Open details for ${name}`}
           className="flex min-w-0 items-center gap-2.5 rounded-lg text-left hover:text-accent">
-          <Avatar id={p.id} name={name} />
           <span className="min-w-0">
             <span className="block truncate font-semibold text-fg">{name}</span>
             {p.label && <span className="block truncate font-mono text-[11px] text-subtle">{p.device_id}</span>}

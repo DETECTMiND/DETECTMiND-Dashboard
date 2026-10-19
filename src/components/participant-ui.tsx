@@ -18,19 +18,6 @@ export function participantName(p: Participant) {
   return p.label || p.device_id
 }
 
-export function avatarInitial(name: string) {
-  return name.charAt(0).toUpperCase()
-}
-
-/**
- * Participants have no names or photos, so letter avatars only repeated the
- * same "D" for every device. Kept as a no-op so call sites stay simple.
- */
-export function Avatar(_props: { id: string; name: string; size?: 'sm' | 'md' | 'lg' }) {
-  void _props
-  return null
-}
-
 // ── Sync health ──────────────────────────────────────────────────────────────
 // Both thresholds follow the study's sync interval (the app enforces a 15 min
 // minimum): "late" after 2 missed syncs, "silent" (app probably uninstalled or
@@ -183,7 +170,7 @@ export function ParticipantPicker({
         onClick={() => (open ? close() : setOpen(true))}
         className={`flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border bg-surface px-3 text-sm hover:bg-sunken sm:w-64 ${selected ? 'border-accent' : 'border-line'}`}>
         <span className="sr-only">Participant: </span>
-        {selected ? <Avatar id={selected.id} name={label} size="sm" /> : <Users size={14} className="shrink-0 text-subtle" aria-hidden="true" />}
+        {!selected && <Users size={14} className="shrink-0 text-subtle" aria-hidden="true" />}
         <span className="min-w-0 flex-1 truncate text-left font-medium text-fg">{label}</span>
         <ChevronDown size={13} aria-hidden="true" className={`shrink-0 text-subtle transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -213,7 +200,6 @@ export function ParticipantPicker({
             ) : filtered.map(p => {
               const name = participantName(p)
               return option(p.id, <>
-                <Avatar id={p.id} name={name} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium text-fg">{name}</span>
                   {p.label && <span className="block truncate font-mono text-[11px] text-subtle">{p.device_id}</span>}

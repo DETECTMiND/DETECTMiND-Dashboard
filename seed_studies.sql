@@ -12,9 +12,8 @@
 -- Supabase Auth account that exists right now gets one:
 --   * emails listed in v_admin_emails  -> active ADMIN
 --   * every other existing account     -> active researcher
--- and, further down, every one of them becomes OWNER of both seeded studies.
--- Edit v_admin_emails below before running. Invite everyone else from the
--- dashboard (Admin -> Researchers, or a study's Team tab).
+-- Nobody is added to a study: an admin assigns owners, editors and viewers on
+-- each study's Settings -> Team tab. Edit v_admin_emails before running.
 DO $$
 DECLARE
   v_admin_emails TEXT[] := ARRAY['binoybkp@gmail.com'];
@@ -37,7 +36,7 @@ BEGIN
   LOOP
     n := n + 1;
     IF r.role = 'admin' THEN n_admin := n_admin + 1; END IF;
-    RAISE NOTICE 'Account %: % (owner of both seeded studies)', COALESCE(r.email, r.user_id::text), r.role;
+    RAISE NOTICE 'Account %: %', COALESCE(r.email, r.user_id::text), r.role;
   END LOOP;
   IF n = 0 THEN
     RAISE WARNING 'No auth.users accounts found: no researchers or admins granted. Create a user in Authentication -> Users, add its email to v_admin_emails in seed_studies.sql, and re-run clear_database.sql, supabase_schema.sql and seed_studies.sql (or run: INSERT INTO researchers(user_id, email, role) SELECT id, email, ''admin'' FROM auth.users WHERE email = ''...'';).';
@@ -358,17 +357,8 @@ VALUES
    true, NULL,
    jsonb_build_object('min', 1, 'max', 5, 'label_min', 'Not at all motivated', 'label_max', 'Very motivated'));
 
--- ============================================================
--- 3. STUDY OWNERS: every existing account owns both seeded studies
--- ============================================================
 -- Both studies are inserted as 'active' by postgres (no signed-in user), which
--- tr_studies_status_guard treats as an admin: they are pre-approved
--- (approved_at = now(), approved_by NULL).
-INSERT INTO study_members (study_id, user_id, role)
-SELECT st.id, r.user_id, 'owner'
-  FROM (VALUES (v_digital_study_id), (v_sleep_study_id)) AS st(id)
-  CROSS JOIN public.researchers r
-  JOIN auth.users u ON u.id = r.user_id
-ON CONFLICT (study_id, user_id) DO UPDATE SET role = 'owner';
+-- tr_studies_status_guard treats as an admin: they are pre-approved. They start
+-- with no team; an admin adds owners from Settings -> Team.
 
 END $$;

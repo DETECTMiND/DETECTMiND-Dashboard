@@ -186,8 +186,9 @@ ON CONFLICT (user_id) DO UPDATE SET role = 'admin', active = true;
 `seed_studies.sql` has an explicit admin list at the top
 (`v_admin_emails`, currently `binoybkp@gmail.com`). Existing accounts in that
 list become active **admins**; every other existing account becomes an active
-researcher. All of them own both seeded studies, which are active and
-pre-approved. Each account and its role is printed as a NOTICE, and a WARNING
+researcher. Nobody is added to a study: the seeded studies are active and
+pre-approved with no team, and an admin assigns owners, editors and viewers
+on Settings → Team. Each account and its role is printed as a NOTICE, and a WARNING
 explains what to do if no listed email matches an account.
 
 ### Consent

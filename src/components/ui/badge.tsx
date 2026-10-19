@@ -33,7 +33,3 @@ export function StatusPill({ study, className = '' }: { study: { status?: string
   )
 }
 
-export function StatusDot({ study, className = '' }: { study: { status?: string | null; approved_at?: string | null }; className?: string }) {
-  const s = studyStatusInfo(study)
-  return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${s.dot} ${className}`} title={s.label} aria-label={s.label} role="img" />
-}

@@ -24,11 +24,6 @@ function writeCache(k: string, data: unknown) {
   if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value as string)
 }
 
-/** Forget remembered results (e.g. after a change that affects several pages). */
-export function clearAsyncCache() {
-  cache.clear()
-}
-
 /**
  * Runs `run` whenever `key` changes (null = don't run). Results are keyed, so
  * a slow answer for an old key never overwrites a newer one. Remembered data

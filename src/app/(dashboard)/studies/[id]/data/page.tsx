@@ -14,7 +14,7 @@ import {
   Button, Card, EmptyState, ErrorState, FilterPills, Notice, Pagination, SectionHeader, SegmentedControl,
   Skeleton, SkeletonRows, TableWrap, THead, Th, Td, Tr, type NoticeState,
 } from '@/components/ui'
-import { Avatar, ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
+import { ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
 import { JsonCell, columnLabel, formatCellValue } from '@/components/data/cells'
 import { scopedSelect, stripScope, type DataScope } from '@/components/data/scope'
 import { must, mustCount, useAsync } from '@/components/data/use-async'
@@ -368,7 +368,6 @@ function RawDataInner() {
                       {showParticipantCol && (
                         <Td className="whitespace-nowrap">
                           <Link href={`${studyPaths(studyId).participants}?participant=${pid}`} className="flex items-center gap-2 font-medium text-fg hover:text-accent">
-                            <Avatar id={pid} name={name} size="sm" />
                             <span className="max-w-32 truncate">{name}</span>
                           </Link>
                         </Td>

@@ -14,7 +14,7 @@ import {
   StatusPill, TableWrap, THead, Th, Td, Tr,
 } from '@/components/ui'
 import {
-  Avatar, hasPermissionIssue, isSyncOverdue, participantName, permissionSummary, syncHealth,
+  hasPermissionIssue, isSyncOverdue, participantName, permissionSummary, syncHealth,
 } from '@/components/participant-ui'
 import { scopedSelect } from '@/components/data/scope'
 import { must, mustCount, useAsync } from '@/components/data/use-async'
@@ -448,7 +448,6 @@ function OverviewContent() {
               )}
               {attentionPeople.slice(0, 5).map(({ p, issues }) => (
                 <li key={p.id} className="flex flex-wrap items-center gap-3 px-5 py-3">
-                  <Avatar id={p.id} name={participantName(p)} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-fg">{participantName(p)}</p>
                     <p className="text-xs text-subtle">{issues.join(' · ')}</p>
@@ -496,7 +495,6 @@ function OverviewContent() {
                       <Tr key={`${s.participant_id}-${s.synced_at}-${i}`}>
                         <Td>
                           <Link href={`${paths.participants}?participant=${s.participant_id}`} className="flex min-w-0 items-center gap-2 font-medium text-fg hover:text-accent">
-                            <Avatar id={s.participant_id} name={name} size="sm" />
                             <span className="max-w-40 truncate">{name}</span>
                           </Link>
                         </Td>

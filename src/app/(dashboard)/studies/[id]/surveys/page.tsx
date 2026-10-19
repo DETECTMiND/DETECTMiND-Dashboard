@@ -9,7 +9,7 @@ import {
   Badge, Button, ButtonLink, EmptyState, ErrorState, FilterPills, Notice, Pagination, SectionHeader, SegmentedControl, Select,
   SkeletonRows, TableWrap, THead, Th, Td, Tr, type NoticeState,
 } from '@/components/ui'
-import { Avatar, ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
+import { ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
 import { scopedSelect, stripScope, type DataScope } from '@/components/data/scope'
 import { must, mustCount, useAsync } from '@/components/data/use-async'
 import { downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
@@ -125,7 +125,6 @@ function ResponseRow({ row, participant, schedule, questions, showParticipant, s
         {showParticipant && (
           <Td className="whitespace-nowrap">
             <Link href={`${studyPaths(studyId).participants}?participant=${row.participant_id}`} className="flex items-center gap-2 font-medium text-fg hover:text-accent">
-              <Avatar id={row.participant_id} name={name} size="sm" />
               <span className="max-w-32 truncate">{name}</span>
             </Link>
           </Td>

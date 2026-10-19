@@ -27,15 +27,6 @@ export function useMe(): Me | null {
   return useContext(MeContext)
 }
 
-/** True when the signed-in researcher is a dashboard admin. */
-export function useIsAdmin(): boolean {
-  return useMe()?.role === 'admin'
-}
-
-export function isAdminMe(me: Me | null | undefined): boolean {
-  return me?.role === 'admin'
-}
-
 export interface StudyAccess {
   role: StudyRole | null
   canView: boolean

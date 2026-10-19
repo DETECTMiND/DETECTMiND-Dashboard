@@ -13,8 +13,9 @@ In the Supabase SQL editor, run in this order (see SECURITY_NOTES.md):
 3. `seed_studies.sql`
 
 Create your own account first (Authentication → Users → **Add user**), so the
-seed makes you an **admin** and owner of the example studies. Its NOTICE
-output lists every account it promoted. Change the example study PIN (`1234`)
+seed makes you an **admin**. The example studies start with no team: add
+owners, editors and viewers on each study's **Settings → Team** tab. The
+NOTICE output lists every account and its account type. Change the example study PIN (`1234`)
 before recruiting anyone.
 
 ## 2. Vercel environment variables
@@ -31,7 +32,7 @@ The service-role key bypasses row-level security. It is only read by
 `src/lib/supabase-admin.ts`, which is `server-only`. Never give it a
 `NEXT_PUBLIC_` prefix, never paste it into client code, and rotate it in
 Supabase if it ever leaks. Without it the dashboard works, but
-**Admin → Researchers** shows "The server is missing SUPABASE_SERVICE_ROLE_KEY".
+**Admin → People** shows "The server is missing SUPABASE_SERVICE_ROLE_KEY".
 
 Redeploy after changing environment variables.
 
@@ -101,7 +102,8 @@ few emails per hour. To send as **DETECTMiND &lt;no-reply@your-domain&gt;**:
 
 ## 5. Checklist
 
-- [ ] Schema + seed ran without errors; your email appeared as "Granted admin access".
+- [ ] Schema + seed ran without errors; the NOTICE output shows your email as admin.
+- [ ] Each example study has an owner (Admin → Studies shows "No owner" otherwise).
 - [ ] Three env vars set in Vercel; `SUPABASE_SERVICE_ROLE_KEY` is not `NEXT_PUBLIC_`.
 - [ ] Site URL and Redirect URLs set; public sign-up off.
 - [ ] Custom SMTP configured; Invite and Reset Password templates customised.

@@ -32,10 +32,7 @@ SQL files at the repo root, run in the Supabase SQL editor in this order:
 | --- | --- |
 | `clear_database.sql` | **Destructive** reset of the `public` schema (auth users are kept) |
 | `supabase_schema.sql` | Tables, RLS policies, views, functions, grants |
-| `seed_studies.sql` | Two example studies; listed emails become admins, other accounts researchers who own them |
-
-`migrations/` holds small, data-safe updates for a database built from an older
-`supabase_schema.sql` (run each once, in date order). A fresh build already includes them.
+| `seed_studies.sql` | Two example studies (no team); listed emails become admins, other accounts researchers |
 
 `PROCESSED_DATA_PLAN.md` describes the processed (derived) views.
 

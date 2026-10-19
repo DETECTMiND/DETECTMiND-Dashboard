@@ -19,8 +19,7 @@ export async function fetchPendingStudyCount(supabase: SupabaseClient): Promise<
   return count ?? 0
 }
 
-export const STUDY_STATUSES = ['draft', 'active', 'paused', 'completed'] as const
-export type StudyStatus = (typeof STUDY_STATUSES)[number]
+const STUDY_STATUSES = ['draft', 'active', 'paused', 'completed'] as const
 
 /**
  * Status values the caller may pick for a study (mirrors tr_studies_status_guard):
