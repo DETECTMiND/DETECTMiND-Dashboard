@@ -1,20 +1,25 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useMemo, useState } from 'react'
-import { useParams } from 'next/navigation'
-import {
-  Download, Table2, BarChart2, LayoutGrid, Users,
-} from 'lucide-react'
+import { Suspense, useMemo, useState } from 'react'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { BarChart2, Download, LayoutGrid, Table2, Users } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import {
-  Participant, ParticipantPicker, participantName,
-} from '@/components/participant-ui'
+  Button, Card, EmptyState, ErrorState, FilterPills, Pagination, SectionHeader, SegmentedControl,
+  Skeleton, SkeletonRows, TableWrap, THead, Th, Td, Tr,
+} from '@/components/ui'
+import { Participant, ParticipantPicker, participantName } from '@/components/participant-ui'
+import { useAsync } from '@/components/data/use-async'
+import { C, axisLine, axisTick, gridProps, intensity, tooltipProps } from '@/components/charts/theme'
+import { chunks, downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
+import { permissionLabel } from '@/lib/sensors'
 
 // ─── Dataset registry ─────────────────────────────────────────────────────────
-// Each processed dataset: which view to read, and how to shape it.
+// Each processed dataset: which database view to read, a stable order for
+// paging through it, and whether it has a chart.
 type DatasetKey =
   | 'hourly' | 'daily' | 'hourly_app' | 'daily_app' | 'steps' | 'pickups' | 'first_last' | 'notifications' | 'battery' | 'permission_outages' | 'scroll'
 
@@ -22,27 +27,29 @@ interface DatasetDef {
   key: DatasetKey
   label: string
   view: string
+  order: string[]
   hasChart: boolean
 }
 
 const DATASETS: DatasetDef[] = [
-  { key: 'hourly',        label: 'Hourly Screen Usage',   view: 'hourly_usage',          hasChart: true  },
-  { key: 'daily',         label: 'Daily Screen Usage',    view: 'daily_usage',           hasChart: true  },
-  { key: 'hourly_app',    label: 'Hourly App Usage',      view: 'hourly_app_usage',      hasChart: true  },
-  { key: 'daily_app',     label: 'Daily App Usage Total', view: 'daily_app_usage_total', hasChart: true  },
-  { key: 'steps',         label: 'Steps',                 view: 'daily_steps',           hasChart: true  },
-  { key: 'pickups',       label: 'Pickups',               view: 'daily_pickups',         hasChart: true  },
-  { key: 'first_last',    label: 'First / Last Use',      view: 'daily_first_last_use',  hasChart: false },
-  { key: 'notifications', label: 'Notifications',         view: 'daily_notifications',    hasChart: true  },
-  { key: 'battery',       label: 'Battery',               view: 'daily_battery_summary',  hasChart: true  },
-  { key: 'permission_outages', label: 'Permission Outages', view: 'permission_outages', hasChart: false },
-  { key: 'scroll',        label: 'Scrolling & Reels',     view: 'daily_scroll_activity',  hasChart: true  },
+  { key: 'hourly',             label: 'Hourly screen time',    view: 'hourly_usage',          order: ['usage_hour'],                   hasChart: true  },
+  { key: 'daily',              label: 'Daily screen time',     view: 'daily_usage',           order: ['usage_date'],                   hasChart: true  },
+  { key: 'hourly_app',         label: 'Hourly app usage',      view: 'hourly_app_usage',      order: ['usage_hour', 'package_name'],   hasChart: true  },
+  { key: 'daily_app',          label: 'Daily app usage',       view: 'daily_app_usage_total', order: ['usage_date'],                   hasChart: true  },
+  { key: 'steps',              label: 'Steps',                 view: 'daily_steps',           order: ['usage_date'],                   hasChart: true  },
+  { key: 'pickups',            label: 'Pickups',               view: 'daily_pickups',         order: ['usage_date', 'hour_of_day'],    hasChart: true  },
+  { key: 'first_last',         label: 'First and last use',    view: 'daily_first_last_use',  order: ['usage_date'],                   hasChart: false },
+  { key: 'notifications',      label: 'Notifications',         view: 'daily_notifications',   order: ['usage_date'],                   hasChart: true  },
+  { key: 'battery',            label: 'Battery',               view: 'daily_battery_summary', order: ['usage_date'],                   hasChart: true  },
+  { key: 'permission_outages', label: 'Permission outages',    view: 'permission_outages',    order: ['permission', 'revoked_at'],     hasChart: false },
+  { key: 'scroll',             label: 'Scrolling and reels',   view: 'daily_scroll_activity', order: ['usage_date', 'app_name'],       hasChart: true  },
 ]
 
 type ViewMode = 'table' | 'chart'
 type OverallMode = 'avg' | 'sum'
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
+const TABLE_PAGE = 50
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtHM(totalMinutes: number): string {
@@ -52,89 +59,75 @@ function fmtHM(totalMinutes: number): string {
   if (h === 0) return `${rem}m`
   return rem === 0 ? `${h}h` : `${h}h ${rem}m`
 }
-function cellColor(minutes: number): string {
-  if (minutes <= 0) return 'transparent'
-  const t = Math.min(minutes / 60, 1)
-  return `hsl(217, 85%, ${92 - t * 55}%)`
-}
-function cellText(minutes: number): string { return minutes >= 30 ? '#fff' : '#1e293b' }
 
-function buildCSV(rows: Record<string, unknown>[]): string {
-  if (rows.length === 0) return ''
-  const headers = Object.keys(rows[0])
-  return [
-    headers.join(','),
-    ...rows.map(r => headers.map(h => JSON.stringify(r[h] ?? '')).join(',')),
-  ].join('\n')
-}
-function downloadCSV(csv: string, filename: string) {
-  const blob = new Blob([csv], { type: 'text/csv' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
+/** 'YYYY-MM-DD' from the database shown as a local calendar date (no UTC shift). */
+function fmtDay(day: string): string {
+  const d = new Date(`${day}T12:00:00`)
+  return Number.isNaN(d.getTime()) ? day : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-// Generic row from any view
-// Raw rows from the Supabase views have per-view shapes; treated dynamically.
+function fmtTs(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+// Raw rows from the database views have per-view shapes; treated dynamically.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Row = Record<string, any>
 
 // ─── Page ──────────────────────────────────────────────────────────────────
-export default function ProcessedDataPage() {
-  const params = useParams()
-  const studyId = params.id as string
-  const supabase = createClient()
+function ProcessedDataInner() {
+  const { id: studyId } = useParams<{ id: string }>()
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const supabase = useMemo(() => createClient(), [])
 
-  const [participants, setParticipants] = useState<Participant[]>([])
-  const [selected, setSelected] = useState<string>('all')
   const [dataset, setDataset] = useState<DatasetKey>('hourly')
   const [chosenViewMode, setViewMode] = useState<ViewMode>('table')
   const [overallMode, setOverallMode] = useState<OverallMode>('avg')
+  const [pageState, setPageState] = useState({ key: '', page: 0 })
 
-  const [rowsByView, setRowsByView] = useState<Record<string, Row[]>>({})
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const meta = useAsync(`participants:${studyId}`, () =>
+    fetchAll<Participant>((from, to) => supabase.from('participants').select('id, label, device_id')
+      .eq('study_id', studyId).order('enrolled_at', { ascending: false }).order('id').range(from, to)))
+  const participants = useMemo(() => meta.data ?? [], [meta.data])
+  const pMap = useMemo(() => Object.fromEntries(participants.map(p => [p.id, p])), [participants])
 
+  const requested = searchParams.get('participant')
+  const selected = requested && (!meta.data || pMap[requested]) ? requested : 'all'
   const def = DATASETS.find(d => d.key === dataset)!
   const isOverall = selected === 'all'
   const canChart = def.hasChart
-
-  const pMap = useMemo(() => Object.fromEntries(participants.map(p => [p.id, p])), [participants])
-
-  // Load participants once.
-  useEffect(() => {
-    async function loadMeta() {
-      const { data: pList } = await supabase.from('participants').select('id, label, device_id').eq('study_id', studyId)
-      setParticipants((pList as Participant[]) || [])
-      if (!pList || pList.length === 0) setLoading(false)
-    }
-    loadMeta()
-  }, [studyId]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load the current dataset's view (cached per view).
-  useEffect(() => {
-    async function load() {
-      if (participants.length === 0) return
-      if (rowsByView[def.view]) return // cached
-      setLoading(true); setError(null)
-      const pIds = participants.map(p => p.id)
-      const res = await supabase.from(def.view).select('*').in('participant_id', pIds)
-      if (res.error) { setError(res.error.message); setLoading(false); return }
-      setRowsByView(prev => ({ ...prev, [def.view]: (res.data as Row[]) || [] }))
-      setLoading(false)
-    }
-    load()
-  }, [def.view, participants]) // eslint-disable-line react-hooks/exhaustive-deps
-
   // Datasets without a chart always show the table.
   const viewMode: ViewMode = canChart ? chosenViewMode : 'table'
 
-  const rawRows = useMemo(() => rowsByView[def.view] || [], [rowsByView, def.view])
-  const scoped = useMemo(
-    () => isOverall ? rawRows : rawRows.filter(r => r.participant_id === selected),
-    [rawRows, selected, isOverall],
-  )
+  // Load the dataset for this selection, paging past the 1000-row limit.
+  // Study-wide: participant ids in chunks (views have no study column).
+  const loadKey = meta.data && participants.length > 0 ? `${def.view}|${selected}` : null
+  const load = useAsync(loadKey, async () => {
+    const page = (ids: string[] | string) => fetchAll<Row>((from, to) => {
+      let q = supabase.from(def.view).select('*')
+      q = typeof ids === 'string' ? q.eq('participant_id', ids) : q.in('participant_id', ids)
+      q = q.order('participant_id')
+      for (const col of def.order) q = q.order(col)
+      return q.range(from, to)
+    })
+    if (selected !== 'all') return page(selected)
+    const parts = await Promise.all(chunks(participants.map(p => p.id), 100).map(page))
+    return parts.flat()
+  })
+  const scoped = useMemo(() => load.data ?? [], [load.data])
+  const loading = meta.loading || load.loading
+
+  function changeParticipant(id: string) {
+    const params = new URLSearchParams(searchParams.toString())
+    if (id === 'all') params.delete('participant')
+    else params.set('participant', id)
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }
 
   // ── HOURLY: date × hour grid (single) / minutes-per-hour (overall) ──────────
   const hourlyGrid = useMemo(() => {
@@ -150,12 +143,12 @@ export default function ProcessedDataPage() {
 
   const hourlyOverall = useMemo(() => {
     const sum: Record<number, number> = {}
-    const participants = new Set<string>()
+    const seen = new Set<string>()
     for (const r of scoped) {
       sum[r.hour_of_day] = (sum[r.hour_of_day] || 0) + r.screen_on_seconds / 60
-      participants.add(r.participant_id)
+      seen.add(r.participant_id)
     }
-    const denom = overallMode === 'avg' ? Math.max(participants.size, 1) : 1
+    const denom = overallMode === 'avg' ? Math.max(seen.size, 1) : 1
     return HOURS.map(h => ({ hour: `${String(h).padStart(2, '0')}:00`, minutes: Math.round((sum[h] || 0) / denom) }))
   }, [scoped, overallMode])
 
@@ -183,7 +176,7 @@ export default function ProcessedDataPage() {
           time_used: fmtHM(r.foreground_minutes), minutes: Math.round(r.foreground_minutes), opens: r.open_count,
         }))
       return {
-        headers: ['Time (hour)', 'App', 'Time used', 'Minutes', 'Opens'],
+        headers: ['Hour', 'App', 'Time used', 'Minutes', 'Opens'],
         rows: rows.map(r => [r.time, r.app, r.time_used, String(r.minutes), String(r.opens)]),
         csv: rows, chart: rows.slice(0, 10).map(r => ({ date: r.time, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
       }
@@ -212,7 +205,7 @@ export default function ProcessedDataPage() {
         return { date, participants: d.pdays, total_time: fmtHM(d.minutes / k), minutes: Math.round(d.minutes / k), hours: +(d.hours / k).toFixed(2), apps: Math.round(d.apps / k), opens: Math.round(d.opens / k) }
       })
       return {
-        headers: ['Date', 'Participants', 'Total time', 'Minutes', 'Hours', 'Avg unique apps', 'Avg opens'],
+        headers: ['Date', 'Participants', 'Total time', 'Minutes', 'Hours', 'Unique apps', 'Opens'],
         rows: rows.map(r => [r.date, String(r.participants), r.total_time, String(r.minutes), String(r.hours), String(r.apps), String(r.opens)]),
         csv: rows, chart: rows.map(r => ({ date: r.date, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
       }
@@ -226,7 +219,7 @@ export default function ProcessedDataPage() {
           sessions: r.session_count, avg_session_min: r.avg_session_minutes, unlocks: r.unlock_count, capped: r.capped_sessions,
         }))
         return {
-          headers: ['Date', 'Screen time', 'Minutes', 'Sessions', 'Avg session', 'Unlocks', 'Capped'],
+          headers: ['Date', 'Screen time', 'Minutes', 'Sessions', 'Average session', 'Unlocks', 'Capped sessions'],
           rows: rows.map(r => [r.date, r.screen_time, String(r.minutes), String(r.sessions), `${r.avg_session_min}m`, String(r.unlocks), String(r.capped)]),
           csv: rows, chart: rows.map(r => ({ date: r.date, value: r.minutes })), chartLabel: 'Minutes', unit: 'min',
         }
@@ -311,25 +304,22 @@ export default function ProcessedDataPage() {
         return { date, avg_level: Math.round(d.avg / d.n), min_level: d.min, max_level: d.max, pct_charging: Math.round(d.charging / d.n) }
       })
       return {
-        headers: ['Date', 'Avg level %', 'Min %', 'Max %', 'Time charging %'],
+        headers: ['Date', 'Average level (%)', 'Lowest (%)', 'Highest (%)', 'Time charging (%)'],
         rows: rows.map(r => [r.date, String(r.avg_level), String(r.min_level), String(r.max_level), String(r.pct_charging)]),
-        csv: rows, chart: rows.map(r => ({ date: r.date, value: r.avg_level })), chartLabel: 'Avg battery %', unit: '%',
+        csv: rows, chart: rows.map(r => ({ date: r.date, value: r.avg_level })), chartLabel: 'Average battery level', unit: '%',
       }
     }
 
     if (dataset === 'permission_outages') {
-      const fmtTs = (iso: string | null) => {
-        if (!iso) return '—'
-        try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
-      }
       const rows = [...scoped]
         .sort((a, b) => (b.revoked_at || '').localeCompare(a.revoked_at || ''))
         .map(r => ({
           participant: participantName(pMap[r.participant_id] || { id: r.participant_id, label: null, device_id: r.participant_id }),
-          permission: r.permission,
+          permission: permissionLabel(r.permission),
+          permission_key: r.permission,
           revoked_at: fmtTs(r.revoked_at),
           restored_at: fmtTs(r.restored_at),
-          outage: r.outage_minutes == null ? 'still off' : `${r.outage_minutes}m`,
+          outage: r.outage_minutes == null ? 'Still off' : fmtHM(Number(r.outage_minutes)),
         }))
       return {
         headers: isOverall ? ['Participant', 'Permission', 'Turned off', 'Turned back on', 'Duration'] : ['Permission', 'Turned off', 'Turned back on', 'Duration'],
@@ -398,249 +388,186 @@ export default function ProcessedDataPage() {
     ? (isOverall ? hourlyOverall.some(r => r.minutes > 0) : hourlyDates.length > 0)
     : (generic?.rows.length ?? 0) > 0
 
+  const tableKey = `${def.view}|${selected}|${overallMode}`
+  const page = pageState.key === tableKey ? pageState.page : 0
+  const setPage = (p: number) => setPageState({ key: tableKey, page: p })
+
   function exportCsv() {
-    const who = isOverall ? 'overall' : (participantName(pMap[selected]) || selected).replace(/\s+/g, '_')
+    const who = isOverall ? 'all' : safeFileName(pMap[selected] ? participantName(pMap[selected]) : selected)
+    const name = `${def.view}_${who}_${localDay(new Date())}`
     if (dataset === 'hourly') {
       const rows = isOverall
-        ? hourlyOverall.map(r => ({ hour: r.hour, minutes: r.minutes, mode: overallMode }))
+        ? hourlyOverall.map(r => ({ hour: r.hour, minutes: r.minutes, mode: overallMode === 'avg' ? 'average per participant' : 'total' }))
         : hourlyDates.flatMap(date => HOURS.map(h => ({ date, hour: `${String(h).padStart(2, '0')}:00`, minutes: Math.round(hourlyGrid[date][h] || 0) })).filter(r => r.minutes > 0))
-      downloadCSV(buildCSV(rows), `${def.view}_${who}.csv`)
+      downloadCsv(rows, name)
     } else if (generic) {
-      downloadCSV(buildCSV(generic.csv as Record<string, unknown>[]), `${def.view}_${who}.csv`)
+      downloadCsv(generic.csv as Record<string, unknown>[], name)
     }
   }
 
+  const rowCountLabel = dataset === 'hourly' && !isOverall
+    ? `${hourlyDates.length.toLocaleString()} days`
+    : `${(generic?.rows.length ?? 24).toLocaleString()} rows`
+
   // ─── Render ─────────────────────────────────────────────────────────────────
+  if (meta.error) return <ErrorState message={meta.error} onRetry={meta.retry} />
+  if (meta.loading) return <SkeletonRows rows={8} />
+  if (participants.length === 0) {
+    return (
+      <EmptyState icon={<Users size={28} />} title="No participants yet"
+        hint="Summaries appear once participants join and their phones sync." />
+    )
+  }
+
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div>
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Processed Data</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Derived datasets computed from raw sensor events</p>
-          </div>
-          {participants.length > 0 && (
-            <ParticipantPicker participants={participants} value={selected} onChange={setSelected} />
-          )}
-        </div>
-      </div>
+      <SectionHeader
+        title={def.label}
+        description="Summaries computed from the raw sensor data, per participant and day."
+        actions={<ParticipantPicker participants={participants} value={selected} onChange={changeParticipant} />}
+      />
 
-      {/* Dataset pills */}
-      <div className="flex flex-wrap gap-1.5">
-        {DATASETS.map(d => {
-          const active = dataset === d.key
-          return (
-            <button
-              key={d.key}
-              onClick={() => { setDataset(d.key); if (!d.hasChart) setViewMode('table') }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-                active ? 'bg-blue-600 text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              {d.label}
-            </button>
-          )
-        })}
-      </div>
+      <FilterPills label="Summary" value={dataset} onChange={setDataset}
+        options={DATASETS.map(d => ({ value: d.key, label: d.label }))} />
 
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
-          <button
-            onClick={() => setViewMode('table')}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
-          >
-            <Table2 size={12} /> Table
-          </button>
-          <button
-            onClick={() => canChart && setViewMode('chart')}
-            disabled={!canChart}
-            title={!canChart ? 'No chart for this dataset' : undefined}
-            className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-all ${
-              viewMode === 'chart' ? 'bg-blue-600 text-white' : canChart ? 'text-gray-600 hover:bg-gray-50' : 'text-gray-300 cursor-not-allowed'
-            }`}
-          >
-            <BarChart2 size={12} /> Chart
-          </button>
-        </div>
-
+      <div className="flex flex-wrap items-center gap-2">
+        {canChart && (
+          <SegmentedControl label="View" value={viewMode} onChange={setViewMode} size="sm"
+            options={[{ value: 'table', label: 'Table', icon: <Table2 size={13} /> }, { value: 'chart', label: 'Chart', icon: <BarChart2 size={13} /> }]} />
+        )}
         {isOverall && (
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-            {(['avg', 'sum'] as OverallMode[]).map(m => (
-              <button
-                key={m}
-                onClick={() => setOverallMode(m)}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${overallMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-              >
-                {m === 'avg' ? 'Average' : 'Sum'}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl label="Combine participants" value={overallMode} onChange={setOverallMode} size="sm"
+            options={[{ value: 'avg', label: 'Average' }, { value: 'sum', label: 'Total' }]} />
         )}
-
-        {hasData && (
-          <span className="text-xs text-gray-400 tabular-nums">
-            {dataset === 'hourly' && !isOverall ? `${hourlyDates.length} days` : `${generic?.rows.length ?? 24} rows`}
-          </span>
-        )}
-
+        {hasData && !loading && <span className="text-xs text-subtle tabular-nums">{rowCountLabel}</span>}
         <div className="ml-auto">
-          <button
-            onClick={exportCsv}
-            disabled={!hasData}
-            className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 bg-white rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            <Download size={12} /> Export CSV
-          </button>
+          <Button variant="secondary" size="sm" onClick={exportCsv} disabled={!hasData || loading}>
+            <Download size={13} aria-hidden="true" /> Export CSV
+          </Button>
         </div>
       </div>
 
-      {/* States */}
-      {error && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <p className="font-medium mb-1">Processed views not available</p>
-          <p className="text-amber-700">Run the usage &amp; processed-dataset migrations in the Supabase SQL editor. ({error})</p>
+      {load.error ? (
+        <ErrorState title="This summary isn't available"
+          message={`The ${def.label.toLowerCase()} summary could not be loaded. Try again, and contact an admin if it keeps happening.`}
+          onRetry={load.retry} />
+      ) : loading ? (
+        <div role="status" aria-label={`Loading ${def.label.toLowerCase()}`} className="space-y-3">
+          <Skeleton className="h-64 w-full rounded-xl" />
         </div>
-      )}
-      {!error && participants.length === 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-6 py-16 text-center">
-          <Users size={32} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-600 font-medium">No participants enrolled yet</p>
-          <p className="text-gray-400 text-sm mt-1">Processed data appears once participants join and sync.</p>
-        </div>
-      )}
-      {loading && !error && participants.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-6 py-16 text-center">
-          <div className="h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">Loading {def.label.toLowerCase()}…</p>
-        </div>
-      )}
-      {!error && !loading && participants.length > 0 && !hasData && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 px-6 py-16 text-center">
-          <LayoutGrid size={32} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-gray-600 font-medium">No {def.label} data</p>
-          <p className="text-gray-400 text-sm mt-1">No records for this selection yet</p>
-        </div>
-      )}
-
-      {/* ── HOURLY ── */}
-      {!error && !loading && hasData && dataset === 'hourly' && (
+      ) : !hasData ? (
+        <EmptyState icon={<LayoutGrid size={28} />} title={`No ${def.label.toLowerCase()} yet`} hint="Nothing has been recorded for this selection." />
+      ) : dataset === 'hourly' ? (
         viewMode === 'chart' ? (
-          <ChartCard>
-            <ResponsiveContainer width="100%" height={340}>
-              <BarChart data={isOverall ? hourlyOverall : hourlySingleAvg} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v) => [`${v} min`, isOverall ? (overallMode === 'avg' ? 'Avg' : 'Total') : 'Avg']} />
-                <Bar dataKey="minutes" fill="#3b82f6" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartCard>
+          <SimpleBarChart data={isOverall ? hourlyOverall : hourlySingleAvg} xKey="hour" valueKey="minutes"
+            label={isOverall ? (overallMode === 'avg' ? 'Average minutes' : 'Total minutes') : 'Average minutes'} unit="min" />
+        ) : isOverall ? (
+          <PlainTable headers={['Hour', overallMode === 'avg' ? 'Average minutes per participant-day' : 'Total minutes']}
+            rows={hourlyOverall.map(r => [r.hour, String(r.minutes)])} page={page} onPage={setPage} />
         ) : (
-          isOverall
-            ? <PlainTable
-                headers={['Hour', overallMode === 'avg' ? 'Avg minutes / participant-day' : 'Total minutes']}
-                rows={hourlyOverall.map(r => [r.hour, String(r.minutes)])}
-              />
-            : <HeatmapTable grid={hourlyGrid} dates={hourlyDates} />
+          <HeatmapTable grid={hourlyGrid} dates={hourlyDates} />
         )
-      )}
-
-      {/* ── GENERIC (daily/pickups/notifications/battery/first_last) ── */}
-      {!error && !loading && hasData && dataset !== 'hourly' && generic && (
+      ) : generic && (
         viewMode === 'chart' && canChart && generic.chart.length > 0 ? (
-          <ChartCard>
-            <ResponsiveContainer width="100%" height={340}>
-              <BarChart data={generic.chart} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v) => [`${v}${generic.unit ? ' ' + generic.unit : ''}`, generic.chartLabel]} />
-                <Bar dataKey="value" fill="#3b82f6" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartCard>
+          <SimpleBarChart data={generic.chart} xKey="date" valueKey="value" label={generic.chartLabel} unit={generic.unit} />
         ) : (
-          <PlainTable headers={generic.headers} rows={generic.rows} />
+          <PlainTable headers={generic.headers} rows={generic.rows} page={page} onPage={setPage} />
         )
       )}
     </div>
   )
 }
 
-// ─── Sub-components (Sensor-Data styling) ─────────────────────────────────────
-function ChartCard({ children }: { children: React.ReactNode }) {
-  return <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">{children}</div>
+export default function ProcessedDataPage() {
+  return (
+    <Suspense>
+      <ProcessedDataInner />
+    </Suspense>
+  )
 }
 
-function PlainTable({ headers, rows }: { headers: string[]; rows: string[][] }) {
+// ─── Sub-components ─────────────────────────────────────────────────────────
+function SimpleBarChart({ data, xKey, valueKey, label, unit }: {
+  data: Record<string, unknown>[]; xKey: string; valueKey: string; label: string; unit: string
+}) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="sticky top-0 z-10">
-            <tr className="border-b border-gray-200 bg-gray-50">
-              {headers.map(h => (
-                <th key={h} className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {rows.map((r, i) => (
-              <tr key={i} className="hover:bg-blue-50/30 transition-colors">
-                {r.map((c, j) => <td key={j} className="px-4 py-2.5 text-gray-700 whitespace-nowrap tabular-nums">{c}</td>)}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+    <Card>
+      <ResponsiveContainer width="100%" height={340}>
+        <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+          <CartesianGrid {...gridProps} vertical={false} />
+          <XAxis dataKey={xKey} tick={axisTick} axisLine={axisLine} tickLine={false} minTickGap={12} />
+          <YAxis tick={axisTick} axisLine={false} tickLine={false} width={48} />
+          <Tooltip {...tooltipProps} formatter={v => [`${v}${unit ? ` ${unit}` : ''}`, label]} />
+          <Bar dataKey={valueKey} name={label} fill={C.blue} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </Card>
+  )
+}
+
+function PlainTable({ headers, rows, page, onPage }: { headers: string[]; rows: string[][]; page: number; onPage: (p: number) => void }) {
+  const paged = rows.length > TABLE_PAGE
+  const visible = paged ? rows.slice(page * TABLE_PAGE, (page + 1) * TABLE_PAGE) : rows
+  return (
+    <div className="space-y-3">
+      <TableWrap maxHeight="70vh">
+        <THead>
+          <tr>{headers.map(h => <Th key={h}>{h}</Th>)}</tr>
+        </THead>
+        <tbody>
+          {visible.map((r, i) => (
+            <Tr key={i}>
+              {r.map((c, j) => <Td key={j} className="whitespace-nowrap tabular-nums">{c}</Td>)}
+            </Tr>
+          ))}
+        </tbody>
+      </TableWrap>
+      {paged && <Pagination page={page} pageSize={TABLE_PAGE} total={rows.length} onPage={onPage} />}
     </div>
   )
 }
 
 function HeatmapTable({ grid, dates }: { grid: Record<string, Record<number, number>>; dates: string[] }) {
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Minutes used per hour</h2>
-        <span className="text-[11px] text-gray-400">rows = date · columns = hour (local)</span>
+    <Card padded={false} className="overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
+        <h3 className="text-sm font-semibold text-fg">Minutes of screen time per hour</h3>
+        <span className="text-xs text-subtle">Rows are days, columns are hours (local time)</span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="text-xs border-collapse">
-          <thead>
-            <tr className="bg-gray-50">
-              <th className="sticky left-0 bg-gray-50 px-3 py-2.5 text-left font-semibold text-gray-500 uppercase tracking-wide text-[11px] z-10">Date</th>
-              {HOURS.map(h => <th key={h} className="px-1 py-2.5 text-center font-semibold text-gray-400 text-[10px] w-9">{String(h).padStart(2, '0')}</th>)}
-              <th className="px-3 py-2.5 text-right font-semibold text-gray-500 uppercase tracking-wide text-[11px]">Total</th>
+      <div className="max-h-[70vh] overflow-auto">
+        <table className="border-collapse text-xs">
+          <thead className="sticky top-0 z-20 bg-sunken">
+            <tr>
+              <th scope="col" className="sticky left-0 z-20 bg-sunken px-3 py-2.5 text-left font-semibold text-subtle">Date</th>
+              {HOURS.map(h => <th key={h} scope="col" className="w-9 px-1 py-2.5 text-center text-[10px] font-semibold text-subtle">{String(h).padStart(2, '0')}</th>)}
+              <th scope="col" className="px-3 py-2.5 text-right font-semibold text-subtle">Total</th>
             </tr>
           </thead>
           <tbody>
             {dates.map(date => {
               const dayTotal = HOURS.reduce((s, h) => s + (grid[date][h] || 0), 0)
               return (
-                <tr key={date} className="hover:bg-blue-50/20">
-                  <td className="sticky left-0 bg-white px-3 py-1 text-gray-600 whitespace-nowrap z-10">
-                    {new Date(date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                  </td>
+                <tr key={date}>
+                  <th scope="row" className="sticky left-0 z-10 whitespace-nowrap bg-surface px-3 py-1 text-left font-normal text-muted">{fmtDay(date)}</th>
                   {HOURS.map(h => {
                     const m = Math.round(grid[date][h] || 0)
+                    const t = Math.min(m / 60, 1)
                     return (
-                      <td key={h} className="px-0.5 py-0.5 text-center" title={`${date} ${String(h).padStart(2, '0')}:00 — ${m} min`}>
-                        <div className="rounded w-8 h-7 flex items-center justify-center mx-auto text-[10px]" style={{ background: cellColor(m), color: cellText(m) }}>
+                      <td key={h} className="px-0.5 py-0.5 text-center" title={`${fmtDay(date)} ${String(h).padStart(2, '0')}:00, ${m} min`}>
+                        <div className={`mx-auto flex h-7 w-8 items-center justify-center rounded text-[10px] ${t >= 0.5 ? 'text-white' : 'text-fg'}`}
+                          style={{ background: m > 0 ? intensity(C.blue, 0.15 + 0.85 * t) : 'var(--surface-sunken)' }}>
                           {m > 0 ? m : ''}
                         </div>
                       </td>
                     )
                   })}
-                  <td className="px-3 py-1 text-right text-gray-700 font-medium whitespace-nowrap tabular-nums">{fmtHM(dayTotal)}</td>
+                  <td className="whitespace-nowrap px-3 py-1 text-right font-medium tabular-nums text-fg">{fmtHM(dayTotal)}</td>
                 </tr>
               )
             })}
           </tbody>
         </table>
       </div>
-    </div>
+    </Card>
   )
 }

@@ -1,26 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, X } from 'lucide-react'
+import { useId, useMemo, useState } from 'react'
+import { AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase-browser'
 import { errorText } from '@/components/feedback'
+import { Button, Modal } from '@/components/ui'
+import { tableLabel } from '@/lib/sensors'
 
-const TABLE_LABEL: Record<string, string> = {
-  data_app_usage: 'App usage',
-  data_notifications: 'Notifications',
-  data_battery: 'Battery',
-  data_calls: 'Calls',
-  data_sms: 'SMS',
-  data_esm_responses: 'Survey responses',
-  data_location: 'Location',
-  data_light: 'Light',
-  data_screen_state: 'Screen state',
-  data_gestures: 'Gestures',
-  data_steps: 'Steps',
-  data_proximity: 'Proximity',
+const EXTRA_LABELS: Record<string, string> = {
   data_gesture_pauses: 'Gesture pauses',
-  data_permission_events: 'Permission events',
-  sync_log: 'Sync log',
+  data_permission_events: 'Permission changes',
+  sync_log: 'Sync history',
   participant_merge_audit: 'Merge records',
 }
 
@@ -38,6 +28,8 @@ export function DeleteParticipantModal({ participant, mergedChildren, onClose, o
   onDeleted: (summary: string) => void
 }) {
   const supabase = useMemo(() => createClient(), [])
+  const inputId = useId()
+  const formId = useId()
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -45,14 +37,9 @@ export function DeleteParticipantModal({ participant, mergedChildren, onClose, o
   const confirmWord = participant.deviceId
   const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
-
-  async function run() {
-    if (typed.trim() !== confirmWord) return
+  async function run(e?: React.FormEvent) {
+    e?.preventDefault()
+    if (typed.trim() !== confirmWord || busy) return
     setBusy(true)
     setError(null)
     const { data, error } = await supabase.rpc('delete_participant', { p_id: participant.id })
@@ -66,62 +53,57 @@ export function DeleteParticipantModal({ participant, mergedChildren, onClose, o
     onClose()
   }
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="delete-participant-title">
-      <button className="absolute inset-0 bg-slate-950/45" onClick={() => !busy && (counts ? finish() : onClose())} aria-label="Close" />
-      <div className="relative max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
-          <h2 id="delete-participant-title" className="flex items-center gap-2 text-lg font-bold text-gray-900">
-            {counts ? <CheckCircle2 size={20} className="text-emerald-600" /> : <AlertTriangle size={20} className="text-red-600" />}
-            {counts ? 'Participant deleted' : 'Delete participant?'}
-          </h2>
-          <button onClick={() => counts ? finish() : onClose()} disabled={busy} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100" aria-label="Close"><X size={18} /></button>
-        </div>
+  if (counts) {
+    return (
+      <Modal open onClose={finish} size="sm" title="Participant deleted"
+        icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-success-soft text-success"><CheckCircle2 size={18} /></span>}
+        footer={<Button onClick={finish} data-autofocus="">Done</Button>}>
+        <p className="text-sm text-muted">
+          <strong className="text-fg">{participant.name}</strong> and {total.toLocaleString()} rows were removed. This is recorded in the activity log.
+        </p>
+        <table className="mt-4 w-full text-sm">
+          <tbody className="divide-y divide-line">
+            {Object.entries(counts).filter(([, n]) => n > 0).map(([t, n]) => (
+              <tr key={t}>
+                <td className="py-1.5 text-muted">{EXTRA_LABELS[t] ?? tableLabel(t)}</td>
+                <td className="py-1.5 text-right font-medium tabular-nums text-fg">{n.toLocaleString()}</td>
+              </tr>
+            ))}
+            {total === 0 && <tr><td className="py-1.5 text-subtle">No collected data</td><td /></tr>}
+          </tbody>
+        </table>
+      </Modal>
+    )
+  }
 
-        {counts ? (
-          <>
-            <p className="mt-2 text-sm text-gray-600">
-              <strong>{participant.name}</strong> and {total.toLocaleString()} rows were removed. This has been recorded in the audit log.
-            </p>
-            <table className="mt-4 w-full text-sm">
-              <tbody className="divide-y divide-gray-100">
-                {Object.entries(counts).filter(([, n]) => n > 0).map(([t, n]) => (
-                  <tr key={t}><td className="py-1.5 text-gray-600">{TABLE_LABEL[t] ?? t}</td><td className="py-1.5 text-right font-medium tabular-nums text-gray-900">{n.toLocaleString()}</td></tr>
-                ))}
-                {total === 0 && <tr><td className="py-1.5 text-gray-500">No collected data</td><td /></tr>}
-              </tbody>
-            </table>
-            <div className="mt-6 flex justify-end">
-              <button onClick={finish} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Done</button>
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="mt-2 text-sm text-gray-600">
-              This permanently deletes <strong>{participant.name}</strong> and <strong>everything collected from them</strong>:
-              sensor data, survey responses and sync history. It cannot be undone. Export the data first if you need to keep it.
-            </p>
-            {mergedChildren.length > 0 && (
-              <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                {mergedChildren.join(', ')} {mergedChildren.length === 1 ? 'is' : 'are'} merged into this participant. Delete {mergedChildren.length === 1 ? 'it' : 'them'} first.
-              </p>
-            )}
-            <label className="mt-5 block text-sm font-medium text-gray-700">
-              Type the device ID <code className="rounded bg-gray-100 px-1 font-mono text-xs">{confirmWord}</code> to confirm
-              <input autoFocus value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off" spellCheck={false}
-                className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm" />
-            </label>
-            {error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>}
-            <div className="mt-6 flex justify-end gap-2">
-              <button onClick={onClose} disabled={busy} className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button onClick={run} disabled={typed.trim() !== confirmWord || busy}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40">
-                {busy ? 'Deleting…' : 'Delete permanently'}
-              </button>
-            </div>
-          </>
+  return (
+    <Modal open onClose={onClose} dismissible={!busy} size="sm" title="Delete participant?"
+      icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-danger-soft text-danger"><AlertTriangle size={18} /></span>}
+      footer={<>
+        <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button type="submit" form={formId} variant="danger" loading={busy} disabled={typed.trim() !== confirmWord || busy}>
+          {busy ? 'Deleting…' : 'Delete permanently'}
+        </Button>
+      </>}>
+      <form id={formId} onSubmit={run} className="space-y-4">
+        <p className="text-sm text-muted">
+          This permanently deletes <strong className="text-fg">{participant.name}</strong> and <strong className="text-fg">everything collected from them</strong>:
+          sensor data, survey responses and sync history. It cannot be undone. Export the data first if you need to keep it.
+        </p>
+        {mergedChildren.length > 0 && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {mergedChildren.join(', ')} {mergedChildren.length === 1 ? 'is' : 'are'} merged into this participant. Delete {mergedChildren.length === 1 ? 'it' : 'them'} first.
+          </p>
         )}
-      </div>
-    </div>
+        <div>
+          <label htmlFor={inputId} className="block text-sm font-medium text-fg">
+            Type the device ID <code className="break-all rounded bg-sunken px-1 font-mono text-xs">{confirmWord}</code> to confirm
+          </label>
+          <input id={inputId} data-autofocus="" value={typed} onChange={e => setTyped(e.target.value)} autoComplete="off" spellCheck={false}
+            className="mt-1.5 h-9 w-full rounded-lg border border-line bg-surface px-3 font-mono text-sm text-fg focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25" />
+        </div>
+        {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      </form>
+    </Modal>
   )
 }

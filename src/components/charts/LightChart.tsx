@@ -15,14 +15,13 @@ import {
 } from 'recharts'
 
 import type { ChartParticipant as Participant, ChartPoint, InjectedTooltipProps, LightRow } from './types'
+import { TooltipBox, axisLine, axisTick, gridProps, legendStyle, seriesColor } from './theme'
 
 interface Props {
   data: LightRow[]
   participants: Participant[]
   showParticipant: boolean
 }
-
-const PALETTE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4']
 
 function participantName(p: Participant): string {
   return p.label || p.device_id
@@ -46,28 +45,28 @@ function formatDateTime(v: string | number | undefined): string {
 function LuxTooltip({ active, payload, label }: InjectedTooltipProps) {
   if (!active || !payload || payload.length === 0) return null
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1">
-      <p className="font-semibold text-gray-700 mb-1">{formatDateTime(label)}</p>
+    <TooltipBox>
+      <p className="mb-1 font-semibold">{formatDateTime(label)}</p>
       {payload.map(entry => (
         <p key={entry.dataKey} style={{ color: entry.color }}>
           {entry.name}: {entry.value?.toLocaleString()} lux
         </p>
       ))}
-    </div>
+    </TooltipBox>
   )
 }
 
 function HourTooltip({ active, payload, label }: InjectedTooltipProps) {
   if (!active || !payload || payload.length === 0) return null
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs space-y-1">
-      <p className="font-semibold text-gray-700 mb-1">{`Hour ${label}:00`}</p>
+    <TooltipBox>
+      <p className="mb-1 font-semibold">{`Hour ${label}:00`}</p>
       {payload.map(entry => (
         <p key={entry.dataKey} style={{ color: entry.fill }}>
           {entry.name}: {entry.value?.toLocaleString()} lux
         </p>
       ))}
-    </div>
+    </TooltipBox>
   )
 }
 
@@ -128,7 +127,7 @@ export default function LightChart({ data, participants, showParticipant }: Prop
 
   if (data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-80 text-gray-400 text-sm">
+      <div className="flex h-80 items-center justify-center text-sm text-subtle">
         No light data available
       </div>
     )
@@ -137,31 +136,31 @@ export default function LightChart({ data, participants, showParticipant }: Prop
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-sm font-semibold text-gray-700 mb-2">Lux Over Time</p>
+        <h3 className="mb-2 text-sm font-semibold text-fg">Light level over time</h3>
         <ResponsiveContainer width="100%" height={240}>
           <LineChart data={luxTimeData} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <CartesianGrid {...gridProps} />
             <XAxis
               dataKey="recorded_at"
               tickFormatter={formatTick}
-              tick={{ fontSize: 11, fill: '#9ca3af' }}
+              tick={axisTick}
               tickLine={false}
-              axisLine={{ stroke: '#e5e7eb' }}
+              axisLine={axisLine}
               minTickGap={60}
             />
             <YAxis
               domain={[0, 'auto']}
-              tick={{ fontSize: 11, fill: '#9ca3af' }}
+              tick={axisTick}
               tickLine={false}
               axisLine={false}
               tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
-              label={{ value: 'Lux', angle: -90, position: 'insideLeft', offset: 10, style: { fontSize: 11, fill: '#9ca3af' } }}
+              label={{ value: 'Lux', angle: -90, position: 'insideLeft', offset: 10, style: axisTick }}
             />
             <Tooltip content={<LuxTooltip />} />
-            <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+            <Legend wrapperStyle={legendStyle} />
             {participantIds.map((pid, idx) => {
               const p = participantMap[pid]
-              const color = PALETTE[idx % PALETTE.length]
+              const color = seriesColor(idx)
               const name = p ? participantName(p) : pid
               return (
                 <Line
@@ -182,30 +181,30 @@ export default function LightChart({ data, participants, showParticipant }: Prop
       </div>
 
       <div>
-        <p className="text-sm font-semibold text-gray-700 mb-2">Average Lux by Hour of Day</p>
+        <h3 className="mb-2 text-sm font-semibold text-fg">Average light by hour of day</h3>
         <ResponsiveContainer width="100%" height={200}>
           <BarChart data={hourlyData} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+            <CartesianGrid {...gridProps} vertical={false} />
             <XAxis
               dataKey="hour"
               tickFormatter={(v: number) => `${v}h`}
-              tick={{ fontSize: 11, fill: '#9ca3af' }}
+              tick={axisTick}
               tickLine={false}
-              axisLine={{ stroke: '#e5e7eb' }}
-              label={{ value: 'Hour of Day', position: 'insideBottom', offset: -4, style: { fontSize: 11, fill: '#9ca3af' } }}
+              axisLine={axisLine}
+              label={{ value: 'Hour of day', position: 'insideBottom', offset: -4, style: axisTick }}
             />
             <YAxis
-              tick={{ fontSize: 11, fill: '#9ca3af' }}
+              tick={axisTick}
               tickLine={false}
               axisLine={false}
               tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)}
-              label={{ value: 'Avg Lux', angle: -90, position: 'insideLeft', offset: 10, style: { fontSize: 11, fill: '#9ca3af' } }}
+              label={{ value: 'Avg Lux', angle: -90, position: 'insideLeft', offset: 10, style: axisTick }}
             />
             <Tooltip content={<HourTooltip />} />
-            <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+            <Legend wrapperStyle={legendStyle} />
             {participantIds.map((pid, idx) => {
               const p = participantMap[pid]
-              const color = PALETTE[idx % PALETTE.length]
+              const color = seriesColor(idx)
               const name = p ? participantName(p) : pid
               return (
                 <Bar

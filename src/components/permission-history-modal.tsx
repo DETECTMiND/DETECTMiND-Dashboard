@@ -1,8 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
-import { ShieldCheck, X, AlertTriangle, CheckCircle } from 'lucide-react'
+import { ShieldCheck, AlertTriangle, CheckCircle } from 'lucide-react'
+import { Badge, ErrorState, Modal, SegmentedControl, SkeletonRows, TableWrap, THead, Th, Td, Tr } from '@/components/ui'
+import { must, useAsync } from '@/components/data/use-async'
+import { permissionLabel } from '@/lib/sensors'
 
 interface Participant {
   id: string
@@ -27,34 +30,19 @@ function pName(p: Participant) { return p.label || p.device_id }
 
 function fmt(iso: string | null): string {
   if (!iso) return '—'
-  try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) } catch { return iso }
-}
-
-// Friendly labels for the raw permission keys the app reports.
-const PERM_LABELS: Record<string, string> = {
-  accessibility: 'Gestures (accessibility)',
-  usage_access: 'Usage access',
-  notification_listener: 'Notification access',
-  location_fine: 'Location (precise)',
-  location_background: 'Location (background)',
-  activity_recognition: 'Physical activity',
-  post_notifications: 'Notifications',
-  call_log: 'Call log',
-  sms: 'SMS',
-}
-
-function prettyPerm(p: string): string {
-  return PERM_LABELS[p] || p.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 function fmtDuration(mins: number | null): string {
-  if (mins == null) return 'still off'
-  if (mins < 60) return `${Math.round(mins)}m`
+  if (mins == null) return 'Still off'
+  if (mins < 60) return `${Math.round(mins)} min`
   const h = Math.floor(mins / 60)
   const m = Math.round(mins % 60)
-  return m === 0 ? `${h}h` : `${h}h ${m}m`
+  return m === 0 ? `${h} h` : `${h} h ${m} min`
 }
 
+/** When a participant's permissions were turned off and back on. */
 export function PermissionHistoryModal({
   participant, onClose,
 }: {
@@ -62,183 +50,97 @@ export function PermissionHistoryModal({
   onClose: () => void
 }) {
   const supabase = useMemo(() => createClient(), [])
-  const [result, setResult] = useState<{ pid: string; events: EventRow[]; outages: OutageRow[] } | null>(null)
   const [tab, setTab] = useState<'outages' | 'events'>('outages')
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      supabase.from('data_permission_events')
-        .select('permission, action, recorded_at')
-        .eq('participant_id', participant.id)
-        .order('recorded_at', { ascending: false })
-        .limit(2000),
-      supabase.from('permission_outages')
-        .select('permission, revoked_at, restored_at, outage_minutes')
-        .eq('participant_id', participant.id)
-        .order('revoked_at', { ascending: false })
-        .limit(2000),
-    ]).then(([evRes, outRes]) => {
-      if (cancelled) return
-      setResult({
-        pid: participant.id,
-        events: (evRes.data || []) as EventRow[],
-        outages: (outRes.data || []) as OutageRow[],
-      })
-    })
-    return () => { cancelled = true }
-  }, [supabase, participant.id])
-  const loading = result?.pid !== participant.id
-  const events = loading ? null : result.events
-  const outages = loading ? null : result.outages
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  const q = useAsync(`perm:${participant.id}`, async () => {
+    const [evRes, outRes] = await Promise.all([
+      supabase.from('data_permission_events').select('permission, action, recorded_at')
+        .eq('participant_id', participant.id).order('recorded_at', { ascending: false }).limit(2000),
+      supabase.from('permission_outages').select('permission, revoked_at, restored_at, outage_minutes')
+        .eq('participant_id', participant.id).order('revoked_at', { ascending: false }).limit(2000),
+    ])
+    return { events: must(evRes) as EventRow[], outages: must(outRes) as OutageRow[] }
+  })
+  const events = q.data?.events
+  const outages = q.data?.outages
 
   // Current state per permission (from the latest event).
   const currentState = useMemo(() => {
-    const map: Record<string, { action: string; at: string }> = {}
-    for (const e of (events || [])) {
-      if (!map[e.permission]) map[e.permission] = { action: e.action, at: e.recorded_at }
-    }
+    const map: Record<string, string> = {}
+    for (const e of events || []) if (!map[e.permission]) map[e.permission] = e.action
     return map
   }, [events])
 
   const openOutages = (outages || []).filter(o => o.restored_at == null).length
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+    <Modal open onClose={onClose} size="lg" title="Permission history" description={pName(participant)}
+      icon={<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-warning-soft text-warning"><ShieldCheck size={18} /></span>}
+      footer={q.data ? (
+        <p className="mr-auto self-center text-xs text-subtle">
+          {openOutages > 0 ? `${openOutages} permission${openOutages > 1 ? 's are' : ' is'} turned off right now` : 'Every tracked permission is on right now'}
+        </p>
+      ) : undefined}>
+      <div className="space-y-4">
+        <SegmentedControl label="Show" value={tab} onChange={setTab} size="sm"
+          options={[{ value: 'outages', label: 'Outages' }, { value: 'events', label: 'All changes' }]} />
 
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center">
-              <ShieldCheck size={18} className="text-amber-600" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-gray-900">Permission History</h2>
-              <p className="text-xs text-gray-400">{pName(participant)}</p>
-            </div>
+        {q.data && Object.keys(currentState).length > 0 && (
+          <div className="flex flex-wrap gap-1.5" aria-label="Current permissions">
+            {Object.entries(currentState).map(([perm, action]) => (
+              <Badge key={perm} tone={action === 'granted' ? 'green' : 'red'}
+                icon={action === 'granted' ? <CheckCircle size={11} aria-hidden="true" /> : <AlertTriangle size={11} aria-hidden="true" />}>
+                {permissionLabel(perm)}{action === 'granted' ? '' : ' (off)'}
+              </Badge>
+            ))}
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center bg-gray-100 rounded-lg p-0.5 text-xs">
-              {(['outages', 'events'] as const).map(t => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`px-3 py-1.5 rounded-md font-medium transition-all ${tab === t ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-                >
-                  {t === 'outages' ? 'Outages' : 'All events'}
-                </button>
+        )}
+
+        {q.error ? (
+          <ErrorState message={q.error} onRetry={q.retry} />
+        ) : !q.data ? (
+          <SkeletonRows rows={5} />
+        ) : tab === 'outages' ? (
+          outages && outages.length > 0 ? (
+            <TableWrap>
+              <THead><tr><Th>Permission</Th><Th>Turned off</Th><Th>Turned back on</Th><Th>Off for</Th></tr></THead>
+              <tbody>
+                {outages.map((o, i) => (
+                  <Tr key={i}>
+                    <Td className="font-medium">{permissionLabel(o.permission)}</Td>
+                    <Td className="whitespace-nowrap text-muted">{fmt(o.revoked_at)}</Td>
+                    <Td className="whitespace-nowrap text-muted">{fmt(o.restored_at)}</Td>
+                    <Td className={`whitespace-nowrap font-medium ${o.restored_at ? '' : 'text-danger'}`}>{fmtDuration(o.outage_minutes)}</Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          ) : <Empty text="No permission outages" sub="This participant has not turned any permission off." />
+        ) : events && events.length > 0 ? (
+          <TableWrap>
+            <THead><tr><Th>Permission</Th><Th>Change</Th><Th>When</Th></tr></THead>
+            <tbody>
+              {events.map((e, i) => (
+                <Tr key={i}>
+                  <Td className="font-medium">{permissionLabel(e.permission)}</Td>
+                  <Td>{e.action === 'granted' ? <Badge tone="green">Turned on</Badge> : <Badge tone="red">Turned off</Badge>}</Td>
+                  <Td className="whitespace-nowrap text-muted">{fmt(e.recorded_at)}</Td>
+                </Tr>
               ))}
-            </div>
-            <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-600">
-              <X size={18} />
-            </button>
-          </div>
-        </div>
-
-        {/* Current-state summary */}
-        {!loading && Object.keys(currentState).length > 0 && (
-          <div className="px-6 py-3 border-b border-gray-50 flex flex-wrap gap-2">
-            {Object.entries(currentState).map(([perm, s]) => {
-              const granted = s.action === 'granted'
-              return (
-                <span key={perm} className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full ${granted ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
-                  {granted ? <CheckCircle size={11} /> : <AlertTriangle size={11} />}
-                  {prettyPerm(perm)}
-                </span>
-              )
-            })}
-          </div>
-        )}
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto">
-          {loading ? (
-            <div className="p-12 text-center">
-              <div className="h-6 w-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
-            </div>
-          ) : tab === 'outages' ? (
-            (outages && outages.length > 0) ? (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50">
-                  <tr className="text-left text-[11px] text-gray-500 uppercase tracking-wide">
-                    <th className="px-6 py-2.5 font-semibold">Permission</th>
-                    <th className="px-4 py-2.5 font-semibold">Turned off</th>
-                    <th className="px-4 py-2.5 font-semibold">Turned back on</th>
-                    <th className="px-4 py-2.5 font-semibold">Off for</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {outages.map((o, i) => (
-                    <tr key={i} className="hover:bg-amber-50/30">
-                      <td className="px-6 py-2.5 text-gray-800 font-medium">{prettyPerm(o.permission)}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{fmt(o.revoked_at)}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{fmt(o.restored_at)}</td>
-                      <td className={`px-4 py-2.5 font-medium ${o.restored_at ? 'text-gray-700' : 'text-red-600'}`}>{fmtDuration(o.outage_minutes)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <EmptyState text="No permission outages recorded" sub="This participant hasn't turned any permission off." />
-            )
-          ) : (
-            (events && events.length > 0) ? (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50">
-                  <tr className="text-left text-[11px] text-gray-500 uppercase tracking-wide">
-                    <th className="px-6 py-2.5 font-semibold">Permission</th>
-                    <th className="px-4 py-2.5 font-semibold">Change</th>
-                    <th className="px-4 py-2.5 font-semibold">When</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {events.map((e, i) => (
-                    <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-6 py-2.5 text-gray-800 font-medium">{prettyPerm(e.permission)}</td>
-                      <td className="px-4 py-2.5">
-                        <span className={`inline-flex items-center gap-1 text-xs font-semibold ${e.action === 'granted' ? 'text-emerald-700' : 'text-red-600'}`}>
-                          {e.action === 'granted' ? <CheckCircle size={12} /> : <AlertTriangle size={12} />}
-                          {e.action === 'granted' ? 'Granted' : 'Revoked'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-600">{fmt(e.recorded_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <EmptyState text="No permission events recorded" sub="Permission changes will appear here once the app reports them." />
-            )
-          )}
-        </div>
-
-        {/* Footer */}
-        {!loading && (
-          <div className="px-6 py-3 border-t border-gray-100 text-xs text-gray-400 shrink-0">
-            {openOutages > 0
-              ? `${openOutages} permission${openOutages > 1 ? 's' : ''} currently turned off`
-              : 'All tracked permissions currently granted'}
-          </div>
-        )}
+            </tbody>
+          </TableWrap>
+        ) : <Empty text="No permission changes" sub="Changes appear here once the app reports them." />}
       </div>
-    </div>
+    </Modal>
   )
 }
 
-function EmptyState({ text, sub }: { text: string; sub: string }) {
+function Empty({ text, sub }: { text: string; sub: string }) {
   return (
-    <div className="p-12 text-center">
-      <ShieldCheck size={32} className="mx-auto text-gray-300 mb-3" />
-      <p className="text-gray-600 font-medium">{text}</p>
-      <p className="text-gray-400 text-sm mt-1">{sub}</p>
+    <div className="py-10 text-center">
+      <ShieldCheck size={28} className="mx-auto mb-2 text-subtle" aria-hidden="true" />
+      <p className="text-sm font-medium text-fg">{text}</p>
+      <p className="mt-1 text-sm text-subtle">{sub}</p>
     </div>
   )
 }

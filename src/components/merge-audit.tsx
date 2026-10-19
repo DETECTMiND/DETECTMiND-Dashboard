@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase-browser'
-import { GitMerge } from 'lucide-react'
+import { ChevronRight, GitMerge } from 'lucide-react'
 
 type Audit = {
   id: string
@@ -13,6 +13,7 @@ type Audit = {
   adopted_at: string | null
 }
 
+/** Collapsible list of the study's latest participant merges. */
 export function MergeAudit({ studyId, names }: { studyId: string; names: Record<string, string> }) {
   const supabase = useMemo(() => createClient(), [])
   const [rows, setRows] = useState<Audit[]>([])
@@ -24,17 +25,23 @@ export function MergeAudit({ studyId, names }: { studyId: string; names: Record<
     return () => { cancelled = true }
   }, [supabase, studyId])
   if (!rows.length) return null
-  return <details className="rounded-xl border border-gray-200 bg-white">
-    <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-gray-700 flex items-center gap-2">
-      <GitMerge size={14} /> Merge audit ({rows.length})
-    </summary>
-    <div className="border-t border-gray-100 divide-y divide-gray-100">
-      {rows.map(row => <div key={row.id} className="px-4 py-3 text-xs text-gray-600">
-        <p><strong>{names[row.duplicate_participant_id] || row.duplicate_participant_id.slice(0, 8)}</strong> merged into <strong>{names[row.primary_participant_id] || row.primary_participant_id.slice(0, 8)}</strong></p>
-        <p className="text-gray-400 mt-0.5">
-          {new Date(row.merged_at).toLocaleString()} · researcher {row.merged_by?.slice(0, 8) || 'unknown'} · {row.adopted_at ? `device adopted ${new Date(row.adopted_at).toLocaleString()}` : 'waiting for device adoption'}
-        </p>
-      </div>)}
-    </div>
-  </details>
+  const name = (id: string) => names[id] || id.slice(0, 8)
+  return (
+    <details className="group rounded-xl border border-line bg-surface shadow-card">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold text-fg [&::-webkit-details-marker]:hidden">
+        <ChevronRight size={14} className="text-subtle transition-transform group-open:rotate-90" aria-hidden="true" />
+        <GitMerge size={14} className="text-subtle" aria-hidden="true" /> Merge history ({rows.length})
+      </summary>
+      <ul className="divide-y divide-line border-t border-line">
+        {rows.map(row => (
+          <li key={row.id} className="px-4 py-3 text-xs text-muted">
+            <p><strong className="text-fg">{name(row.duplicate_participant_id)}</strong> merged into <strong className="text-fg">{name(row.primary_participant_id)}</strong></p>
+            <p className="mt-0.5 text-subtle">
+              {new Date(row.merged_at).toLocaleString()} · by researcher {row.merged_by?.slice(0, 8) || 'unknown'} · {row.adopted_at ? `phone switched over ${new Date(row.adopted_at).toLocaleString()}` : 'waiting for the phone to switch over'}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
 }

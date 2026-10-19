@@ -1,18 +1,19 @@
 'use client'
 
 import { createClient } from '@/lib/supabase-browser'
-import { useEffect, useRef, useState, Suspense, useMemo } from 'react'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { Suspense, useId, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, Clock, Download, Users } from 'lucide-react'
 import {
-  Download, Users, Search, Check, X, ChevronDown,
-  ClipboardList, ChevronRight, ChevronUp, Clock, CheckCircle2, AlertTriangle,
-} from 'lucide-react'
-
-interface Participant {
-  id: string
-  device_id: string
-  label: string | null
-}
+  Badge, Button, ButtonLink, EmptyState, ErrorState, FilterPills, Notice, Pagination, SectionHeader, Select,
+  SkeletonRows, TableWrap, THead, Th, Td, Tr, type NoticeState,
+} from '@/components/ui'
+import { Avatar, ParticipantPicker, participantName, type Participant } from '@/components/participant-ui'
+import { scopedSelect, stripScope, type DataScope } from '@/components/data/scope'
+import { must, mustCount, useAsync } from '@/components/data/use-async'
+import { downloadCsv, fetchAll, localDay, safeFileName } from '@/lib/csv'
+import { studyPaths } from '@/lib/nav'
 
 interface Schedule {
   id: string
@@ -34,356 +35,133 @@ interface ESMResponse {
   schedule_id: string | null
   triggered_at: string
   responded_at: string | null
-  expired: boolean
+  expired: boolean | null
   responses: Record<string, unknown> | null
   recorded_at: string
 }
 
+type StatusFilter = 'all' | 'responded' | 'expired' | 'pending'
+const STATUS_LABELS: Record<StatusFilter, string> = { all: 'All', responded: 'Responded', expired: 'Expired', pending: 'Pending' }
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function participantName(p: Participant) {
-  return p.label || p.device_id
-}
-
-function avatarInitial(name: string) { return name.charAt(0).toUpperCase() }
-
-const AVATAR_COLORS = [
-  'bg-blue-100 text-blue-700', 'bg-violet-100 text-violet-700',
-  'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-700',
-  'bg-rose-100 text-rose-700', 'bg-cyan-100 text-cyan-700',
-]
-
-function avatarColor(id: string) {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length]
-}
 
 function fmtDate(ts: string | null) {
   if (!ts) return '—'
-  try {
-    return new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-  } catch { return ts }
+  const d = new Date(ts)
+  return Number.isNaN(d.getTime()) ? ts : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-function responseTime(triggered: string, responded: string | null) {
+function responseMinutes(triggered: string, responded: string | null): number | null {
   if (!responded) return null
-  const diff = new Date(responded).getTime() - new Date(triggered).getTime()
-  const mins = Math.round(diff / 60000)
-  if (mins < 1) return '< 1 min'
+  return Math.round((new Date(responded).getTime() - new Date(triggered).getTime()) / 60000)
+}
+
+function fmtResponseTime(mins: number | null) {
+  if (mins === null) return '—'
+  if (mins < 1) return 'Under 1 min'
   if (mins < 60) return `${mins} min`
-  return `${Math.round(mins / 60)}h ${mins % 60}m`
+  return `${Math.floor(mins / 60)} h ${mins % 60} min`
 }
 
-// ─── Participant Picker ───────────────────────────────────────────────────────
-
-function ParticipantPicker({
-  participants, value, onChange,
-}: {
-  participants: Participant[]
-  value: string
-  onChange: (v: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false); setQuery('')
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  useEffect(() => { if (open) inputRef.current?.focus() }, [open])
-
-  const filtered = participants.filter(p =>
-    participantName(p).toLowerCase().includes(query.toLowerCase()) ||
-    p.device_id.toLowerCase().includes(query.toLowerCase())
-  )
-
-  const selected = participants.find(p => p.id === value)
-  const label = selected ? participantName(selected) : 'All Participants'
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        onClick={() => { setOpen(o => !o); setQuery('') }}
-        className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-sm bg-white hover:bg-gray-50 focus:outline-none transition-all min-w-56 ${
-          selected ? 'border-blue-300 ring-2 ring-blue-100' : 'border-gray-200 hover:border-gray-300'
-        }`}
-      >
-        {selected ? (
-          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${avatarColor(selected.id)}`}>
-            {avatarInitial(label)}
-          </span>
-        ) : (
-          <Users size={14} className="text-gray-400 shrink-0" />
-        )}
-        <span className="flex-1 text-left text-gray-700 font-medium truncate">{label}</span>
-        {selected && (
-          <span
-            role="button"
-            onClick={e => { e.stopPropagation(); onChange('all'); setOpen(false) }}
-            className="text-gray-300 hover:text-gray-500 transition-colors cursor-pointer shrink-0"
-          >
-            <X size={13} />
-          </span>
-        )}
-        <ChevronDown size={13} className={`text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute top-full left-0 mt-1.5 bg-white rounded-xl border border-gray-200 shadow-xl z-50 w-72 overflow-hidden">
-          <div className="p-2 border-b border-gray-100">
-            <div className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 rounded-lg border border-gray-200">
-              <Search size={12} className="text-gray-400 shrink-0" />
-              <input
-                ref={inputRef}
-                value={query}
-                onChange={e => setQuery(e.target.value)}
-                placeholder="Search participants…"
-                className="flex-1 text-xs bg-transparent outline-none text-gray-700 placeholder-gray-400"
-              />
-              {query && <button onClick={() => setQuery('')} className="text-gray-400 hover:text-gray-600"><X size={11} /></button>}
-            </div>
-          </div>
-          <div className="max-h-64 overflow-y-auto">
-            {!query && (
-              <button
-                onClick={() => { onChange('all'); setOpen(false); setQuery('') }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${value === 'all' ? 'bg-blue-50' : ''}`}
-              >
-                <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
-                  <Users size={13} className="text-gray-500" />
-                </div>
-                <span className={`text-sm font-semibold flex-1 ${value === 'all' ? 'text-blue-700' : 'text-gray-700'}`}>All Participants</span>
-                {value === 'all' && <Check size={13} className="text-blue-600 shrink-0" />}
-              </button>
-            )}
-            {filtered.length === 0 ? (
-              <p className="px-3 py-5 text-xs text-gray-400 text-center">No participants match</p>
-            ) : filtered.map(p => {
-              const name = participantName(p)
-              const active = value === p.id
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => { onChange(p.id); setOpen(false); setQuery('') }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${active ? 'bg-blue-50' : ''}`}
-                >
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${avatarColor(p.id)}`}>
-                    {avatarInitial(name)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-medium truncate ${active ? 'text-blue-700' : 'text-gray-700'}`}>{name}</p>
-                    {p.label && <p className="text-[11px] text-gray-400 truncate font-mono">{p.device_id}</p>}
-                  </div>
-                  {active && <Check size={13} className="text-blue-600 shrink-0" />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
+function statusOf(row: ESMResponse): Exclude<StatusFilter, 'all'> {
+  if (row.expired) return 'expired'
+  return row.responded_at ? 'responded' : 'pending'
 }
 
-// ─── Schedule Filter ──────────────────────────────────────────────────────────
-
-function SchedulePicker({
-  schedules, value, onChange,
-}: {
-  schedules: Schedule[]
-  value: string
-  onChange: (v: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  const selected = schedules.find(s => s.id === value)
-  const label = selected ? selected.name : 'All Schedules'
-
-  return (
-    <div ref={containerRef} className="relative">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className={`flex items-center gap-2 px-3 py-2.5 border rounded-xl text-sm bg-white hover:bg-gray-50 focus:outline-none transition-all min-w-44 ${
-          selected ? 'border-violet-300 ring-2 ring-violet-100' : 'border-gray-200 hover:border-gray-300'
-        }`}
-      >
-        <ClipboardList size={14} className={selected ? 'text-violet-500 shrink-0' : 'text-gray-400 shrink-0'} />
-        <span className="flex-1 text-left text-gray-700 font-medium truncate">{label}</span>
-        {selected && (
-          <span
-            role="button"
-            onClick={e => { e.stopPropagation(); onChange('all'); setOpen(false) }}
-            className="text-gray-300 hover:text-gray-500 transition-colors cursor-pointer shrink-0"
-          >
-            <X size={13} />
-          </span>
-        )}
-        <ChevronDown size={13} className={`text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div className="absolute top-full left-0 mt-1.5 bg-white rounded-xl border border-gray-200 shadow-xl z-50 w-56 overflow-hidden">
-          <div className="max-h-64 overflow-y-auto py-1">
-            <button
-              onClick={() => { onChange('all'); setOpen(false) }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${value === 'all' ? 'bg-violet-50' : ''}`}
-            >
-              <span className={`text-sm font-semibold flex-1 ${value === 'all' ? 'text-violet-700' : 'text-gray-700'}`}>All Schedules</span>
-              {value === 'all' && <Check size={13} className="text-violet-600 shrink-0" />}
-            </button>
-            {schedules.map(s => {
-              const active = value === s.id
-              return (
-                <button
-                  key={s.id}
-                  onClick={() => { onChange(s.id); setOpen(false) }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors ${active ? 'bg-violet-50' : ''}`}
-                >
-                  <span className={`text-sm font-medium flex-1 truncate ${active ? 'text-violet-700' : 'text-gray-700'}`}>{s.name}</span>
-                  {active && <Check size={13} className="text-violet-600 shrink-0" />}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
+function formatAnswer(answer: unknown): string {
+  if (answer === null || answer === undefined || answer === '') return '—'
+  if (typeof answer === 'boolean') return answer ? 'Yes' : 'No'
+  if (Array.isArray(answer)) return answer.map(String).join(', ')
+  if (typeof answer === 'object') return JSON.stringify(answer)
+  return String(answer)
 }
 
-// ─── Response Row ─────────────────────────────────────────────────────────────
+function StatusBadge({ row }: { row: ESMResponse }) {
+  const s = statusOf(row)
+  if (s === 'expired') return <Badge tone="amber" icon={<AlertTriangle size={10} aria-hidden="true" />}>Expired</Badge>
+  if (s === 'responded') return <Badge tone="green" icon={<CheckCircle2 size={10} aria-hidden="true" />}>Responded</Badge>
+  return <Badge tone="neutral" icon={<Clock size={10} aria-hidden="true" />}>Pending</Badge>
+}
 
-function ResponseRow({
-  row, participant, schedule, questions, showParticipant,
-}: {
+// Builder-agnostic status filter (works on any PostgREST filter builder)
+interface Filterable<T> {
+  eq(column: string, value: unknown): T
+  is(column: string, value: null): T
+  not(column: string, operator: string, value: unknown): T
+}
+function applyStatus<T extends Filterable<T>>(q: T, status: StatusFilter): T {
+  if (status === 'responded') return q.not('responded_at', 'is', null).eq('expired', false)
+  if (status === 'expired') return q.eq('expired', true)
+  if (status === 'pending') return q.is('responded_at', null).eq('expired', false)
+  return q
+}
+
+// ─── Response row ─────────────────────────────────────────────────────────────
+
+function ResponseRow({ row, participant, schedule, questions, showParticipant, studyId }: {
   row: ESMResponse
   participant: Participant | undefined
   schedule: Schedule | undefined
   questions: Question[]
   showParticipant: boolean
+  studyId: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const name = participant ? participantName(participant) : row.participant_id
-  const responseCount = row.responses ? Object.keys(row.responses).length : 0
-  const elapsed = responseTime(row.triggered_at, row.responded_at)
-
+  const detailId = useId()
+  const name = participant ? participantName(participant) : row.participant_id.slice(0, 8)
+  const answers = row.responses ?? {}
+  const answerCount = Object.keys(answers).length
   const scheduleQuestions = questions.filter(q => q.schedule_id === row.schedule_id)
-    .sort((a, b) => a.question_order - b.question_order)
+  const known = new Set(scheduleQuestions.map(q => q.id))
+  const extra = Object.keys(answers).filter(k => !known.has(k))
 
   return (
     <>
-      <tr
-        className={`hover:bg-blue-50/30 transition-colors cursor-pointer ${expanded ? 'bg-blue-50/20' : ''}`}
-        onClick={() => { if (responseCount > 0) setExpanded(e => !e) }}
-      >
+      <Tr className={expanded ? 'bg-sunken/60' : ''}>
         {showParticipant && (
-          <td className="px-4 py-3 whitespace-nowrap">
-            <div className="flex items-center gap-2">
-              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${participant ? avatarColor(participant.id) : 'bg-gray-100 text-gray-500'}`}>
-                {avatarInitial(name)}
-              </span>
-              <span className="text-xs text-gray-700 font-medium truncate max-w-28">{name}</span>
-            </div>
-          </td>
+          <Td className="whitespace-nowrap">
+            <Link href={`${studyPaths(studyId).participants}?participant=${row.participant_id}`} className="flex items-center gap-2 font-medium text-fg hover:text-accent">
+              <Avatar id={row.participant_id} name={name} size="sm" />
+              <span className="max-w-32 truncate">{name}</span>
+            </Link>
+          </Td>
         )}
-        <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">
-          {schedule ? (
-            <span className="font-medium text-gray-700">{schedule.name}</span>
-          ) : (
-            <span className="text-gray-300">—</span>
-          )}
-        </td>
-        <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">
-          {fmtDate(row.triggered_at)}
-        </td>
-        <td className="px-4 py-3 whitespace-nowrap">
-          {row.expired ? (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
-              <AlertTriangle size={10} /> Expired
-            </span>
-          ) : row.responded_at ? (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
-              <CheckCircle2 size={10} /> Responded
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-gray-50 text-gray-500 border border-gray-200 px-2 py-0.5 rounded-full">
-              <Clock size={10} /> Pending
-            </span>
-          )}
-        </td>
-        <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-400">
-          {elapsed ?? '—'}
-        </td>
-        <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-400">
-          {responseCount > 0 ? (
-            <div className="flex items-center gap-1">
-              <span>{responseCount} answer{responseCount !== 1 ? 's' : ''}</span>
-              <span className="text-gray-300">
-                {expanded ? <ChevronUp size={12} /> : <ChevronRight size={12} />}
-              </span>
-            </div>
-          ) : (
-            <span className="text-gray-300">—</span>
-          )}
-        </td>
-      </tr>
-
-      {expanded && row.responses && responseCount > 0 && (
-        <tr className="bg-blue-50/30">
-          <td colSpan={showParticipant ? 6 : 5} className="px-4 pb-3 pt-0">
-            <div className="ml-2 border-l-2 border-blue-200 pl-4 space-y-2 py-2">
-              {scheduleQuestions.length > 0 ? (
-                scheduleQuestions.map((q, i) => {
-                  const answer = row.responses?.[q.id]
-                  return (
-                    <div key={q.id} className="flex items-start gap-3">
-                      <span className="text-[10px] font-bold text-blue-400 bg-blue-100 rounded px-1.5 py-0.5 shrink-0 mt-0.5">Q{i + 1}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-gray-500 mb-0.5">{q.question_text}</p>
-                        <p className="text-sm font-medium text-gray-800">
-                          {answer === null || answer === undefined
-                            ? <span className="text-gray-300 font-normal">—</span>
-                            : typeof answer === 'object'
-                              ? JSON.stringify(answer)
-                              : String(answer)}
-                        </p>
-                      </div>
-                    </div>
-                  )
-                })
-              ) : (
-                Object.entries(row.responses).map(([qId, answer]) => (
-                  <div key={qId} className="flex items-start gap-3">
-                    <span className="text-[10px] font-mono text-blue-400 bg-blue-100 rounded px-1.5 py-0.5 shrink-0 mt-0.5 truncate max-w-28">{qId.slice(0, 8)}…</span>
-                    <p className="text-sm font-medium text-gray-800">
-                      {answer === null || answer === undefined
-                        ? <span className="text-gray-300 font-normal">—</span>
-                        : typeof answer === 'object'
-                          ? JSON.stringify(answer)
-                          : String(answer)}
-                    </p>
-                  </div>
-                ))
-              )}
-            </div>
+        <Td className="whitespace-nowrap">{schedule ? schedule.name : <span className="text-subtle">—</span>}</Td>
+        <Td className="whitespace-nowrap tabular-nums">{fmtDate(row.triggered_at)}</Td>
+        <Td className="whitespace-nowrap"><StatusBadge row={row} /></Td>
+        <Td className="whitespace-nowrap tabular-nums text-muted">{fmtResponseTime(responseMinutes(row.triggered_at, row.responded_at))}</Td>
+        <Td className="whitespace-nowrap">
+          {answerCount > 0 ? (
+            <button type="button" onClick={() => setExpanded(e => !e)} aria-expanded={expanded} aria-controls={detailId}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-sm font-medium text-accent hover:bg-accent-soft">
+              {expanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+              {answerCount} answer{answerCount !== 1 ? 's' : ''}
+            </button>
+          ) : <span className="text-subtle">—</span>}
+        </Td>
+      </Tr>
+      {expanded && answerCount > 0 && (
+        <tr id={detailId} className="bg-sunken/40">
+          <td colSpan={showParticipant ? 6 : 5} className="border-b border-line px-4 pb-3 pt-1">
+            <dl className="ml-1 space-y-2 border-l-2 border-accent/40 py-1 pl-4">
+              {scheduleQuestions.map((q, i) => (
+                <div key={q.id} className="flex items-start gap-3">
+                  <dt className="mt-0.5 shrink-0 rounded bg-accent-soft px-1.5 py-0.5 text-[10px] font-bold text-accent">Q{i + 1}</dt>
+                  <dd className="min-w-0 flex-1">
+                    <p className="text-xs text-subtle">{q.question_text}</p>
+                    <p className="break-words text-sm font-medium text-fg">{formatAnswer(answers[q.id])}</p>
+                  </dd>
+                </div>
+              ))}
+              {extra.map(qId => (
+                <div key={qId} className="flex items-start gap-3">
+                  <dt className="mt-0.5 max-w-28 shrink-0 truncate rounded bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-subtle" title={qId}>
+                    {qId.slice(0, 8)}…
+                  </dt>
+                  <dd className="break-words text-sm font-medium text-fg">{formatAnswer(answers[qId])}</dd>
+                </div>
+              ))}
+            </dl>
           </td>
         </tr>
       )}
@@ -391,336 +169,230 @@ function ResponseRow({
   )
 }
 
-// ─── Status filter pills ──────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
-type StatusFilter = 'all' | 'responded' | 'expired' | 'pending'
-
-// ─── Inner page ───────────────────────────────────────────────────────────────
-
-function ESMResponsesInner() {
-  const { id: studyId } = useParams()
+function SurveyResponsesInner() {
+  const { id: studyId } = useParams<{ id: string }>()
   const searchParams = useSearchParams()
   const router = useRouter()
+  const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
-  // Read once on mount: the participant filter is then driven by the picker.
-  const [initialParticipant] = useState(() => searchParams.get('participant'))
+  const scheduleSelectId = useId()
 
-  const [participants, setParticipants] = useState<Participant[]>([])
-  const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [questions, setQuestions] = useState<Question[]>([])
-  const [selectedParticipant, setSelectedParticipant] = useState<string>('all')
   const [selectedSchedule, setSelectedSchedule] = useState<string>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const [data, setData] = useState<ESMResponse[]>([])
-  const [totalCount, setTotalCount] = useState<number | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(50)
   const [exporting, setExporting] = useState(false)
-  const [counts, setCounts] = useState<Record<StatusFilter, number>>({ all: 0, responded: 0, expired: 0, pending: 0 })
-  const [countsLoading, setCountsLoading] = useState(true)
+  const [notice, setNotice] = useState<NoticeState>(null)
 
-  // Load participants, schedules, questions
-  useEffect(() => {
-    async function load() {
-      const [{ data: pData }, { data: sData }, { data: qData }] = await Promise.all([
-        supabase.from('participants').select('id, label, device_id').eq('study_id', studyId),
-        supabase.from('esm_schedules').select('id, name, schedule_type').eq('study_id', studyId).order('created_at'),
-        supabase.from('esm_questions').select('id, schedule_id, question_order, question_text, question_type').order('question_order'),
-      ])
-      const pList = (pData || []) as Participant[]
-      setParticipants(pList)
-      setSchedules((sData || []) as Schedule[])
-      setQuestions((qData || []) as Question[])
+  // Participants, this study's schedules and only their questions
+  const meta = useAsync(`meta:${studyId}`, async () => {
+    const [participants, schedRes] = await Promise.all([
+      fetchAll<Participant>((from, to) => supabase.from('participants').select('id, label, device_id')
+        .eq('study_id', studyId).order('enrolled_at', { ascending: false }).order('id').range(from, to)),
+      supabase.from('esm_schedules').select('id, name, schedule_type').eq('study_id', studyId).order('created_at'),
+    ])
+    const schedules = must(schedRes) as Schedule[]
+    const questions = schedules.length
+      ? must(await supabase.from('esm_questions').select('id, schedule_id, question_order, question_text, question_type')
+        .in('schedule_id', schedules.map(s => s.id)).order('question_order')) as Question[]
+      : []
+    return { participants, schedules, questions }
+  })
+  const participants = useMemo(() => meta.data?.participants ?? [], [meta.data])
+  const schedules = useMemo(() => meta.data?.schedules ?? [], [meta.data])
+  const questions = useMemo(() => meta.data?.questions ?? [], [meta.data])
+  const pMap = useMemo(() => Object.fromEntries(participants.map(p => [p.id, p])), [participants])
+  const sMap = useMemo(() => Object.fromEntries(schedules.map(s => [s.id, s])), [schedules])
 
-      if (initialParticipant && pList.some(p => p.id === initialParticipant)) {
-        setSelectedParticipant(initialParticipant)
-      }
-    }
-    load()
-  }, [studyId, supabase, initialParticipant])
+  const requested = searchParams.get('participant')
+  const participant = requested && (!meta.data || pMap[requested]) ? requested : 'all'
+  const scope: DataScope = { studyId, participant }
+  const hasParticipants = participants.length > 0
+  const filterKey = `${studyId}|${participant}|${selectedSchedule}`
 
-  // Load counts per status
-  useEffect(() => {
-    async function loadCounts() {
-      if (participants.length === 0) return
-      setCountsLoading(true)
-      const pIds = selectedParticipant === 'all' ? participants.map(p => p.id) : [selectedParticipant]
-      const schedFilter = selectedSchedule !== 'all'
-
-      function base() {
-        let q = supabase.from('data_esm_responses').select('*', { count: 'exact', head: true }).in('participant_id', pIds)
-        if (schedFilter) q = q.eq('schedule_id', selectedSchedule)
-        return q
-      }
-
-      const [allRes, respRes, expRes, pendRes] = await Promise.all([
-        base(),
-        base().not('responded_at', 'is', null).eq('expired', false),
-        base().eq('expired', true),
-        base().is('responded_at', null).eq('expired', false),
-      ])
-      setCounts({
-        all: allRes.count ?? 0,
-        responded: respRes.count ?? 0,
-        expired: expRes.count ?? 0,
-        pending: pendRes.count ?? 0,
-      })
-      setCountsLoading(false)
-    }
-    loadCounts()
-  }, [supabase, selectedParticipant, selectedSchedule, participants])
-
-  // Load rows
-  useEffect(() => {
-    async function loadData() {
-      if (participants.length === 0) return
-      setLoading(true)
-      const pIds = selectedParticipant === 'all' ? participants.map(p => p.id) : [selectedParticipant]
-
-      let q = supabase.from('data_esm_responses').select('*').in('participant_id', pIds)
-      if (selectedSchedule !== 'all') q = q.eq('schedule_id', selectedSchedule)
-      if (statusFilter === 'responded') q = q.not('responded_at', 'is', null).eq('expired', false)
-      else if (statusFilter === 'expired') q = q.eq('expired', true)
-      else if (statusFilter === 'pending') q = q.is('responded_at', null).eq('expired', false)
-
-      const [rowsRes, countRes] = await Promise.all([
-        q.order('triggered_at', { ascending: false }).limit(100),
-        (() => {
-          let cq = supabase.from('data_esm_responses').select('*', { count: 'exact', head: true }).in('participant_id', pIds)
-          if (selectedSchedule !== 'all') cq = cq.eq('schedule_id', selectedSchedule)
-          if (statusFilter === 'responded') cq = cq.not('responded_at', 'is', null).eq('expired', false)
-          else if (statusFilter === 'expired') cq = cq.eq('expired', true)
-          else if (statusFilter === 'pending') cq = cq.is('responded_at', null).eq('expired', false)
-          return cq
-        })(),
-      ])
-      setData((rowsRes.data || []) as ESMResponse[])
-      setTotalCount(countRes.count ?? 0)
-      setLoading(false)
-    }
-    loadData()
-  }, [supabase, selectedParticipant, selectedSchedule, statusFilter, participants])
-
-  function handleParticipantChange(id: string) {
-    setSelectedParticipant(id)
-    const url = new URL(window.location.href)
-    if (id === 'all') url.searchParams.delete('participant')
-    else url.searchParams.set('participant', id)
-    router.replace(url.pathname + url.search, { scroll: false })
+  function base(columns = '*', options?: { count: 'exact'; head?: boolean }) {
+    let q = scopedSelect(supabase, 'data_esm_responses', scope, columns, options)
+    if (selectedSchedule !== 'all') q = q.eq('schedule_id', selectedSchedule)
+    return q
   }
 
-  function buildCSV(rows: ESMResponse[]) {
-    if (rows.length === 0) return ''
-    const pMap = Object.fromEntries(participants.map(p => [p.id, p]))
-    const sMap = Object.fromEntries(schedules.map(s => [s.id, s]))
+  const counts = useAsync(hasParticipants ? `counts:${filterKey}` : null, async () => {
+    const keys: StatusFilter[] = ['all', 'responded', 'expired', 'pending']
+    const values = await Promise.all(keys.map(k => applyStatus(base('id', { count: 'exact', head: true }), k).then(mustCount)))
+    return Object.fromEntries(keys.map((k, i) => [k, values[i]])) as Record<StatusFilter, number>
+  })
+  const countMap = counts.data ?? counts.previous
 
-    const headers = ['participant', 'schedule', 'triggered_at', 'responded_at', 'status', 'response_time_minutes', 'responses']
-    const csvRows = rows.map(row => {
+  const rows = useAsync(hasParticipants ? `rows:${filterKey}|${statusFilter}|${page}|${pageSize}` : null, async () => {
+    const from = page * pageSize
+    const res = await applyStatus(base('*', { count: 'exact' }), statusFilter)
+      .order('triggered_at', { ascending: false }).order('id', { ascending: false })
+      .range(from, from + pageSize - 1)
+    return { rows: stripScope(must(res) as unknown as Record<string, unknown>[]) as unknown as ESMResponse[], total: res.count ?? 0 }
+  })
+  const rowsData = rows.data ?? rows.previous
+  const data = rowsData?.rows ?? []
+  const total = rowsData?.total ?? 0
+
+  function changeParticipant(id: string) {
+    setPage(0)
+    const params = new URLSearchParams(searchParams.toString())
+    if (id === 'all') params.delete('participant')
+    else params.set('participant', id)
+    const qs = params.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }
+
+  function toCsvRows(list: ESMResponse[]) {
+    // One column per question when a single schedule is chosen
+    const qs = selectedSchedule !== 'all' ? questions.filter(q => q.schedule_id === selectedSchedule) : []
+    return list.map(row => {
       const p = pMap[row.participant_id]
-      const s = row.schedule_id ? sMap[row.schedule_id] : null
-      const status = row.expired ? 'expired' : row.responded_at ? 'responded' : 'pending'
-      const rtMinutes = row.responded_at
-        ? Math.round((new Date(row.responded_at).getTime() - new Date(row.triggered_at).getTime()) / 60000)
-        : ''
-      return [
-        JSON.stringify(p ? participantName(p) : row.participant_id),
-        JSON.stringify(s?.name ?? ''),
-        JSON.stringify(row.triggered_at),
-        JSON.stringify(row.responded_at ?? ''),
-        JSON.stringify(status),
-        JSON.stringify(rtMinutes),
-        JSON.stringify(row.responses ? JSON.stringify(row.responses) : ''),
-      ].join(',')
+      const out: Record<string, unknown> = {
+        participant_id: row.participant_id,
+        participant: p ? participantName(p) : '',
+        device_id: p?.device_id ?? '',
+        schedule: row.schedule_id ? sMap[row.schedule_id]?.name ?? '' : '',
+        schedule_id: row.schedule_id ?? '',
+        triggered_at: row.triggered_at,
+        responded_at: row.responded_at ?? '',
+        status: statusOf(row),
+        response_time_minutes: responseMinutes(row.triggered_at, row.responded_at) ?? '',
+      }
+      qs.forEach((q, i) => { out[`q${i + 1}_${q.question_text}`] = row.responses?.[q.id] ?? '' })
+      out.responses = row.responses ?? ''
+      return out
     })
-    return [headers.join(','), ...csvRows].join('\n')
   }
 
-  function downloadCSV(csv: string, filename: string) {
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = filename; a.click()
-    URL.revokeObjectURL(url)
-  }
+  const who = participant === 'all' ? 'all' : safeFileName(pMap[participant] ? participantName(pMap[participant]) : participant)
+  const fileBase = `survey_responses_${who}_${localDay(new Date())}`
 
   async function exportAll() {
-    const pIds = selectedParticipant === 'all' ? participants.map(p => p.id) : [selectedParticipant]
-    if (!pIds.length) return
     setExporting(true)
-    let q = supabase.from('data_esm_responses').select('*').in('participant_id', pIds)
-    if (selectedSchedule !== 'all') q = q.eq('schedule_id', selectedSchedule)
-    if (statusFilter === 'responded') q = q.not('responded_at', 'is', null).eq('expired', false)
-    else if (statusFilter === 'expired') q = q.eq('expired', true)
-    else if (statusFilter === 'pending') q = q.is('responded_at', null).eq('expired', false)
-    const { data: allRows } = await q.order('triggered_at', { ascending: false })
-    const csv = buildCSV((allRows || []) as ESMResponse[])
-    if (csv) downloadCSV(csv, 'esm_responses_export.csv')
-    setExporting(false)
+    setNotice(null)
+    try {
+      const all = await fetchAll<ESMResponse>((from, to) => applyStatus(base('*'), statusFilter)
+        .order('triggered_at', { ascending: false }).order('id', { ascending: false })
+        .range(from, to) as unknown as PromiseLike<{ data: ESMResponse[] | null; error: { message: string } | null }>)
+      const clean = stripScope(all as unknown as Record<string, unknown>[]) as unknown as ESMResponse[]
+      if (!clean.length) setNotice({ tone: 'info', text: 'There are no responses to export.' })
+      else {
+        downloadCsv(toCsvRows(clean), fileBase)
+        setNotice({ tone: 'success', text: `Exported ${clean.length.toLocaleString()} responses.` })
+      }
+    } catch (e) {
+      setNotice({ tone: 'error', text: `Export failed: ${e instanceof Error ? e.message : 'unknown error'}` })
+    } finally {
+      setExporting(false)
+    }
   }
 
-  const pMap = Object.fromEntries(participants.map(p => [p.id, p]))
-  const sMap = Object.fromEntries(schedules.map(s => [s.id, s]))
-  const showParticipantCol = selectedParticipant === 'all'
-  const isCapped = (totalCount ?? 0) > 100
+  const showParticipantCol = participant === 'all'
 
-  const STATUS_PILLS: { key: StatusFilter; label: string; color: string; activeColor: string }[] = [
-    { key: 'all',       label: 'All',       color: 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300',              activeColor: 'bg-blue-600 text-white border border-blue-600' },
-    { key: 'responded', label: 'Responded',  color: 'bg-white border border-gray-200 text-gray-600 hover:border-emerald-200',           activeColor: 'bg-emerald-600 text-white border border-emerald-600' },
-    { key: 'expired',   label: 'Expired',    color: 'bg-white border border-gray-200 text-gray-600 hover:border-amber-200',             activeColor: 'bg-amber-500 text-white border border-amber-500' },
-    { key: 'pending',   label: 'Pending',    color: 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300',              activeColor: 'bg-gray-600 text-white border border-gray-600' },
-  ]
+  if (meta.error) return <ErrorState message={meta.error} onRetry={meta.retry} />
+  if (meta.loading) return <SkeletonRows rows={8} />
+  if (!hasParticipants) {
+    return (
+      <EmptyState icon={<Users size={28} />} title="No participants yet"
+        hint="Survey answers appear here once participants join and respond on their phones." />
+    )
+  }
+  if (schedules.length === 0) {
+    return (
+      <EmptyState icon={<ClipboardList size={28} />} title="No surveys set up"
+        hint="Add a survey schedule and its questions; answers will show up here.">
+        <ButtonLink href={studyPaths(studyId).surveySetup} variant="secondary">Set up surveys</ButtonLink>
+      </EmptyState>
+    )
+  }
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div>
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Survey Responses</h1>
-            <p className="text-gray-500 text-sm mt-0.5">Browse and export survey response data</p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <ParticipantPicker
-              participants={participants}
-              value={selectedParticipant}
-              onChange={handleParticipantChange}
-            />
-            <SchedulePicker
-              schedules={schedules}
-              value={selectedSchedule}
-              onChange={setSelectedSchedule}
-            />
-          </div>
+      <SectionHeader
+        title="Responses"
+        description="Every survey prompt sent to participants, newest first. Open a row to read the answers."
+        actions={
+          <>
+            <ParticipantPicker participants={participants} value={participant} onChange={changeParticipant} />
+            <div className="flex items-center gap-2">
+              <label htmlFor={scheduleSelectId} className="sr-only">Survey</label>
+              <Select id={scheduleSelectId} value={selectedSchedule} className="w-full sm:w-52"
+                onChange={e => { setSelectedSchedule(e.target.value); setPage(0) }}>
+                <option value="all">All surveys</option>
+                {schedules.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </Select>
+            </div>
+          </>
+        }
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <FilterPills label="Response status" value={statusFilter} onChange={v => { setStatusFilter(v); setPage(0) }}
+          options={(Object.keys(STATUS_LABELS) as StatusFilter[]).map(k => ({ value: k, label: STATUS_LABELS[k], count: countMap ? countMap[k] : null }))} />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Button variant="secondary" size="sm" disabled={data.length === 0} onClick={() => downloadCsv(toCsvRows(data), `${fileBase}_page${page + 1}`)}>
+            <Download size={13} aria-hidden="true" /> Export this page
+          </Button>
+          <Button size="sm" onClick={exportAll} loading={exporting} disabled={exporting || total === 0}>
+            {!exporting && <Download size={13} aria-hidden="true" />}
+            {exporting ? 'Exporting…' : `Export all${total ? ` (${total.toLocaleString()})` : ''}`}
+          </Button>
         </div>
       </div>
+      {counts.error && (
+        <p role="alert" className="flex flex-wrap items-center gap-2 text-sm text-danger">
+          Could not load the counts: {counts.error}
+          <Button variant="ghost" size="sm" onClick={counts.retry}>Try again</Button>
+        </p>
+      )}
 
-      {/* Status filter pills */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {STATUS_PILLS.map(pill => {
-          const active = statusFilter === pill.key
-          const count = counts[pill.key]
-          return (
-            <button
-              key={pill.key}
-              onClick={() => setStatusFilter(pill.key)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${active ? pill.activeColor : pill.color}`}
-            >
-              {pill.label}
-              {countsLoading ? (
-                <span className="w-5 h-2.5 bg-current opacity-20 rounded animate-pulse" />
-              ) : (
-                <span className={`tabular-nums ${active ? 'opacity-70' : 'text-gray-400'}`}>{count.toLocaleString()}</span>
-              )}
-            </button>
-          )
-        })}
-      </div>
+      <Notice notice={notice} onClose={() => setNotice(null)} />
 
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        {!loading && totalCount !== null && (
-          <span className="text-xs text-gray-400">
-            {isCapped
-              ? `Showing 100 of ${totalCount.toLocaleString()} records`
-              : `${totalCount.toLocaleString()} record${totalCount !== 1 ? 's' : ''}`}
-          </span>
-        )}
-        <div className="flex items-center gap-2 ml-auto">
-          <details className="relative">
-            <summary className="flex list-none items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"><Download size={12} />{exporting ? 'Exporting…' : 'Export'}<ChevronDown size={12} /></summary>
-            <div className="absolute right-0 z-20 mt-1 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl">
-              <button onClick={() => { const csv = buildCSV(data); if (csv) downloadCSV(csv, 'esm_responses_page.csv') }} disabled={data.length === 0} className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Export current view</button>
-              <button onClick={exportAll} disabled={participants.length === 0 || exporting || (totalCount ?? 0) === 0} className="w-full rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40">Export filtered dataset{totalCount ? ` (${totalCount.toLocaleString()})` : ''}</button>
-            </div>
-          </details>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {loading ? (
-          <div>
-            <div className="border-b border-gray-100 bg-gray-50 px-4 py-3 flex gap-6">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className={`h-3 bg-gray-200 rounded animate-pulse ${i === 0 ? 'w-24' : 'w-16'}`} />
-              ))}
-            </div>
-            {[...Array(7)].map((_, i) => (
-              <div key={i} className="border-b border-gray-50 px-4 py-3 flex gap-6">
-                {[...Array(5)].map((_, j) => (
-                  <div
-                    key={j}
-                    className={`h-3 bg-gray-100 rounded animate-pulse ${j === 0 ? 'w-20' : j === 1 ? 'w-28' : 'w-14'}`}
-                    style={{ animationDelay: `${i * 60}ms` }}
-                  />
-                ))}
-              </div>
-            ))}
-          </div>
-        ) : data.length === 0 ? (
-          <div className="px-6 py-16 text-center">
-            <ClipboardList size={32} className="mx-auto text-gray-300 mb-3" />
-            <p className="text-gray-600 font-medium">No ESM responses</p>
-            <p className="text-gray-400 text-sm mt-1">
-              {statusFilter !== 'all'
-                ? `No ${statusFilter} responses for the selected filters`
-                : 'No responses collected yet'}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 z-10">
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  {showParticipantCol && (
-                    <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">
-                      Participant
-                    </th>
-                  )}
-                  <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">Schedule</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">Triggered</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">Status</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">Response Time</th>
-                  <th className="px-4 py-3 text-left font-semibold text-gray-500 whitespace-nowrap uppercase tracking-wide text-[11px]">Answers</th>
+      {rows.error ? (
+        <ErrorState message={rows.error} onRetry={rows.retry} />
+      ) : !rowsData ? (
+        <SkeletonRows rows={8} />
+      ) : data.length === 0 ? (
+        <EmptyState icon={<ClipboardList size={28} />} title="No responses"
+          hint={statusFilter !== 'all' ? `No ${STATUS_LABELS[statusFilter].toLowerCase()} responses for these filters.` : 'No survey prompts have been recorded yet.'} />
+      ) : (
+        <>
+          <div className={rows.loading ? 'opacity-60 transition-opacity' : ''} aria-busy={rows.loading}>
+            <TableWrap maxHeight="70vh">
+              <THead>
+                <tr>
+                  {showParticipantCol && <Th>Participant</Th>}
+                  <Th>Survey</Th>
+                  <Th>Sent</Th>
+                  <Th>Status</Th>
+                  <Th>Response time</Th>
+                  <Th>Answers</Th>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
+              </THead>
+              <tbody>
                 {data.map(row => (
-                  <ResponseRow
-                    key={row.id}
-                    row={row}
-                    participant={pMap[row.participant_id]}
+                  <ResponseRow key={row.id} row={row} participant={pMap[row.participant_id]}
                     schedule={row.schedule_id ? sMap[row.schedule_id] : undefined}
-                    questions={questions}
-                    showParticipant={showParticipantCol}
-                  />
+                    questions={questions} showParticipant={showParticipantCol} studyId={studyId} />
                 ))}
               </tbody>
-            </table>
+            </TableWrap>
           </div>
-        )}
-      </div>
-
-      {isCapped && !loading && (
-        <p className="text-xs text-gray-400">
-          Showing the 100 most recent records.{' '}
-          <button
-            onClick={exportAll}
-            disabled={exporting}
-            className="font-semibold text-blue-600 hover:text-blue-700 transition-colors disabled:opacity-50"
-          >
-            {exporting ? 'Exporting…' : `Export all ${totalCount?.toLocaleString()}`}
-          </button>{' '}
-          to get the full dataset.
-        </p>
+          <Pagination page={page} pageSize={pageSize} total={total} onPage={setPage}
+            onPageSize={size => { setPageSize(size); setPage(0) }} />
+        </>
       )}
     </div>
   )
 }
 
-export default function ESMResponsesPage() {
+export default function SurveyResponsesPage() {
   return (
     <Suspense>
-      <ESMResponsesInner />
+      <SurveyResponsesInner />
     </Suspense>
   )
 }
