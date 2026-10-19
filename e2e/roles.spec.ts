@@ -96,24 +96,26 @@ test.describe('owner powers', () => {
 })
 
 test.describe('editor and viewer', () => {
-  test('editor can add people to the study but not change roles, remove people or delete the study', async ({ page }) => {
+  test('editors and viewers have no Team tab; the database refuses an editor adding people', async ({ page }) => {
     await signIn(page, 'editor')
     const id = await openStudy(page, TEAM_STUDY)
+    await page.goto(`/studies/${id}/settings`)
     await expect(page.getByRole('button', { name: /delete study/i })).toHaveCount(0)
+    const tabs = page.getByRole('navigation', { name: /settings sections/i })
+    await expect(tabs.getByRole('link', { name: 'General' })).toBeVisible()
+    await expect(tabs.getByRole('link', { name: 'Team' })).toHaveCount(0)
+    await expect(page.getByText(/owner: owner@detectmind\.test/i)).toBeVisible()
+    // The Team address sends them back to General
     await page.goto(teamUrl(id))
-    await expect(page.getByTestId('member-row').first()).toBeVisible()
-    await expect(page.getByTestId('member-row').getByRole('button', { name: /^actions for/i })).toHaveCount(0)
-    await expect(page.getByRole('combobox', { name: /^role for/i })).toHaveCount(0)
-    // Editors may only grant editor or viewer
-    await expect(page.getByLabel('Study role', { exact: true }).locator('option[value="owner"]')).toHaveCount(0)
+    await expect(page).toHaveURL(new RegExp(`/studies/${id}/settings$`))
 
-    await addToTeam(page, ACCOUNTS.researcher, 'viewer')
-    await expect(page.getByText(/was added to/i)).toBeVisible()
-    expect(sql(`SELECT m.role FROM study_members m JOIN researchers r ON r.user_id = m.user_id
-                WHERE r.email = ${q(ACCOUNTS.researcher)} AND m.study_id = ${q(id)}`)).toBe('viewer')
-    // Leave the researcher account without memberships for the tests below
-    sql(`DELETE FROM study_members WHERE study_id = ${q(id)}
-         AND user_id = (SELECT user_id FROM researchers WHERE email = ${q(ACCOUNTS.researcher)})`)
+    const env = localSupabaseEnv()
+    const client = createClient(env.url, env.anonKey, { auth: { persistSession: false } })
+    expect((await client.auth.signInWithPassword({ email: ACCOUNTS.editor, password: TEST_PASSWORD })).error).toBeNull()
+    const researcherId = sql(`SELECT id FROM auth.users WHERE email = ${q(ACCOUNTS.researcher)}`)
+    const add = await client.from('study_members').insert({ study_id: id, user_id: researcherId, role: 'viewer' })
+    expect(add.error).not.toBeNull()
+    expect(sql(`SELECT count(*) FROM study_members WHERE study_id = ${q(id)} AND user_id = ${q(researcherId)}`)).toBe('0')
   })
 
   test('viewer is read-only', async ({ page }) => {

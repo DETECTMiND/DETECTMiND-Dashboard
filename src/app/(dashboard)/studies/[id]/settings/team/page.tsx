@@ -1,12 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
+import { studyPaths } from '@/lib/nav'
 import { Trash2, UserPlus, UsersRound } from 'lucide-react'
 import { createClient } from '@/lib/supabase-browser'
 import { useMe, useStudyAccess, STUDY_ROLE_LABEL } from '@/lib/access'
 import {
-  Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Notice, ReadOnlyBanner, Select, SkeletonRows,
+  Badge, Button, Card, CardHeader, EmptyState, ErrorState, Field, Notice, Select, SkeletonRows,
   errorText, useConfirm, type NoticeState,
   ActionMenu,
 } from '@/components/ui'
@@ -48,6 +49,12 @@ export default function TeamPage() {
   const me = useMe()
   const access = useStudyAccess(studyId)
   const isAdmin = access.isAdmin
+  const router = useRouter()
+  // The team is managed by owners and admins only; others go to General
+  const noAccess = !access.loading && !access.canManage
+  useEffect(() => {
+    if (noAccess) router.replace(studyPaths(studyId).settings)
+  }, [noAccess, router, studyId])
   const supabase = useMemo(() => createClient(), [])
   const { ask, dialog } = useConfirm()
   const [team, setTeam] = useState<{ study: string; members: Member[]; error: string | null } | null>(null)
@@ -90,18 +97,18 @@ export default function TeamPage() {
   }, [fetchTeam])
 
   useEffect(() => {
-    if (!access.canEdit) return
+    if (!access.canManage) return
     let cancelled = false
     fetchDirectory().then(d => { if (!cancelled) setDirectory(d) })
     fetchInvited().then(ids => { if (!cancelled && ids) setInvitedIds(ids) })
     return () => { cancelled = true }
-  }, [fetchDirectory, fetchInvited, access.canEdit])
+  }, [fetchDirectory, fetchInvited, access.canManage])
 
   async function reload() {
     const [t, d, ids] = await Promise.all([
       fetchTeam(),
-      access.canEdit ? fetchDirectory() : Promise.resolve(null),
-      access.canEdit ? fetchInvited() : Promise.resolve(null),
+      access.canManage ? fetchDirectory() : Promise.resolve(null),
+      access.canManage ? fetchInvited() : Promise.resolve(null),
     ])
     setTeam(t)
     if (d) setDirectory(d)
@@ -213,19 +220,15 @@ export default function TeamPage() {
     ? 'Pick someone with a dashboard account, or type an email address to invite someone new. As an admin you can also add owners.'
     : 'Pick someone with a dashboard account, or type an email address to invite someone new. Only admins can add owners.'
 
+  if (access.loading || noAccess) return <SkeletonRows rows={4} />
+
   return (
     <div className="space-y-5">
       {dialog}
 
-      {!access.loading && !access.canEdit && (
-        <ReadOnlyBanner text="Only owners, editors and admins can add people to this study." />
-      )}
-      {!access.loading && access.canEdit && !access.canManage && (
-        <ReadOnlyBanner text="You can add editors and viewers. Only owners and admins change roles or remove people." />
-      )}
       <Notice notice={notice} onClose={() => setNotice(null)} />
 
-      {access.canEdit && (
+      {access.canManage && (
         <Card>
           <CardHeader icon={<UserPlus size={16} />} title="Add people" description="New people get an email invite and only see the studies they are added to." />
           {directory?.error ? (

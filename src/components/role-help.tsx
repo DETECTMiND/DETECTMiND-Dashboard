@@ -10,8 +10,8 @@ const ACCOUNT_TYPES: { role: BadgeRole; text: string }[] = [
 ]
 
 const STUDY_ROLES: { role: BadgeRole; text: string }[] = [
-  { role: 'owner', text: 'Everything an editor can do, plus pause or complete the study, change people\'s roles, remove people and delete participants.' },
-  { role: 'editor', text: 'Changes the study details, sensors, surveys, enrolment PIN and participant labels, and invites editors and viewers.' },
+  { role: 'owner', text: 'Everything an editor can do, plus pause or complete the study, add and remove editors and viewers, and delete participants.' },
+  { role: 'editor', text: 'Changes the study details, sensors, surveys, enrolment PIN and participant labels.' },
   { role: 'viewer', text: 'Sees the study and its data, but cannot change anything.' },
 ]
 

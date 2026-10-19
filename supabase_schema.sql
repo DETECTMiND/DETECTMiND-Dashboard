@@ -1060,15 +1060,14 @@ CREATE POLICY "Editors clear pin attempts" ON pin_attempts FOR DELETE TO authent
     USING (study_id = ANY ((SELECT editable_study_ids())::uuid[]));
 
 -- Team: members see the team. Admins manage every membership; an owner
--- manages only editor / viewer memberships of their own study; an editor may
--- add editors and viewers (not change or remove anyone). The policies
+-- manages only editor / viewer memberships of their own study. The policies
 -- check the NEW role; tr_study_members_owner_guard also checks the OLD role
 -- (UPDATE/DELETE of an owner row) and raises a clear error instead of
 -- silently matching no rows.
 CREATE POLICY "Members read team" ON study_members FOR SELECT TO authenticated
     USING (study_id = ANY ((SELECT viewable_study_ids())::uuid[]));
-CREATE POLICY "Owners and editors add members" ON study_members FOR INSERT TO authenticated
-    WITH CHECK ((SELECT is_admin()) OR (role IN ('editor', 'viewer') AND can_edit_study(study_id)));
+CREATE POLICY "Owners add members" ON study_members FOR INSERT TO authenticated
+    WITH CHECK ((SELECT is_admin()) OR (role IN ('editor', 'viewer') AND can_manage_study(study_id)));
 CREATE POLICY "Owners change members" ON study_members FOR UPDATE TO authenticated
     USING (can_manage_study(study_id))
     WITH CHECK ((SELECT is_admin()) OR (role IN ('editor', 'viewer') AND can_manage_study(study_id)));
@@ -1816,7 +1815,7 @@ END;
 $$;
 
 -- Active researchers that can be added to study p_study: callable by an
--- admin, or by an owner or editor of that study. p_study NULL is the legacy form
+-- admin, or by an owner of that study. p_study NULL is the legacy form
 -- (admin, or owner of any study); kept for older dashboard builds.
 CREATE OR REPLACE FUNCTION researcher_directory(p_study UUID DEFAULT NULL)
 RETURNS TABLE (user_id UUID, email TEXT, display_name TEXT)
@@ -1824,11 +1823,11 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER
 SET search_path = public, extensions AS $$
 BEGIN
     IF NOT (is_admin()
-            OR (p_study IS NOT NULL AND COALESCE(study_role(p_study) IN ('owner', 'editor'), false))
+            OR (p_study IS NOT NULL AND COALESCE(study_role(p_study) = 'owner', false))
             OR (p_study IS NULL AND is_researcher()
                 AND EXISTS (SELECT 1 FROM study_members m
                              WHERE m.user_id = auth.uid() AND m.role = 'owner'))) THEN
-        RAISE EXCEPTION 'Only admins, owners and editors of this study can list researchers' USING ERRCODE = '42501';
+        RAISE EXCEPTION 'Only admins and owners of this study can list researchers' USING ERRCODE = '42501';
     END IF;
     RETURN QUERY
         SELECT r.user_id, r.email, r.display_name FROM researchers r

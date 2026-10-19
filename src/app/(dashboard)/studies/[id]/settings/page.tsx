@@ -117,6 +117,17 @@ export default function StudySettingsPage() {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
   const access = useStudyAccess(id)
+  // Study owners, shown so editors and viewers know who to ask about access
+  const [owners, setOwners] = useState<string[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    supabase.rpc('study_team', { p_study: id }).then(({ data }) => {
+      if (cancelled) return
+      const rows = (data || []) as { email: string | null; display_name: string | null; member_role: string }[]
+      setOwners(rows.filter(r => r.member_role === 'owner').map(r => r.display_name || r.email || 'Unknown'))
+    })
+    return () => { cancelled = true }
+  }, [id, supabase])
   const canEdit = access.canEdit
   const { ask, dialog: confirmDialog } = useConfirm()
 
@@ -506,6 +517,12 @@ export default function StudySettingsPage() {
           <StatusPill study={study} />
           <p className="text-sm text-muted">{statusInfo.description}</p>
         </div>
+        {owners !== null && (
+          <p className="mt-3 text-sm text-muted">
+            <span className="text-subtle">{owners.length === 1 ? 'Owner' : 'Owners'}: </span>
+            {owners.length ? owners.join(', ') : 'none yet (an admin can add one)'}
+          </p>
+        )}
         {statusButtons.length > 0 ? (
           <div className="mt-4 flex flex-wrap gap-2">
             {statusButtons.map(s => (
